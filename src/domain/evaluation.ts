@@ -1,6 +1,15 @@
-export interface EvaluationResult {
-    score: number; //0-100
+export interface RubricCriterion {
+    id: string;
+    description: string;
+    maxScore: number;
+  }
+  
+  export interface EvaluationResult {
+    totalScore: number; // 0–100
     feedback: string;
-    strengths?: string[];
-    improvements?: string[];
-}
+    criteriaScores: {
+      criterionId: string;
+      score: number;
+      comment?: string;
+    }[];
+  }

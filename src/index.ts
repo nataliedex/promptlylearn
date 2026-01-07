@@ -1,19 +1,26 @@
 import { Lesson } from "./domain/lesson";
+import { loadLesson } from "./loaders/lessonLoader";
 
-const sampleLesson: Lesson = {
-    id: "intro-prompts",
-    title: "Intro to Prompt Writing",
-    description: "Learn how to write clear, effective prompts",
-    difficulty: "beginner",
-    prompts: [
-        {
-            id: "p1",
-            type: "explain",
-            input: "Explain closures in JavaScript like I'm 10 years old.",
-            hints: ["Use simple language", "Give a real-world analogy"]
-        }
-    ]
-};
+// const sampleLesson: Lesson = {
+//     id: "intro-prompts",
+//     title: "Intro to Prompt Writing",
+//     description: "Learn how to write clear, effective prompts",
+//     difficulty: "beginner",
+//     prompts: [
+//         {
+//             id: "p1",
+//             type: "explain",
+//             input: "Explain closures in JavaScript like I'm 10 years old.",
+//             hints: ["Use simple language", "Give a real-world analogy"]
+//         }
+//     ]
+// };
 
-console.log(sampleLesson);
+const lesson = loadLesson("intro-prompts.json");
+console.log(lesson.title);
+console.log(lesson.prompts.length);
+
+
+
+// console.log(sampleLesson);
 
