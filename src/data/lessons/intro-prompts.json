@@ -13,7 +13,8 @@
         {
             "id": "p2",
             "type": "generate",
-            "input": "Write a simple JavaScript function that adds two numbers."
+            "input": "Write a simple JavaScript function that adds two numbers.",
+            "hints": ["Use `function` keyword", "Return the sum of two numbers"]
         }
     ]
 }
