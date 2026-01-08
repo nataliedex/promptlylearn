@@ -8,6 +8,7 @@ import { askQuestion, askForStudent, askMenu, generateId } from "./helpers";
 import { Session } from "../domain/session";
 import { SessionStore } from "../stores/sessionStore";
 import { showProgressSummary } from "./progressSummary";
+import { reviewPastSessions } from "./sessionReplay";
 import { Student } from "../domain/student";
 import { Lesson } from "../domain/lesson";
 
@@ -137,6 +138,7 @@ async function main() {
   while (running) {
     const choice = await askMenu(rl, [
       "Start a new lesson",
+      "Review past sessions",
       "View my progress",
       "Exit"
     ]);
@@ -152,11 +154,16 @@ async function main() {
         break;
 
       case 2:
+        // Review past sessions
+        await reviewPastSessions(rl, student);
+        break;
+
+      case 3:
         // View progress
         showProgressSummary(student);
         break;
 
-      case 3:
+      case 4:
         // Exit
         running = false;
         console.log(`\nGoodbye, ${student.name}! Keep learning!\n`);

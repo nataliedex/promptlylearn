@@ -1,0 +1,20 @@
+{
+    "id": "animal-facts",
+    "title": "Animal Facts",
+    "description": "Learn about animals and explain what you know!",
+    "difficulty": "beginner",
+    "prompts": [
+        {
+            "id": "af1",
+            "type": "explain",
+            "input": "Fish live in water, but people cannot live in water. Why do you think fish can breathe underwater but people cannot? Explain your thinking.",
+            "hints": ["How do fish breathe?", "How do people breathe?", "What's different about water and air?"]
+        },
+        {
+            "id": "af2",
+            "type": "explain",
+            "input": "Some animals sleep during the winter (this is called hibernation). Bears, groundhogs, and some bats hibernate. Why do you think some animals need to sleep all winter? What would happen if they stayed awake?",
+            "hints": ["What is hard to find in winter?", "Think about food and staying warm"]
+        }
+    ]
+}

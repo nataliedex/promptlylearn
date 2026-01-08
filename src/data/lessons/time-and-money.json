@@ -1,0 +1,20 @@
+{
+    "id": "time-and-money",
+    "title": "Time & Money",
+    "description": "Practice with clocks and coins!",
+    "difficulty": "intermediate",
+    "prompts": [
+        {
+            "id": "tm1",
+            "type": "explain",
+            "input": "School starts at 8:00 in the morning. If it takes you 30 minutes to get ready and 15 minutes to walk to school, what time should you wake up? Explain how you figured it out.",
+            "hints": ["Work backwards from 8:00", "Add up all the time you need", "What is 30 + 15?"]
+        },
+        {
+            "id": "tm2",
+            "type": "explain",
+            "input": "You have 3 quarters and 2 dimes. A pencil costs 75 cents. Do you have enough money to buy the pencil? How much money do you have in total? Show your thinking.",
+            "hints": ["How much is one quarter worth?", "How much is one dime worth?", "Add up all your coins"]
+        }
+    ]
+}

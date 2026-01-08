@@ -34,7 +34,8 @@ src/
 ├── cli/                  # Command-line interaction layer
 │   ├── runAssignment.ts  # Main app loop with menu
 │   ├── helpers.ts        # Input helpers (askQuestion, askMenu, askForStudent)
-│   └── progressSummary.ts# Display student progress report
+│   ├── progressSummary.ts# Display student progress report
+│   └── sessionReplay.ts  # Review past session answers and feedback
 ├── domain/               # Core business logic and models
 ├── loaders/              # Data loading utilities
 ├── stores/               # Persistence layer (file-based)
@@ -69,10 +70,11 @@ data/                     # Runtime data (gitignored)
 1. CLI asks for student name
    - Returning students are recognized and linked to previous sessions
    - New students are created and saved
-2. Main menu: "Start a new lesson" / "View my progress" / "Exit"
+2. Main menu: Start lesson / Review past sessions / View progress / Exit
 3. **Start lesson**: Choose from available lessons, then answer prompts
-4. **View progress**: Shows stats, per-lesson breakdown, trend analysis, insights
-5. Evaluator scores submission:
+4. **Review past sessions**: Select a past session to see answers and feedback
+5. **View progress**: Shows stats, per-lesson breakdown, trend analysis, insights
+6. Evaluator scores submission:
    - `LLMEvaluator` (if `OPENAI_API_KEY` set): Assesses understanding, reasoning, clarity via GPT
    - `FakeEvaluator` (fallback): Rule-based scoring
 
@@ -81,8 +83,12 @@ data/                     # Runtime data (gitignored)
 Lessons are JSON files in `src/data/lessons/`. Current lessons:
 - **2nd Grade Thinking Skills** (beginner) - Math word problems, science reasoning
 - **Reading Adventures** (beginner) - Reading comprehension stories
+- **Story Writing** (beginner) - Creative writing prompts
+- **Animal Facts** (beginner) - Science/nature questions
+- **Feelings & Friendship** (beginner) - Social-emotional learning
 - **Math Challenge** (intermediate) - Division, multi-step problems
 - **Science Explorers** (intermediate) - Plants, states of matter
+- **Time & Money** (intermediate) - Clocks and coins
 
 ### Key Interfaces
 

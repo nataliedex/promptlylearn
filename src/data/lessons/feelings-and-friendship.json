@@ -1,0 +1,20 @@
+{
+    "id": "feelings-and-friendship",
+    "title": "Feelings & Friendship",
+    "description": "Think about emotions and being a good friend!",
+    "difficulty": "beginner",
+    "prompts": [
+        {
+            "id": "ff1",
+            "type": "explain",
+            "input": "Your friend looks sad at recess and is sitting alone. What are some things you could do to help them feel better? Why do you think those things would help?",
+            "hints": ["Think about what makes YOU feel better when you're sad", "What could you say or do?"]
+        },
+        {
+            "id": "ff2",
+            "type": "explain",
+            "input": "Sometimes people feel angry, and that's okay. But hitting or yelling isn't a good way to show anger. What are some better ways to handle feeling angry? Why are these better choices?",
+            "hints": ["What could you do instead of hitting?", "Who could you talk to?", "What helps you calm down?"]
+        }
+    ]
+}
