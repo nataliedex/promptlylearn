@@ -1,20 +1,20 @@
 {
-    "id": "intro-prompts",
-    "title": "Intro to Prompt Writing",
-    "description": "Learn how to write clear, effective prompts",
+    "id": "2nd-grade-basics",
+    "title": "2nd Grade Thinking Skills",
+    "description": "Practice explaining your thinking with fun questions!",
     "difficulty": "beginner",
     "prompts": [
         {
-            "id": "p1", 
+            "id": "p1",
             "type": "explain",
-            "input": "Explain closures in JavaScript like I'm 10 years old.",
-            "hints": ["Use simple language", "Give a real-world analogy"]
+            "input": "Emma has 8 apples. She gives 3 apples to her friend. How many apples does Emma have now? Explain how you figured it out.",
+            "hints": ["Start with 8 apples", "Think about what 'gives away' means"]
         },
         {
             "id": "p2",
-            "type": "generate",
-            "input": "Write a simple JavaScript function that adds two numbers.",
-            "hints": ["Use `function` keyword", "Return the sum of two numbers"]
+            "type": "explain",
+            "input": "Why do you think birds fly south in the winter? Use what you know about weather and animals.",
+            "hints": ["Think about what happens to the weather in winter", "What do birds need to survive?"]
         }
     ]
 }

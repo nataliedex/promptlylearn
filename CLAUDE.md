@@ -18,7 +18,7 @@ No test framework is currently configured.
 
 ## Environment Setup
 
-Copy `.env.example` to `.env` and add your OpenAI API key:
+Create a `.env` file with your OpenAI API key:
 ```bash
 OPENAI_API_KEY=sk-your-key-here
 ```
@@ -31,14 +31,20 @@ The project follows a layered architecture with domain-driven design principles:
 
 ```
 src/
-├── index.ts              # Entry point - loads lessons and runs app
-├── domain/               # Core business logic and models
 ├── cli/                  # Command-line interaction layer
+│   ├── runAssignment.ts  # Main app loop with menu
+│   ├── helpers.ts        # Input helpers (askQuestion, askMenu, askForStudent)
+│   └── progressSummary.ts# Display student progress report
+├── domain/               # Core business logic and models
 ├── loaders/              # Data loading utilities
-├── stores/               # Persistence layer (file-based for now)
-└── data/
-    ├── lessons/          # JSON lesson definitions
-    └── sessions/         # Saved session data (gitignored)
+├── stores/               # Persistence layer (file-based)
+│   ├── studentStore.ts   # Save/load students by name
+│   └── sessionStore.ts   # Save/load sessions
+└── data/                 # JSON lesson definitions
+
+data/                     # Runtime data (gitignored)
+├── students/             # Persisted student records
+└── sessions/             # Saved session data
 ```
 
 ### Domain Layer (`src/domain/`)
@@ -55,18 +61,20 @@ src/
 
 ### Stores Layer (`src/stores/`)
 
-- **SessionStore**: Saves/loads sessions as JSON files. Methods: `save()`, `load()`, `getByStudentId()`, `getAll()`
+- **StudentStore**: Persists students, looks up returning students by name
+- **SessionStore**: Saves/loads sessions as JSON files
 
 ### Application Flow
 
-1. CLI asks for student name (creates Student with generated ID)
-2. Loads lesson from JSON via `lessonLoader.ts`
-3. `runAssignment.ts` presents each prompt using `askQuestion()` helper
-4. User can type "hint" for hints (tracked for scoring)
+1. CLI asks for student name
+   - Returning students are recognized and linked to previous sessions
+   - New students are created and saved
+2. Main menu: "Start a new lesson" / "View my progress" / "Exit"
+3. **Start lesson**: Presents prompts, collects responses, evaluates, saves session
+4. **View progress**: Shows stats, per-lesson breakdown, trend analysis, insights
 5. Evaluator scores submission:
    - `LLMEvaluator` (if `OPENAI_API_KEY` set): Assesses understanding, reasoning, clarity via GPT
-   - `FakeEvaluator` (fallback): Rule-based scoring (30 pts/prompt, -5 hints, +5 reflection)
-6. Session is saved to `src/data/sessions/{sessionId}.json`
+   - `FakeEvaluator` (fallback): Rule-based scoring
 
 ### Key Interfaces
 

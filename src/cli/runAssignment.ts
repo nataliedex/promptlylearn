@@ -4,9 +4,12 @@ import { loadLesson } from "../loaders/lessonLoader";
 import { FakeEvaluator } from "../domain/fakeEvaluator";
 import { LLMEvaluator } from "../domain/llmEvaluator";
 import { Evaluator } from "../domain/evaluator";
-import { askQuestion, askForStudent, generateId } from "./helpers";
+import { askQuestion, askForStudent, askMenu, generateId } from "./helpers";
 import { Session } from "../domain/session";
 import { SessionStore } from "../stores/sessionStore";
+import { showProgressSummary } from "./progressSummary";
+import { Student } from "../domain/student";
+import { Lesson } from "../domain/lesson";
 
 const rl = readline.createInterface({
   input: process.stdin,
@@ -28,31 +31,27 @@ function createEvaluator(): Evaluator {
   }
 }
 
-async function runLesson() {
+/**
+ * Run a lesson for a student
+ */
+async function runLesson(student: Student, lesson: Lesson): Promise<void> {
   const startedAt = new Date();
 
-  // 1. Ask who is taking this lesson
-  const student = await askForStudent(rl);
-
-  // 2. Load the lesson
-  const lesson = loadLesson("intro-prompts.json");
-  console.log(`Starting lesson: ${lesson.title}`);
+  console.log(`\nStarting lesson: ${lesson.title}`);
   console.log(`${lesson.description}\n`);
   console.log(`Difficulty: ${lesson.difficulty}`);
   console.log(`Number of prompts: ${lesson.prompts.length}\n`);
   console.log("Type 'hint' for a hint on any question.\n");
   console.log("---\n");
 
-  // 3. Collect responses
+  // Collect responses
   const responses: any[] = [];
   for (const prompt of lesson.prompts) {
     const result = await askQuestion(rl, prompt.input, prompt.hints);
     responses.push({ promptId: prompt.id, ...result });
   }
 
-  rl.close();
-
-  // 4. Build submission
+  // Build submission
   const submission = {
     assignmentId: lesson.id,
     studentId: student.id,
@@ -60,12 +59,12 @@ async function runLesson() {
     submittedAt: new Date()
   };
 
-  // 5. Evaluate
+  // Evaluate
   console.log("\nEvaluating your responses...\n");
   const evaluator = createEvaluator();
   const evaluation = await evaluator.evaluate(submission, lesson);
 
-  // 6. Build and save session
+  // Build and save session
   const session: Session = {
     id: generateId(),
     studentId: student.id,
@@ -81,7 +80,7 @@ async function runLesson() {
   const store = new SessionStore();
   store.save(session);
 
-  // 7. Display results
+  // Display results
   console.log("---");
   console.log("\nEvaluation Result:");
   console.log(`  Total Score: ${evaluation.totalScore}/100`);
@@ -99,7 +98,48 @@ async function runLesson() {
 
   console.log(`\n---`);
   console.log(`\nSession saved! ID: ${session.id}`);
-  console.log(`Student: ${student.name} (${student.id})`);
 }
 
-runLesson();
+/**
+ * Main application loop
+ */
+async function main() {
+  console.log("Welcome to Promptly Learn!\n");
+
+  // 1. Identify student
+  const student = await askForStudent(rl);
+
+  // 2. Main menu loop
+  let running = true;
+  while (running) {
+    const choice = await askMenu(rl, [
+      "Start a new lesson",
+      "View my progress",
+      "Exit"
+    ]);
+
+    switch (choice) {
+      case 1:
+        // Start lesson
+        const lesson = loadLesson("intro-prompts.json");
+        await runLesson(student, lesson);
+        console.log("");
+        break;
+
+      case 2:
+        // View progress
+        showProgressSummary(student);
+        break;
+
+      case 3:
+        // Exit
+        running = false;
+        console.log(`\nGoodbye, ${student.name}! Keep learning!\n`);
+        break;
+    }
+  }
+
+  rl.close();
+}
+
+main();
