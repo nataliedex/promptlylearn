@@ -1,0 +1,20 @@
+{
+    "id": "math-challenge",
+    "title": "Math Challenge",
+    "description": "Solve word problems and explain your thinking!",
+    "difficulty": "intermediate",
+    "prompts": [
+        {
+            "id": "m1",
+            "type": "explain",
+            "input": "There are 12 cookies on a plate. Four friends want to share them equally. How many cookies does each friend get? Show how you figured it out.",
+            "hints": ["How many friends are sharing?", "Think about dividing the cookies into equal groups"]
+        },
+        {
+            "id": "m2",
+            "type": "explain",
+            "input": "A farmer has 15 chickens and 8 cows. How many legs are there in total? Explain your thinking step by step.",
+            "hints": ["How many legs does a chicken have?", "How many legs does a cow have?", "Find each total, then add them together"]
+        }
+    ]
+}

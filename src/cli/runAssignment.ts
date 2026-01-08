@@ -1,6 +1,6 @@
 import "dotenv/config";
 import readline from "readline";
-import { loadLesson } from "../loaders/lessonLoader";
+import { getAllLessons } from "../loaders/lessonLoader";
 import { FakeEvaluator } from "../domain/fakeEvaluator";
 import { LLMEvaluator } from "../domain/llmEvaluator";
 import { Evaluator } from "../domain/evaluator";
@@ -29,6 +29,29 @@ function createEvaluator(): Evaluator {
     console.log("Set OPENAI_API_KEY in .env for real AI evaluation\n");
     return new FakeEvaluator();
   }
+}
+
+/**
+ * Let the user choose a lesson from available options
+ */
+async function chooseLesson(): Promise<Lesson | null> {
+  const lessons = getAllLessons();
+
+  if (lessons.length === 0) {
+    console.log("\nNo lessons available.\n");
+    return null;
+  }
+
+  console.log("\nChoose a lesson:\n");
+  const options = lessons.map(l => `${l.title} (${l.difficulty})`);
+
+  const choice = await askMenu(rl, [...options, "Back to main menu"]);
+
+  if (choice === options.length + 1) {
+    return null; // Back to main menu
+  }
+
+  return lessons[choice - 1];
 }
 
 /**
@@ -120,9 +143,11 @@ async function main() {
 
     switch (choice) {
       case 1:
-        // Start lesson
-        const lesson = loadLesson("intro-prompts.json");
-        await runLesson(student, lesson);
+        // Choose and start lesson
+        const lesson = await chooseLesson();
+        if (lesson) {
+          await runLesson(student, lesson);
+        }
         console.log("");
         break;
 

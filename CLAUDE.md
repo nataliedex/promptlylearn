@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Promptly Learn is an educational platform for learning and testing prompt engineering skills. Students practice writing prompts and receive automated feedback through evaluations.
+Promptly Learn is an educational platform where students practice explaining their thinking and receive AI-powered feedback. Designed for elementary-level learners with curriculum-aligned content.
 
 ## Commands
 
@@ -70,11 +70,19 @@ data/                     # Runtime data (gitignored)
    - Returning students are recognized and linked to previous sessions
    - New students are created and saved
 2. Main menu: "Start a new lesson" / "View my progress" / "Exit"
-3. **Start lesson**: Presents prompts, collects responses, evaluates, saves session
+3. **Start lesson**: Choose from available lessons, then answer prompts
 4. **View progress**: Shows stats, per-lesson breakdown, trend analysis, insights
 5. Evaluator scores submission:
    - `LLMEvaluator` (if `OPENAI_API_KEY` set): Assesses understanding, reasoning, clarity via GPT
    - `FakeEvaluator` (fallback): Rule-based scoring
+
+### Available Lessons
+
+Lessons are JSON files in `src/data/lessons/`. Current lessons:
+- **2nd Grade Thinking Skills** (beginner) - Math word problems, science reasoning
+- **Reading Adventures** (beginner) - Reading comprehension stories
+- **Math Challenge** (intermediate) - Division, multi-step problems
+- **Science Explorers** (intermediate) - Plants, states of matter
 
 ### Key Interfaces
 
