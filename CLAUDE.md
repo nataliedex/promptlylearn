@@ -26,23 +26,34 @@ src/
 ├── domain/               # Core business logic and models
 ├── cli/                  # Command-line interaction layer
 ├── loaders/              # Data loading utilities
-└── data/lessons/         # JSON lesson definitions
+├── stores/               # Persistence layer (file-based for now)
+└── data/
+    ├── lessons/          # JSON lesson definitions
+    └── sessions/         # Saved session data (gitignored)
 ```
 
 ### Domain Layer (`src/domain/`)
 
+- **Student**: User identity (id, name)
+- **Session**: A single attempt at a lesson (links student + lesson + submission + evaluation)
 - **Prompt types**: "explain", "generate", "analyze", "refactor"
 - **Lesson**: Contains multiple prompts grouped by difficulty (beginner/intermediate/advanced)
 - **Submission**: Captures student responses, reflections, and hint usage
 - **Evaluation**: Scoring criteria and results
 - **Evaluator interface** with `FakeEvaluator` implementation for testing
 
+### Stores Layer (`src/stores/`)
+
+- **SessionStore**: Saves/loads sessions as JSON files. Methods: `save()`, `load()`, `getByStudentId()`, `getAll()`
+
 ### Application Flow
 
-1. `index.ts` loads a lesson from JSON via `lessonLoader.ts`
-2. `runAssignment.ts` presents each prompt interactively using `askQuestion()` helper
-3. User can request hints (tracked for scoring)
-4. `FakeEvaluator` scores submissions (30 pts/prompt base, -5 for hints, +5 for reflection)
+1. CLI asks for student name (creates Student with generated ID)
+2. Loads lesson from JSON via `lessonLoader.ts`
+3. `runAssignment.ts` presents each prompt using `askQuestion()` helper
+4. User can type "hint" for hints (tracked for scoring)
+5. `FakeEvaluator` scores submission (30 pts/prompt base, -5 for hints, +5 for reflection)
+6. Session is saved to `src/data/sessions/{sessionId}.json`
 
 ### Key Interfaces
 

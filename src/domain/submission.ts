@@ -4,6 +4,7 @@ export interface PromptResponse {
     promptId: string;
     response: string;
     reflection?: string; //optional student reasoning
+    hintUsed: boolean;
 }
 
 export interface Submission {
