@@ -9,6 +9,7 @@ import { Session } from "../domain/session";
 import { SessionStore } from "../stores/sessionStore";
 import { showProgressSummary } from "./progressSummary";
 import { reviewPastSessions } from "./sessionReplay";
+import { runEducatorDashboard } from "./educatorDashboard";
 import { Student } from "../domain/student";
 import { Lesson } from "../domain/lesson";
 
@@ -125,15 +126,9 @@ async function runLesson(student: Student, lesson: Lesson): Promise<void> {
 }
 
 /**
- * Main application loop
+ * Student menu loop
  */
-async function main() {
-  console.log("Welcome to Promptly Learn!\n");
-
-  // 1. Identify student
-  const student = await askForStudent(rl);
-
-  // 2. Main menu loop
+async function runStudentMode(student: Student): Promise<void> {
   let running = true;
   while (running) {
     const choice = await askMenu(rl, [
@@ -169,6 +164,25 @@ async function main() {
         console.log(`\nGoodbye, ${student.name}! Keep learning!\n`);
         break;
     }
+  }
+}
+
+/**
+ * Main application entry point
+ */
+async function main() {
+  console.log("Welcome to Promptly Learn!\n");
+  console.log("Are you a:\n");
+
+  const roleChoice = await askMenu(rl, ["Student", "Educator"]);
+
+  if (roleChoice === 1) {
+    // Student mode
+    const student = await askForStudent(rl);
+    await runStudentMode(student);
+  } else {
+    // Educator mode
+    await runEducatorDashboard(rl);
   }
 
   rl.close();

@@ -32,10 +32,11 @@ The project follows a layered architecture with domain-driven design principles:
 ```
 src/
 ├── cli/                  # Command-line interaction layer
-│   ├── runAssignment.ts  # Main app loop with menu
+│   ├── runAssignment.ts  # Main app entry point with role selection
 │   ├── helpers.ts        # Input helpers (askQuestion, askMenu, askForStudent)
 │   ├── progressSummary.ts# Display student progress report
-│   └── sessionReplay.ts  # Review past session answers and feedback
+│   ├── sessionReplay.ts  # Review past session answers and feedback
+│   └── educatorDashboard.ts # Educator view of all students
 ├── domain/               # Core business logic and models
 ├── loaders/              # Data loading utilities
 ├── stores/               # Persistence layer (file-based)
@@ -67,16 +68,19 @@ data/                     # Runtime data (gitignored)
 
 ### Application Flow
 
-1. CLI asks for student name
-   - Returning students are recognized and linked to previous sessions
-   - New students are created and saved
+**Role Selection** — App starts by asking "Are you a Student or Educator?"
+
+**Student Mode:**
+1. Enter name (returning students are recognized)
 2. Main menu: Start lesson / Review past sessions / View progress / Exit
-3. **Start lesson**: Choose from available lessons, then answer prompts
-4. **Review past sessions**: Select a past session to see answers and feedback
-5. **View progress**: Shows stats, per-lesson breakdown, trend analysis, insights
-6. Evaluator scores submission:
-   - `LLMEvaluator` (if `OPENAI_API_KEY` set): Assesses understanding, reasoning, clarity via GPT
-   - `FakeEvaluator` (fallback): Rule-based scoring
+3. Evaluator scores submissions via LLM or rule-based fallback
+
+**Educator Mode:**
+1. Dashboard shows class overview (total students, sessions, average score)
+2. Student list with session counts, averages, and status flags
+3. Options: View student details / View lesson stats / Refresh / Exit
+4. Student details: Join date, lessons attempted, recent sessions
+5. Lesson stats: Attempts, average scores, difficulty indicators
 
 ### Available Lessons
 
