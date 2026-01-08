@@ -34,6 +34,7 @@ src/
 ├── cli/                  # Command-line interaction layer
 │   ├── runAssignment.ts  # Main app entry point with role selection
 │   ├── helpers.ts        # Input helpers (askQuestion, askMenu, askForStudent)
+│   ├── coach.ts          # AI coach for conversational help and exploration
 │   ├── progressSummary.ts# Display student progress report
 │   ├── sessionReplay.ts  # Review past session answers and feedback
 │   └── educatorDashboard.ts # Educator view of all students
@@ -55,7 +56,7 @@ data/                     # Runtime data (gitignored)
 - **Session**: A single attempt at a lesson (links student + lesson + submission + evaluation)
 - **Prompt types**: "explain", "generate", "analyze", "refactor"
 - **Lesson**: Contains multiple prompts grouped by difficulty (beginner/intermediate/advanced)
-- **Submission**: Captures student responses, reflections, and hint usage
+- **Submission**: Captures student responses, reflections, hint usage, and coach conversations
 - **Evaluation**: Scoring criteria and results
 - **Evaluator interface** with two implementations:
   - `LLMEvaluator`: Uses OpenAI GPT to assess understanding, reasoning, and clarity
@@ -73,7 +74,11 @@ data/                     # Runtime data (gitignored)
 **Student Mode:**
 1. Enter name (returning students are recognized)
 2. Main menu: Start lesson / Review past sessions / View progress / Exit
-3. Evaluator scores submissions via LLM or rule-based fallback
+3. During questions:
+   - Type `help` → Conversational AI coach (Socratic guidance, no direct answers)
+   - Type `hint` → Static hints fallback
+4. After each answer: Get immediate feedback, option to type `more` for deeper exploration
+5. Evaluator scores submissions via LLM or rule-based fallback
 
 **Educator Mode:**
 1. Dashboard shows class overview (total students, sessions, average score)

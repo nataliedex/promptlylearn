@@ -4,14 +4,17 @@ import { getAllLessons } from "../loaders/lessonLoader";
 import { FakeEvaluator } from "../domain/fakeEvaluator";
 import { LLMEvaluator } from "../domain/llmEvaluator";
 import { Evaluator } from "../domain/evaluator";
-import { askQuestion, askForStudent, askMenu, generateId } from "./helpers";
+import { askQuestion, askForStudent, askMenu, askMore, generateId } from "./helpers";
 import { Session } from "../domain/session";
 import { SessionStore } from "../stores/sessionStore";
 import { showProgressSummary } from "./progressSummary";
 import { reviewPastSessions } from "./sessionReplay";
 import { runEducatorDashboard } from "./educatorDashboard";
+import { startMoreConversation } from "./coach";
 import { Student } from "../domain/student";
 import { Lesson } from "../domain/lesson";
+import { PromptResponse } from "../domain/submission";
+import { Prompt } from "../domain/prompt";
 
 const rl = readline.createInterface({
   input: process.stdin,
@@ -24,7 +27,6 @@ const rl = readline.createInterface({
  */
 function createEvaluator(): Evaluator {
   if (process.env.OPENAI_API_KEY) {
-    console.log("Using LLM evaluation (OpenAI)\n");
     return new LLMEvaluator();
   } else {
     console.log("No OPENAI_API_KEY found - using fake evaluator");
@@ -57,26 +59,106 @@ async function chooseLesson(): Promise<Lesson | null> {
 }
 
 /**
- * Run a lesson for a student
+ * Run a single prompt and get evaluation for it
+ */
+async function runPrompt(
+  student: Student,
+  prompt: Prompt,
+  promptNumber: number,
+  totalPrompts: number,
+  evaluator: Evaluator,
+  lesson: Lesson
+): Promise<PromptResponse> {
+  console.log(`\n--- Question ${promptNumber} of ${totalPrompts} ---\n`);
+
+  // Get student's answer (with help support)
+  const result = await askQuestion(rl, prompt.input, prompt.hints);
+
+  // Build a mini submission for this single prompt to get feedback
+  const miniSubmission = {
+    assignmentId: lesson.id,
+    studentId: student.id,
+    responses: [{
+      promptId: prompt.id,
+      response: result.response,
+      reflection: result.reflection,
+      hintUsed: result.hintUsed
+    }],
+    submittedAt: new Date()
+  };
+
+  // Evaluate this single response
+  console.log("\n🤖 Evaluating your answer...\n");
+  const evaluation = await evaluator.evaluate(miniSubmission, {
+    ...lesson,
+    prompts: [prompt] // Only include this prompt for evaluation
+  });
+
+  // Show feedback for this question
+  const score = evaluation.criteriaScores[0];
+  console.log(`Score: ${score?.score || 0}/50`);
+  if (score?.comment) {
+    console.log(`Feedback: ${score.comment}`);
+  }
+
+  // Build the response object
+  const response: PromptResponse = {
+    promptId: prompt.id,
+    response: result.response,
+    reflection: result.reflection,
+    hintUsed: result.hintUsed,
+    helpConversation: result.helpConversation
+  };
+
+  // Offer "more" exploration
+  const wantsMore = await askMore(rl);
+  if (wantsMore) {
+    const moreConversation = await startMoreConversation(
+      rl,
+      prompt.input,
+      result.response,
+      score?.comment || "Good effort!"
+    );
+    response.moreConversation = moreConversation;
+  }
+
+  return response;
+}
+
+/**
+ * Run a lesson for a student with conversational flow
  */
 async function runLesson(student: Student, lesson: Lesson): Promise<void> {
   const startedAt = new Date();
+  const evaluator = createEvaluator();
 
-  console.log(`\nStarting lesson: ${lesson.title}`);
-  console.log(`${lesson.description}\n`);
+  console.log(`\n${"=".repeat(50)}`);
+  console.log(`Starting lesson: ${lesson.title}`);
+  console.log(`${"=".repeat(50)}`);
+  console.log(`\n${lesson.description}\n`);
   console.log(`Difficulty: ${lesson.difficulty}`);
-  console.log(`Number of prompts: ${lesson.prompts.length}\n`);
-  console.log("Type 'hint' for a hint on any question.\n");
-  console.log("---\n");
+  console.log(`Questions: ${lesson.prompts.length}`);
+  console.log(`\nTip: Type 'help' to chat with the AI coach!`);
+  console.log(`${"=".repeat(50)}`);
 
-  // Collect responses
-  const responses: any[] = [];
-  for (const prompt of lesson.prompts) {
-    const result = await askQuestion(rl, prompt.input, prompt.hints);
-    responses.push({ promptId: prompt.id, ...result });
+  // Collect responses one at a time with immediate feedback
+  const responses: PromptResponse[] = [];
+  let totalScore = 0;
+
+  for (let i = 0; i < lesson.prompts.length; i++) {
+    const prompt = lesson.prompts[i];
+    const response = await runPrompt(
+      student,
+      prompt,
+      i + 1,
+      lesson.prompts.length,
+      evaluator,
+      lesson
+    );
+    responses.push(response);
   }
 
-  // Build submission
+  // Build final submission
   const submission = {
     assignmentId: lesson.id,
     studentId: student.id,
@@ -84,10 +166,8 @@ async function runLesson(student: Student, lesson: Lesson): Promise<void> {
     submittedAt: new Date()
   };
 
-  // Evaluate
-  console.log("\nEvaluating your responses...\n");
-  const evaluator = createEvaluator();
-  const evaluation = await evaluator.evaluate(submission, lesson);
+  // Get final evaluation for the whole lesson
+  const finalEvaluation = await evaluator.evaluate(submission, lesson);
 
   // Build and save session
   const session: Session = {
@@ -97,7 +177,7 @@ async function runLesson(student: Student, lesson: Lesson): Promise<void> {
     lessonId: lesson.id,
     lessonTitle: lesson.title,
     submission,
-    evaluation,
+    evaluation: finalEvaluation,
     startedAt,
     completedAt: new Date()
   };
@@ -105,24 +185,14 @@ async function runLesson(student: Student, lesson: Lesson): Promise<void> {
   const store = new SessionStore();
   store.save(session);
 
-  // Display results
-  console.log("---");
-  console.log("\nEvaluation Result:");
-  console.log(`  Total Score: ${evaluation.totalScore}/100`);
-  console.log(`\n  Feedback: ${evaluation.feedback}`);
-  console.log("\n  Per-Prompt Scores:");
-  for (const criterion of evaluation.criteriaScores) {
-    const prompt = lesson.prompts.find(p => p.id === criterion.criterionId);
-    const promptLabel = prompt ? prompt.input.substring(0, 50) + "..." : criterion.criterionId;
-    console.log(`\n    [${criterion.criterionId}] ${promptLabel}`);
-    console.log(`      Score: ${criterion.score}/50`);
-    if (criterion.comment) {
-      console.log(`      Comment: ${criterion.comment}`);
-    }
-  }
-
-  console.log(`\n---`);
-  console.log(`\nSession saved! ID: ${session.id}`);
+  // Display final results
+  console.log(`\n${"=".repeat(50)}`);
+  console.log("🎉 Lesson Complete!");
+  console.log(`${"=".repeat(50)}`);
+  console.log(`\nFinal Score: ${finalEvaluation.totalScore}/100`);
+  console.log(`\nOverall Feedback: ${finalEvaluation.feedback}`);
+  console.log(`\nSession saved! Great work, ${student.name}!`);
+  console.log(`${"=".repeat(50)}\n`);
 }
 
 /**

@@ -2,6 +2,8 @@ import readline from "readline";
 import { Student } from "../domain/student";
 import { StudentStore } from "../stores/studentStore";
 import { SessionStore } from "../stores/sessionStore";
+import { CoachConversation } from "../domain/submission";
+import { startHelpConversation } from "./coach";
 
 /**
  * Generate a simple unique ID (good enough for local development)
@@ -75,27 +77,96 @@ export async function askMenu(
   });
 }
 
+export interface QuestionResult {
+  response: string;
+  reflection?: string;
+  hintUsed: boolean;
+  helpConversation?: CoachConversation;
+}
+
+/**
+ * Ask a question with support for AI coach help
+ *
+ * Student can type:
+ * - "help" to start a conversation with the AI coach
+ * - "hint" for static hints (fallback)
+ * - Their answer to continue
+ */
 export async function askQuestion(
   rl: readline.Interface,
   promptText: string,
   hints?: string[]
-): Promise<{ response: string; reflection?: string; hintUsed: boolean }> {
+): Promise<QuestionResult> {
   let hintUsed = false;
+  let helpConversation: CoachConversation | undefined;
 
   return new Promise((resolve) => {
+    const showPrompt = () => {
+      console.log(`${promptText}`);
+      console.log("(Type 'help' to talk with the AI coach, or answer below)\n");
+    };
+
+    showPrompt();
+
     const innerAsk = () => {
-      rl.question(`${promptText}\n> `, async (answer: string) => {
-        if (answer.toLowerCase() === "hint" && hints && hints.length > 0) {
-          console.log("\nHint:", hints.join("; "));
+      rl.question("> ", async (answer: string) => {
+        const lowerAnswer = answer.toLowerCase().trim();
+
+        if (lowerAnswer === "help") {
+          // Start AI coach conversation
           hintUsed = true;
-          innerAsk(); // ask the question again after hint
+          helpConversation = await startHelpConversation(rl, promptText, hints || []);
+          innerAsk(); // Ask again after help conversation
+        } else if (lowerAnswer === "hint") {
+          // Fallback to static hints
+          if (hints && hints.length > 0) {
+            console.log("\n📝 Hint:", hints.join("; "), "\n");
+          } else {
+            console.log("\nNo hints available. Try 'help' to talk with the AI coach.\n");
+          }
+          hintUsed = true;
+          innerAsk();
+        } else if (lowerAnswer === "") {
+          // Empty answer, ask again
+          console.log("Please type your answer, or 'help' for guidance.\n");
+          innerAsk();
         } else {
-          rl.question("Optional: Describe your reasoning / reflection:\n> ", (reflection) => {
-            resolve({ response: answer, reflection: reflection || undefined, hintUsed });
+          // Got an answer, ask for reflection
+          rl.question("\nOptional: Explain your thinking (or press enter to skip):\n> ", (reflection) => {
+            resolve({
+              response: answer,
+              reflection: reflection.trim() || undefined,
+              hintUsed,
+              helpConversation
+            });
           });
         }
       });
     };
+
     innerAsk();
+  });
+}
+
+/**
+ * Simple yes/no question
+ */
+export async function askYesNo(rl: readline.Interface, question: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    rl.question(`${question} (yes/no): `, (answer) => {
+      const lower = answer.toLowerCase().trim();
+      resolve(lower === "yes" || lower === "y");
+    });
+  });
+}
+
+/**
+ * Ask if student wants to explore more (for "more" feature)
+ */
+export async function askMore(rl: readline.Interface): Promise<boolean> {
+  return new Promise((resolve) => {
+    rl.question("\nWant to explore this topic more? (type 'more' or press enter to continue): ", (answer) => {
+      resolve(answer.toLowerCase().trim() === "more");
+    });
   });
 }
