@@ -16,6 +16,15 @@ npm start      # Run compiled JavaScript
 
 No test framework is currently configured.
 
+## Environment Setup
+
+Copy `.env.example` to `.env` and add your OpenAI API key:
+```bash
+OPENAI_API_KEY=sk-your-key-here
+```
+
+Without an API key, the app falls back to `FakeEvaluator` (rule-based scoring).
+
 ## Architecture
 
 The project follows a layered architecture with domain-driven design principles:
@@ -40,7 +49,9 @@ src/
 - **Lesson**: Contains multiple prompts grouped by difficulty (beginner/intermediate/advanced)
 - **Submission**: Captures student responses, reflections, and hint usage
 - **Evaluation**: Scoring criteria and results
-- **Evaluator interface** with `FakeEvaluator` implementation for testing
+- **Evaluator interface** with two implementations:
+  - `LLMEvaluator`: Uses OpenAI GPT to assess understanding, reasoning, and clarity
+  - `FakeEvaluator`: Rule-based fallback for testing without API key
 
 ### Stores Layer (`src/stores/`)
 
@@ -52,7 +63,9 @@ src/
 2. Loads lesson from JSON via `lessonLoader.ts`
 3. `runAssignment.ts` presents each prompt using `askQuestion()` helper
 4. User can type "hint" for hints (tracked for scoring)
-5. `FakeEvaluator` scores submission (30 pts/prompt base, -5 for hints, +5 for reflection)
+5. Evaluator scores submission:
+   - `LLMEvaluator` (if `OPENAI_API_KEY` set): Assesses understanding, reasoning, clarity via GPT
+   - `FakeEvaluator` (fallback): Rule-based scoring (30 pts/prompt, -5 hints, +5 reflection)
 6. Session is saved to `src/data/sessions/{sessionId}.json`
 
 ### Key Interfaces

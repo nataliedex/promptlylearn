@@ -1,6 +1,9 @@
+import "dotenv/config";
 import readline from "readline";
 import { loadLesson } from "../loaders/lessonLoader";
 import { FakeEvaluator } from "../domain/fakeEvaluator";
+import { LLMEvaluator } from "../domain/llmEvaluator";
+import { Evaluator } from "../domain/evaluator";
 import { askQuestion, askForStudent, generateId } from "./helpers";
 import { Session } from "../domain/session";
 import { SessionStore } from "../stores/sessionStore";
@@ -9,6 +12,21 @@ const rl = readline.createInterface({
   input: process.stdin,
   output: process.stdout
 });
+
+/**
+ * Select the appropriate evaluator based on environment.
+ * Uses LLMEvaluator if OPENAI_API_KEY is set, otherwise FakeEvaluator.
+ */
+function createEvaluator(): Evaluator {
+  if (process.env.OPENAI_API_KEY) {
+    console.log("Using LLM evaluation (OpenAI)\n");
+    return new LLMEvaluator();
+  } else {
+    console.log("No OPENAI_API_KEY found - using fake evaluator");
+    console.log("Set OPENAI_API_KEY in .env for real AI evaluation\n");
+    return new FakeEvaluator();
+  }
+}
 
 async function runLesson() {
   const startedAt = new Date();
@@ -43,8 +61,9 @@ async function runLesson() {
   };
 
   // 5. Evaluate
-  const evaluator = new FakeEvaluator();
-  const evaluation = evaluator.evaluate(submission);
+  console.log("\nEvaluating your responses...\n");
+  const evaluator = createEvaluator();
+  const evaluation = await evaluator.evaluate(submission, lesson);
 
   // 6. Build and save session
   const session: Session = {
@@ -63,15 +82,22 @@ async function runLesson() {
   store.save(session);
 
   // 7. Display results
-  console.log("\n---");
+  console.log("---");
   console.log("\nEvaluation Result:");
   console.log(`  Total Score: ${evaluation.totalScore}/100`);
-  console.log(`  Feedback: ${evaluation.feedback}`);
-  console.log("\n  Criteria Scores:");
+  console.log(`\n  Feedback: ${evaluation.feedback}`);
+  console.log("\n  Per-Prompt Scores:");
   for (const criterion of evaluation.criteriaScores) {
-    console.log(`    - ${criterion.criterionId}: ${criterion.score} ${criterion.comment ? `(${criterion.comment})` : ""}`);
+    const prompt = lesson.prompts.find(p => p.id === criterion.criterionId);
+    const promptLabel = prompt ? prompt.input.substring(0, 50) + "..." : criterion.criterionId;
+    console.log(`\n    [${criterion.criterionId}] ${promptLabel}`);
+    console.log(`      Score: ${criterion.score}/50`);
+    if (criterion.comment) {
+      console.log(`      Comment: ${criterion.comment}`);
+    }
   }
 
+  console.log(`\n---`);
   console.log(`\nSession saved! ID: ${session.id}`);
   console.log(`Student: ${student.name} (${student.id})`);
 }

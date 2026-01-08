@@ -11,4 +11,4 @@ dist
 npm-debug.log*
 
 # session data (local student progress)
-src/data/sessions
+data/sessions
