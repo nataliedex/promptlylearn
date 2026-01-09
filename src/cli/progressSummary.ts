@@ -7,11 +7,18 @@ import { SessionStore } from "../stores/sessionStore";
  */
 export function showProgressSummary(student: Student): void {
   const sessionStore = new SessionStore();
-  const sessions = sessionStore.getByStudentId(student.id);
+  // Only include completed sessions with evaluation
+  const sessions = sessionStore.getCompletedByStudentId(student.id);
 
   console.log("\n" + "=".repeat(50));
   console.log(`Progress Summary for ${student.name}`);
   console.log("=".repeat(50));
+
+  // Check for in-progress lessons
+  const inProgress = sessionStore.getInProgressByStudentId(student.id);
+  if (inProgress.length > 0) {
+    console.log(`\n⏳ You have ${inProgress.length} lesson(s) in progress.`);
+  }
 
   if (sessions.length === 0) {
     console.log("\nNo sessions completed yet. Start a lesson to begin learning!\n");
@@ -19,7 +26,7 @@ export function showProgressSummary(student: Student): void {
   }
 
   // Overall stats
-  const scores = sessions.map(s => s.evaluation.totalScore);
+  const scores = sessions.map(s => s.evaluation?.totalScore ?? 0);
   const avgScore = Math.round(scores.reduce((a, b) => a + b, 0) / scores.length);
   const bestScore = Math.max(...scores);
   const latestScore = scores[0]; // Sessions are sorted newest first
@@ -41,7 +48,7 @@ export function showProgressSummary(student: Student): void {
   console.log("\n📚 Per-Lesson Breakdown:");
 
   for (const [lessonTitle, lessonSessions] of Object.entries(lessonMap)) {
-    const lessonScores = lessonSessions.map(s => s.evaluation.totalScore);
+    const lessonScores = lessonSessions.map(s => s.evaluation?.totalScore ?? 0);
     const lessonAvg = Math.round(lessonScores.reduce((a, b) => a + b, 0) / lessonScores.length);
     const lessonBest = Math.max(...lessonScores);
 
@@ -55,8 +62,8 @@ export function showProgressSummary(student: Student): void {
   console.log("\n📅 Recent Sessions:");
   const recentSessions = sessions.slice(0, 5);
   for (const session of recentSessions) {
-    const date = new Date(session.completedAt).toLocaleDateString();
-    console.log(`   ${date} - ${session.lessonTitle}: ${session.evaluation.totalScore}/100`);
+    const date = session.completedAt ? new Date(session.completedAt).toLocaleDateString() : "Unknown";
+    console.log(`   ${date} - ${session.lessonTitle}: ${session.evaluation?.totalScore ?? 0}/100`);
   }
 
   // Insights
@@ -77,12 +84,12 @@ function calculateTrend(sessions: Session[]): string {
 
   // Compare average of last 3 sessions to previous 3
   const recent = sessions.slice(0, Math.min(3, sessions.length));
-  const recentAvg = recent.reduce((a, s) => a + s.evaluation.totalScore, 0) / recent.length;
+  const recentAvg = recent.reduce((a, s) => a + (s.evaluation?.totalScore ?? 0), 0) / recent.length;
 
   if (sessions.length < 4) {
     // Just compare first and last
-    const first = sessions[sessions.length - 1].evaluation.totalScore;
-    const last = sessions[0].evaluation.totalScore;
+    const first = sessions[sessions.length - 1].evaluation?.totalScore ?? 0;
+    const last = sessions[0].evaluation?.totalScore ?? 0;
     const diff = last - first;
 
     if (diff > 10) return "📈 Improving significantly!";
@@ -93,7 +100,7 @@ function calculateTrend(sessions: Session[]): string {
   }
 
   const older = sessions.slice(3, Math.min(6, sessions.length));
-  const olderAvg = older.reduce((a, s) => a + s.evaluation.totalScore, 0) / older.length;
+  const olderAvg = older.reduce((a, s) => a + (s.evaluation?.totalScore ?? 0), 0) / older.length;
   const diff = recentAvg - olderAvg;
 
   if (diff > 10) return "📈 Improving significantly!";
@@ -156,7 +163,7 @@ function generateInsights(sessions: Session[]): string[] {
   }
 
   // Score-based insights
-  const avgScore = sessions.reduce((a, s) => a + s.evaluation.totalScore, 0) / sessions.length;
+  const avgScore = sessions.reduce((a, s) => a + (s.evaluation?.totalScore ?? 0), 0) / sessions.length;
 
   if (avgScore >= 80) {
     insights.push("Strong performance! Consider trying more advanced lessons.");

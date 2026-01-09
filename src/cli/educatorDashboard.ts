@@ -15,7 +15,8 @@ export async function runEducatorDashboard(rl: readline.Interface): Promise<void
   const sessionStore = new SessionStore();
 
   const students = studentStore.getAll();
-  const allSessions = sessionStore.getAll();
+  // Only show completed sessions (those with evaluation) in educator dashboard
+  const allSessions = sessionStore.getAll().filter(s => s.status === "completed");
 
   console.log("\n" + "=".repeat(60));
   console.log("Educator Dashboard");
@@ -51,7 +52,7 @@ export async function runEducatorDashboard(rl: readline.Interface): Promise<void
       case 4:
         // Refresh
         const refreshedStudents = studentStore.getAll();
-        const refreshedSessions = sessionStore.getAll();
+        const refreshedSessions = sessionStore.getAll().filter(s => s.status === "completed");
         console.log("\n" + "=".repeat(60));
         console.log("Educator Dashboard (Refreshed)");
         console.log("=".repeat(60));
@@ -79,7 +80,7 @@ function displayClassStats(students: Student[], sessions: Session[]): void {
   const totalStudents = students.length;
   const totalSessions = sessions.length;
   const avgScore = sessions.length > 0
-    ? Math.round(sessions.reduce((sum, s) => sum + s.evaluation.totalScore, 0) / sessions.length)
+    ? Math.round(sessions.reduce((sum, s) => sum + (s.evaluation?.totalScore ?? 0), 0) / sessions.length)
     : 0;
 
   // Find struggling students (avg < 60)
@@ -119,7 +120,7 @@ function displayStudentList(students: Student[], sessions: Session[]): void {
     }
 
     const avgScore = Math.round(
-      studentSessions.reduce((sum, s) => sum + s.evaluation.totalScore, 0) / sessionCount
+      studentSessions.reduce((sum, s) => sum + (s.evaluation?.totalScore ?? 0), 0) / sessionCount
     );
     const trend = calculateTrend(studentSessions);
     const status = getStudentStatus(avgScore, trend);
@@ -158,7 +159,9 @@ async function viewStudentDetails(
   }
 
   const student = students[choice - 1];
-  const sessions = sessionStore.getByStudentId(student.id);
+  // Only show completed sessions
+  const sessions = sessionStore.getCompletedByStudentId(student.id);
+  const inProgressCount = sessionStore.getInProgressByStudentId(student.id).length;
 
   console.log("\n" + "=".repeat(50));
   console.log(`Student Details: ${student.name}`);
@@ -168,6 +171,9 @@ async function viewStudentDetails(
   console.log(`\n   Joined: ${joinDate}`);
   console.log(`   Student ID: ${student.id}`);
   console.log(`   Sessions completed: ${sessions.length}`);
+  if (inProgressCount > 0) {
+    console.log(`   Sessions in progress: ${inProgressCount}`);
+  }
 
   if (sessions.length === 0) {
     console.log("\n   No sessions completed yet.\n");
@@ -175,9 +181,9 @@ async function viewStudentDetails(
   }
 
   const avgScore = Math.round(
-    sessions.reduce((sum, s) => sum + s.evaluation.totalScore, 0) / sessions.length
+    sessions.reduce((sum, s) => sum + (s.evaluation?.totalScore ?? 0), 0) / sessions.length
   );
-  const bestScore = Math.max(...sessions.map(s => s.evaluation.totalScore));
+  const bestScore = Math.max(...sessions.map(s => s.evaluation?.totalScore ?? 0));
   const trend = calculateTrend(sessions);
 
   console.log(`   Average score: ${avgScore}/100`);
@@ -188,7 +194,7 @@ async function viewStudentDetails(
   const lessonMap = new Map<string, number[]>();
   for (const session of sessions) {
     const scores = lessonMap.get(session.lessonTitle) || [];
-    scores.push(session.evaluation.totalScore);
+    scores.push(session.evaluation?.totalScore ?? 0);
     lessonMap.set(session.lessonTitle, scores);
   }
 
@@ -203,11 +209,11 @@ async function viewStudentDetails(
   console.log("\n   Recent sessions:");
   const recent = sessions.slice(0, 5);
   for (const session of recent) {
-    const date = new Date(session.completedAt).toLocaleDateString();
+    const date = session.completedAt ? new Date(session.completedAt).toLocaleDateString() : "Unknown";
     // Check if any responses have audio
     const hasAudio = session.submission.responses.some(r => r.audioPath);
     const audioIcon = hasAudio ? " 🎤" : "";
-    console.log(`     ${date} - ${session.lessonTitle}: ${session.evaluation.totalScore}/100${audioIcon}`);
+    console.log(`     ${date} - ${session.lessonTitle}: ${session.evaluation?.totalScore ?? 0}/100${audioIcon}`);
   }
 
   // Offer to review a specific session
@@ -232,10 +238,10 @@ async function reviewStudentSession(
   console.log("\nSelect a session to review:\n");
 
   const options = sessions.map(s => {
-    const date = new Date(s.completedAt).toLocaleDateString();
+    const date = s.completedAt ? new Date(s.completedAt).toLocaleDateString() : "Unknown";
     const hasAudio = s.submission.responses.some(r => r.audioPath);
     const audioIcon = hasAudio ? " 🎤" : "";
-    return `${date} - ${s.lessonTitle} (${s.evaluation.totalScore}/100)${audioIcon}`;
+    return `${date} - ${s.lessonTitle} (${s.evaluation?.totalScore ?? 0}/100)${audioIcon}`;
   });
 
   const choice = await askMenu(rl, [...options, "Back"]);
@@ -276,7 +282,7 @@ function viewLessonStats(sessions: Session[]): void {
   for (const [lessonTitle, lessonSessions] of sorted) {
     const attempts = lessonSessions.length;
     const avgScore = Math.round(
-      lessonSessions.reduce((sum, s) => sum + s.evaluation.totalScore, 0) / attempts
+      lessonSessions.reduce((sum, s) => sum + (s.evaluation?.totalScore ?? 0), 0) / attempts
     );
 
     // Determine difficulty indicator based on average score
@@ -308,10 +314,10 @@ function calculateTrend(sessions: Session[]): string {
   if (sessions.length < 2) return "➡️ New";
 
   const recent = sessions.slice(0, Math.min(3, sessions.length));
-  const recentAvg = recent.reduce((a, s) => a + s.evaluation.totalScore, 0) / recent.length;
+  const recentAvg = recent.reduce((a, s) => a + (s.evaluation?.totalScore ?? 0), 0) / recent.length;
 
   if (sessions.length < 4) {
-    const first = sessions[sessions.length - 1].evaluation.totalScore;
+    const first = sessions[sessions.length - 1].evaluation?.totalScore ?? 0;
     const diff = recentAvg - first;
     if (diff > 10) return "📈 Improving";
     if (diff < -10) return "📉 Declining";
@@ -319,7 +325,7 @@ function calculateTrend(sessions: Session[]): string {
   }
 
   const older = sessions.slice(3, Math.min(6, sessions.length));
-  const olderAvg = older.reduce((a, s) => a + s.evaluation.totalScore, 0) / older.length;
+  const olderAvg = older.reduce((a, s) => a + (s.evaluation?.totalScore ?? 0), 0) / older.length;
   const diff = recentAvg - olderAvg;
 
   if (diff > 10) return "📈 Improving";
@@ -352,7 +358,7 @@ function countStrugglingStudents(students: Student[], sessions: Session[]): numb
     const studentSessions = sessions.filter(s => s.studentId === student.id);
     if (studentSessions.length === 0) continue;
 
-    const avgScore = studentSessions.reduce((sum, s) => sum + s.evaluation.totalScore, 0) / studentSessions.length;
+    const avgScore = studentSessions.reduce((sum, s) => sum + (s.evaluation?.totalScore ?? 0), 0) / studentSessions.length;
     if (avgScore < 60) {
       count++;
     }

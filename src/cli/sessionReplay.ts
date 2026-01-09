@@ -13,7 +13,8 @@ export async function reviewPastSessions(
   student: Student
 ): Promise<void> {
   const sessionStore = new SessionStore();
-  const sessions = sessionStore.getByStudentId(student.id);
+  // Only show completed sessions (those with evaluation results)
+  const sessions = sessionStore.getCompletedByStudentId(student.id);
 
   if (sessions.length === 0) {
     console.log("\nYou haven't completed any sessions yet. Try a lesson first!\n");
@@ -23,8 +24,8 @@ export async function reviewPastSessions(
   console.log("\nYour past sessions:\n");
 
   const options = sessions.map(s => {
-    const date = new Date(s.completedAt).toLocaleDateString();
-    return `${date} - ${s.lessonTitle} (${s.evaluation.totalScore}/100)`;
+    const date = s.completedAt ? new Date(s.completedAt).toLocaleDateString() : "Unknown";
+    return `${date} - ${s.lessonTitle} (${s.evaluation?.totalScore ?? 0}/100)`;
   });
 
   const choice = await askMenu(rl, [...options, "Back to main menu"]);
@@ -41,28 +42,39 @@ export async function reviewPastSessions(
  * Display a full replay of a session
  * @param rl - readline interface for interactive prompts
  * @param session - the session to display
- * @param isEducator - if true, offer audio playback options
+ * @param isEducator - if true, offer audio playback and note-taking options
+ * @returns the (possibly modified) session
  */
 export async function displaySessionReplay(
   rl: readline.Interface,
   session: Session,
   isEducator: boolean = false
-): Promise<void> {
-  const date = new Date(session.completedAt).toLocaleDateString();
-  const time = new Date(session.completedAt).toLocaleTimeString();
+): Promise<Session> {
+  const sessionStore = new SessionStore();
+  let modified = false;
+
+  const date = session.completedAt ? new Date(session.completedAt).toLocaleDateString() : "In progress";
+  const time = session.completedAt ? new Date(session.completedAt).toLocaleTimeString() : "";
 
   console.log("\n" + "=".repeat(60));
   console.log(`Session Review: ${session.lessonTitle}`);
   console.log("=".repeat(60));
-  console.log(`Date: ${date} at ${time}`);
-  console.log(`Total Score: ${session.evaluation.totalScore}/100`);
-  console.log(`Overall Feedback: ${session.evaluation.feedback}`);
+  console.log(`Student: ${session.studentName}`);
+  console.log(`Date: ${date}${time ? ` at ${time}` : ""}`);
+  console.log(`Total Score: ${session.evaluation?.totalScore ?? "N/A"}/100`);
+  console.log(`Overall Feedback: ${session.evaluation?.feedback ?? "Session not yet completed"}`);
+
+  // Show existing session notes
+  if (session.educatorNotes) {
+    console.log(`\n📝 Educator Notes: ${session.educatorNotes}`);
+  }
+
   console.log("=".repeat(60));
 
   // Display each response
   for (let i = 0; i < session.submission.responses.length; i++) {
     const response = session.submission.responses[i];
-    const criteriaScore = session.evaluation.criteriaScores.find(
+    const criteriaScore = session.evaluation?.criteriaScores.find(
       c => c.criterionId === response.promptId
     );
 
@@ -115,7 +127,82 @@ export async function displaySessionReplay(
         console.log(`Feedback: ${criteriaScore.comment}`);
       }
     }
+
+    // Show existing educator note for this response
+    if (response.educatorNote) {
+      console.log(`\n📝 Your note: ${response.educatorNote}`);
+    }
+
+    // Offer to add/edit note for this response (educators only)
+    if (isEducator) {
+      const noteAction = response.educatorNote ? "Edit note" : "Add note";
+      const wantToNote = await askYesNo(rl, `   ${noteAction} for this response?`);
+      if (wantToNote) {
+        const note = await askForNote(rl, response.educatorNote);
+        if (note !== null) {
+          session.submission.responses[i].educatorNote = note || undefined;
+          modified = true;
+          if (note) {
+            console.log(`   Note saved.\n`);
+          } else {
+            console.log(`   Note removed.\n`);
+          }
+        }
+      }
+    }
   }
 
-  console.log("\n" + "=".repeat(60) + "\n");
+  console.log("\n" + "=".repeat(60));
+
+  // Offer to add/edit session-level notes (educators only)
+  if (isEducator) {
+    const sessionNoteAction = session.educatorNotes ? "Edit session notes" : "Add session notes";
+    const wantSessionNote = await askYesNo(rl, `${sessionNoteAction}?`);
+    if (wantSessionNote) {
+      const note = await askForNote(rl, session.educatorNotes);
+      if (note !== null) {
+        session.educatorNotes = note || undefined;
+        modified = true;
+        if (note) {
+          console.log(`Session notes saved.\n`);
+        } else {
+          console.log(`Session notes removed.\n`);
+        }
+      }
+    }
+  }
+
+  // Save if modified
+  if (modified) {
+    sessionStore.save(session);
+    console.log("Changes saved.\n");
+  }
+
+  console.log("=".repeat(60) + "\n");
+
+  return session;
+}
+
+/**
+ * Ask for a note (supports multiline, empty to clear)
+ */
+async function askForNote(
+  rl: readline.Interface,
+  existingNote?: string
+): Promise<string | null> {
+  if (existingNote) {
+    console.log(`\n   Current note: "${existingNote}"`);
+  }
+  console.log("   Enter your note (or press Enter to clear, 'cancel' to keep unchanged):");
+
+  return new Promise((resolve) => {
+    rl.question("   > ", (answer) => {
+      const trimmed = answer.trim();
+      if (trimmed.toLowerCase() === "cancel") {
+        resolve(null); // No change
+      } else {
+        resolve(trimmed); // Empty string will clear the note
+      }
+    });
+  });
 }

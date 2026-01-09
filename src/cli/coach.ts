@@ -1,6 +1,7 @@
 import readline from "readline";
 import OpenAI from "openai";
 import { recordAndTranscribe, speak } from "./voice";
+import { CoachConversation } from "../domain/submission";
 
 /**
  * AI Coach for conversational guidance during lessons.
@@ -24,10 +25,8 @@ function getClient(): OpenAI | null {
   return openaiClient;
 }
 
-export interface CoachConversation {
-  mode: "help" | "more";
-  turns: { role: "student" | "coach"; message: string }[];
-}
+// Re-export for convenience
+export { CoachConversation };
 
 /**
  * Start a help conversation (Socratic guidance, no answers)
@@ -95,7 +94,6 @@ The student will type 'done' when they're ready to answer the question.`;
     const studentInput = await askLine(rl, "> ");
 
     if (isExitCommand(studentInput)) {
-      console.log("\nOk! Ready for your answer.\n");
       chatting = false;
     } else if (studentInput.trim() === "") {
       // Empty input, just continue
@@ -111,6 +109,24 @@ The student will type 'done' when they're ready to answer the question.`;
       conversation.turns.push({ role: "coach", message: response });
       messages.push({ role: "assistant", content: response });
     }
+  }
+
+  // Now ask the student to state their final answer
+  const wrapUpMsg = "Great work thinking through that together! Now, tell me your answer to the question.";
+  console.log(`\n🤖 Coach: ${wrapUpMsg}`);
+  await speak(wrapUpMsg);
+  console.log("   ('v' for voice)\n");
+  conversation.turns.push({ role: "coach", message: wrapUpMsg });
+
+  const finalAnswer = await askLine(rl, "> ");
+  if (finalAnswer.trim()) {
+    conversation.finalAnswer = finalAnswer.trim();
+    conversation.turns.push({ role: "student", message: finalAnswer.trim() });
+
+    const confirmMsg = "Nice job! I've got your answer.";
+    console.log(`\n🤖 Coach: ${confirmMsg}\n`);
+    await speak(confirmMsg);
+    conversation.turns.push({ role: "coach", message: confirmMsg });
   }
 
   return conversation;

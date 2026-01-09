@@ -8,6 +8,7 @@ export interface CoachTurn {
 export interface CoachConversation {
   mode: "help" | "more";
   turns: CoachTurn[];
+  finalAnswer?: string; // The answer worked out during help conversation
 }
 
 export interface PromptResponse {
@@ -22,6 +23,7 @@ export interface PromptResponse {
   helpConversation?: CoachConversation; // conversation during question
   elaborationConversation?: CoachConversation; // coach helping elaborate after answering
   moreConversation?: CoachConversation; // exploration after answering
+  educatorNote?: string; // educator's note about this specific response
 }
 
 export interface Submission {

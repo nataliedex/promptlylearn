@@ -53,9 +53,37 @@ export class SessionStore {
       }
     }
 
-    return sessions.sort((a, b) =>
-      new Date(b.completedAt).getTime() - new Date(a.completedAt).getTime()
-    );
+    return sessions.sort((a, b) => {
+      const aTime = new Date(a.completedAt || a.startedAt).getTime();
+      const bTime = new Date(b.completedAt || b.startedAt).getTime();
+      return bTime - aTime;
+    });
+  }
+
+  /**
+   * Get in-progress sessions for a student
+   */
+  getInProgressByStudentId(studentId: string): Session[] {
+    return this.getByStudentId(studentId).filter(s => s.status === "in_progress");
+  }
+
+  /**
+   * Get completed sessions for a student
+   */
+  getCompletedByStudentId(studentId: string): Session[] {
+    return this.getByStudentId(studentId).filter(s => s.status === "completed");
+  }
+
+  /**
+   * Delete a session by ID
+   */
+  delete(sessionId: string): boolean {
+    const filePath = path.join(DATA_DIR, `${sessionId}.json`);
+    if (fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath);
+      return true;
+    }
+    return false;
   }
 
   /**
@@ -72,9 +100,11 @@ export class SessionStore {
       }
     }
 
-    return sessions.sort((a, b) =>
-      new Date(b.completedAt).getTime() - new Date(a.completedAt).getTime()
-    );
+    return sessions.sort((a, b) => {
+      const aTime = new Date(a.completedAt || a.startedAt).getTime();
+      const bTime = new Date(b.completedAt || b.startedAt).getTime();
+      return bTime - aTime;
+    });
   }
 
   private listSessionFiles(): string[] {

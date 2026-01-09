@@ -17,6 +17,40 @@ import { Lesson } from "../domain/lesson";
 import { PromptResponse } from "../domain/submission";
 import { Prompt } from "../domain/prompt";
 
+/**
+ * Save an in-progress session
+ */
+function saveProgress(
+  student: Student,
+  lesson: Lesson,
+  responses: PromptResponse[],
+  startedAt: Date,
+  currentPromptIndex: number,
+  existingSessionId?: string
+): string {
+  const store = new SessionStore();
+
+  const session: Session = {
+    id: existingSessionId || generateId(),
+    studentId: student.id,
+    studentName: student.name,
+    lessonId: lesson.id,
+    lessonTitle: lesson.title,
+    submission: {
+      assignmentId: lesson.id,
+      studentId: student.id,
+      responses,
+      submittedAt: new Date()
+    },
+    startedAt,
+    status: "in_progress",
+    currentPromptIndex
+  };
+
+  store.save(session);
+  return session.id;
+}
+
 const rl = readline.createInterface({
   input: process.stdin,
   output: process.stdout
@@ -57,6 +91,18 @@ async function chooseLesson(): Promise<Lesson | null> {
   }
 
   return lessons[choice - 1];
+}
+
+/**
+ * Ask if student wants to continue or save and exit
+ */
+async function askContinueOrSave(rl: readline.Interface): Promise<"continue" | "save"> {
+  console.log("\nWhat would you like to do?\n");
+  const choice = await askMenu(rl, [
+    "Continue to next question",
+    "Save and exit (continue later)"
+  ]);
+  return choice === 1 ? "continue" : "save";
 }
 
 /**
@@ -155,30 +201,49 @@ async function runPrompt(
 
 /**
  * Run a lesson for a student with conversational flow
+ * Supports resuming from a saved session
  */
-async function runLesson(student: Student, lesson: Lesson): Promise<void> {
-  const startedAt = new Date();
+async function runLesson(
+  student: Student,
+  lesson: Lesson,
+  existingSession?: Session
+): Promise<"completed" | "saved"> {
+  const startedAt = existingSession?.startedAt ? new Date(existingSession.startedAt) : new Date();
   const evaluator = createEvaluator();
+  const startIndex = existingSession?.currentPromptIndex || 0;
+  const sessionId = existingSession?.id;
 
-  console.log(`\n${"=".repeat(50)}`);
-  console.log(`Starting lesson: ${lesson.title}`);
-  console.log(`${"=".repeat(50)}`);
-  console.log(`\n${lesson.description}\n`);
-  console.log(`Difficulty: ${lesson.difficulty}`);
-  console.log(`Questions: ${lesson.prompts.length}`);
-  console.log(`\nTip: Type 'help' to chat with the AI coach!`);
-  console.log(`${"=".repeat(50)}`);
+  // Collect existing responses if resuming
+  const responses: PromptResponse[] = existingSession?.submission?.responses || [];
 
-  // Coach greeting
-  const greeting = `Hello ${student.name}! Today we're going to work on ${lesson.title}. ${lesson.description} We have ${lesson.prompts.length} questions to work through together. Remember, you can type 'v' to speak your answers, or type 'help' if you need me. Let's get started!`;
-  console.log(`\n🤖 Coach: ${greeting}\n`);
-  await speak(greeting);
+  if (existingSession) {
+    console.log(`\n${"=".repeat(50)}`);
+    console.log(`Resuming lesson: ${lesson.title}`);
+    console.log(`${"=".repeat(50)}`);
+    console.log(`\nYou've already completed ${startIndex} of ${lesson.prompts.length} questions.`);
+    console.log(`Let's continue where you left off!`);
+    console.log(`${"=".repeat(50)}`);
 
-  // Collect responses one at a time with immediate feedback
-  const responses: PromptResponse[] = [];
-  let totalScore = 0;
+    const resumeGreeting = `Welcome back, ${student.name}! Let's continue with ${lesson.title}. You've already answered ${startIndex} questions. Ready to keep going?`;
+    console.log(`\n🤖 Coach: ${resumeGreeting}\n`);
+    await speak(resumeGreeting);
+  } else {
+    console.log(`\n${"=".repeat(50)}`);
+    console.log(`Starting lesson: ${lesson.title}`);
+    console.log(`${"=".repeat(50)}`);
+    console.log(`\n${lesson.description}\n`);
+    console.log(`Difficulty: ${lesson.difficulty}`);
+    console.log(`Questions: ${lesson.prompts.length}`);
+    console.log(`\nTip: Type 'help' to chat with the AI coach!`);
+    console.log(`${"=".repeat(50)}`);
 
-  for (let i = 0; i < lesson.prompts.length; i++) {
+    const greeting = `Hello ${student.name}! Today we're going to work on ${lesson.title}. ${lesson.description} We have ${lesson.prompts.length} questions to work through together. Remember, you can type 'v' to speak your answers, or type 'help' if you need me. Let's get started!`;
+    console.log(`\n🤖 Coach: ${greeting}\n`);
+    await speak(greeting);
+  }
+
+  // Process remaining prompts
+  for (let i = startIndex; i < lesson.prompts.length; i++) {
     const prompt = lesson.prompts[i];
     const response = await runPrompt(
       student,
@@ -189,6 +254,18 @@ async function runLesson(student: Student, lesson: Lesson): Promise<void> {
       lesson
     );
     responses.push(response);
+
+    // Offer save option if not on the last question
+    if (i < lesson.prompts.length - 1) {
+      const choice = await askContinueOrSave(rl);
+      if (choice === "save") {
+        saveProgress(student, lesson, responses, startedAt, i + 1, sessionId);
+        const saveMessage = `Great work so far, ${student.name}! I've saved your progress. You've completed ${i + 1} of ${lesson.prompts.length} questions. Come back soon to finish!`;
+        console.log(`\n🤖 Coach: ${saveMessage}\n`);
+        await speak(saveMessage);
+        return "saved";
+      }
+    }
   }
 
   // Build final submission
@@ -202,9 +279,9 @@ async function runLesson(student: Student, lesson: Lesson): Promise<void> {
   // Get final evaluation for the whole lesson
   const finalEvaluation = await evaluator.evaluate(submission, lesson);
 
-  // Build and save session
+  // Build and save completed session
   const session: Session = {
-    id: generateId(),
+    id: sessionId || generateId(),
     studentId: student.id,
     studentName: student.name,
     lessonId: lesson.id,
@@ -212,7 +289,8 @@ async function runLesson(student: Student, lesson: Lesson): Promise<void> {
     submission,
     evaluation: finalEvaluation,
     startedAt,
-    completedAt: new Date()
+    completedAt: new Date(),
+    status: "completed"
   };
 
   const store = new SessionStore();
@@ -230,24 +308,79 @@ async function runLesson(student: Student, lesson: Lesson): Promise<void> {
   const closing = `Great job, ${student.name}! You finished the ${lesson.title} lesson and scored ${finalEvaluation.totalScore} out of 100 points. ${finalEvaluation.feedback} I'm so proud of your hard work today. See you next time!`;
   console.log(`🤖 Coach: ${closing}\n`);
   await speak(closing);
+
+  return "completed";
+}
+
+/**
+ * Resume an in-progress lesson
+ */
+async function resumeLesson(student: Student): Promise<void> {
+  const store = new SessionStore();
+  const inProgressSessions = store.getInProgressByStudentId(student.id);
+
+  if (inProgressSessions.length === 0) {
+    console.log("\nYou don't have any lessons in progress.\n");
+    return;
+  }
+
+  console.log("\nChoose a lesson to continue:\n");
+
+  const options = inProgressSessions.map(s => {
+    const progress = s.currentPromptIndex || 0;
+    return `${s.lessonTitle} (${progress} questions completed)`;
+  });
+
+  const choice = await askMenu(rl, [...options, "Back to main menu"]);
+
+  if (choice === options.length + 1) {
+    return; // Back to menu
+  }
+
+  const session = inProgressSessions[choice - 1];
+
+  // Find the lesson
+  const lessons = getAllLessons();
+  const lesson = lessons.find(l => l.id === session.lessonId);
+
+  if (!lesson) {
+    console.log("\nSorry, this lesson is no longer available.\n");
+    // Clean up the orphaned session
+    store.delete(session.id);
+    return;
+  }
+
+  await runLesson(student, lesson, session);
 }
 
 /**
  * Student menu loop
  */
 async function runStudentMode(student: Student): Promise<void> {
+  const store = new SessionStore();
   let running = true;
+
   while (running) {
-    const choice = await askMenu(rl, [
+    // Check for in-progress lessons
+    const inProgressCount = store.getInProgressByStudentId(student.id).length;
+
+    const menuOptions = [
       "Start a new lesson",
+      ...(inProgressCount > 0 ? [`Continue a lesson (${inProgressCount} in progress)`] : []),
       "Review past sessions",
       "View my progress",
       "Exit"
-    ]);
+    ];
 
-    switch (choice) {
+    const choice = await askMenu(rl, menuOptions);
+
+    // Adjust choice based on whether "Continue" option is present
+    const hasInProgress = inProgressCount > 0;
+    const adjustedChoice = hasInProgress ? choice : (choice === 1 ? 1 : choice + 1);
+
+    switch (adjustedChoice) {
       case 1:
-        // Choose and start lesson
+        // Start new lesson
         const lesson = await chooseLesson();
         if (lesson) {
           await runLesson(student, lesson);
@@ -256,16 +389,21 @@ async function runStudentMode(student: Student): Promise<void> {
         break;
 
       case 2:
+        // Continue lesson (only if in-progress lessons exist)
+        await resumeLesson(student);
+        break;
+
+      case 3:
         // Review past sessions
         await reviewPastSessions(rl, student);
         break;
 
-      case 3:
+      case 4:
         // View progress
         showProgressSummary(student);
         break;
 
-      case 4:
+      case 5:
         // Exit
         running = false;
         console.log(`\nGoodbye, ${student.name}! Keep learning!\n`);

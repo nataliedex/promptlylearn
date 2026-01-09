@@ -105,12 +105,14 @@ export async function askQuestion(
   let helpConversation: CoachConversation | undefined;
   let inputSource: "typed" | "voice" = "typed";
   let audioPath: string | undefined;
+  let gotAnswerFromHelp = false;
+  let helpAnswer: string | undefined;
 
   console.log(`${promptText}`);
   await speak(promptText);
   console.log("(Type answer, 'v' for voice, or 'help' for guidance)\n");
 
-  const innerAsk = async (): Promise<{ response: string; source: "typed" | "voice"; audioPath?: string }> => {
+  const innerAsk = async (): Promise<{ response: string; source: "typed" | "voice"; audioPath?: string } | null> => {
     return new Promise((resolve) => {
       rl.question("> ", async (answer: string) => {
         const lowerAnswer = answer.toLowerCase().trim();
@@ -118,7 +120,16 @@ export async function askQuestion(
         if (lowerAnswer === "help") {
           hintUsed = true;
           helpConversation = await startHelpConversation(rl, promptText, hints || []);
-          resolve(await innerAsk());
+
+          // If they worked out an answer with the coach, use that
+          if (helpConversation.finalAnswer) {
+            gotAnswerFromHelp = true;
+            helpAnswer = helpConversation.finalAnswer;
+            resolve(null); // Signal that we got answer from help
+          } else {
+            // No answer from help, ask again
+            resolve(await innerAsk());
+          }
         } else if (lowerAnswer === "hint") {
           if (hints && hints.length > 0) {
             console.log("\n📝 Hint:", hints.join("; "), "\n");
@@ -146,8 +157,27 @@ export async function askQuestion(
   };
 
   const result = await innerAsk();
-  inputSource = result.source;
-  audioPath = result.audioPath;
+
+  let finalResponse: string;
+
+  if (gotAnswerFromHelp && helpAnswer) {
+    // Got answer from help conversation - ask if they want to add anything
+    finalResponse = helpAnswer;
+    inputSource = "typed"; // Help is always typed for now
+
+    console.log("\nAnything else you'd like to add? ('v' for voice, or enter to continue):");
+    const additionResult = await getInput(rl, "> ", true, false);
+    if (additionResult?.text) {
+      finalResponse = `${helpAnswer} ${additionResult.text}`;
+    }
+  } else if (result) {
+    finalResponse = result.response;
+    inputSource = result.source;
+    audioPath = result.audioPath;
+  } else {
+    // Shouldn't happen, but fallback
+    finalResponse = "";
+  }
 
   // Ask for reflection (also supports voice, with audio saved)
   console.log("\nOptional: Explain your thinking ('v' for voice, or enter to skip):");
@@ -156,7 +186,7 @@ export async function askQuestion(
   const reflectionAudioPath = reflectionResult?.audioPath;
 
   return {
-    response: result.response,
+    response: finalResponse,
     reflection,
     hintUsed,
     helpConversation,

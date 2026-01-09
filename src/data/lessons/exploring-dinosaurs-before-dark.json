@@ -1,0 +1,36 @@
+{
+  "id": "exploring-dinosaurs-before-dark",
+  "title": "Exploring Dinosaurs Before Dark",
+  "description": "In this lesson, students will dive into the story 'Dinosaurs Before Dark' by analyzing character motivations, important events, and themes while making predictions and inferences.",
+  "difficulty": "beginner",
+  "gradeLevel": "Kindergarten",
+  "prompts": [
+    {
+      "id": "q1",
+      "type": "explain",
+      "input": "Why do you think the characters were excited to go to the treehouse? What feelings do you think they had?",
+      "hints": [
+        "Think about what they might have hoped to find.",
+        "Consider how adventure makes people feel."
+      ]
+    },
+    {
+      "id": "q2",
+      "type": "explain",
+      "input": "How do you think the characters' actions changed the story? Can you think of an event that made a big difference?",
+      "hints": [
+        "Remember a moment when they made a choice and what happened after.",
+        "What do you think could have happened if they chose differently?"
+      ]
+    },
+    {
+      "id": "q3",
+      "type": "explain",
+      "input": "What do you think is the main lesson or theme of the story? How did you figure that out?",
+      "hints": [
+        "Look at what the characters learned by the end.",
+        "Think about how their experiences might relate to real life."
+      ]
+    }
+  ]
+}

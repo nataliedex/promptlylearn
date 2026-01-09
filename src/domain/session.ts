@@ -12,7 +12,10 @@ export interface Session {
   lessonId: string;
   lessonTitle: string;
   submission: Submission;
-  evaluation: EvaluationResult;
+  evaluation?: EvaluationResult; // Optional for in-progress sessions
   startedAt: Date;
-  completedAt: Date;
+  completedAt?: Date; // Optional for in-progress sessions
+  status: "in_progress" | "completed";
+  currentPromptIndex?: number; // Track progress for resuming
+  educatorNotes?: string; // Educator's notes about this session
 }
