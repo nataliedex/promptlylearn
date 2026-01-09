@@ -82,19 +82,30 @@ export async function displaySessionReplay(
     console.log(`\nAnswer:`);
     console.log(`  "${response.response}"`);
 
-    // Offer audio playback for educators
-    if (response.audioPath && isEducator) {
-      console.log(`\n   🔊 Audio recording available`);
-      const wantToPlay = await askYesNo(rl, "   Play recording?");
-      if (wantToPlay) {
-        console.log("   Playing...");
-        await playAudio(response.audioPath);
-      }
+    if (response.reflection) {
+      console.log(`\nReasoning:`);
+      console.log(`  "${response.reflection}"`);
     }
 
-    if (response.reflection) {
-      console.log(`\nReflection:`);
-      console.log(`  "${response.reflection}"`);
+    // Offer audio playback for educators (play full response: answer + reflection)
+    const hasAudio = response.audioPath || response.reflectionAudioPath;
+    if (hasAudio && isEducator) {
+      const audioParts = [];
+      if (response.audioPath) audioParts.push("answer");
+      if (response.reflectionAudioPath) audioParts.push("reasoning");
+      console.log(`\n   🔊 Audio available: ${audioParts.join(" + ")}`);
+
+      const wantToPlay = await askYesNo(rl, "   Play full response?");
+      if (wantToPlay) {
+        if (response.audioPath) {
+          console.log("   Playing answer...");
+          await playAudio(response.audioPath);
+        }
+        if (response.reflectionAudioPath) {
+          console.log("   Playing reasoning...");
+          await playAudio(response.reflectionAudioPath);
+        }
+      }
     }
 
     if (response.hintUsed) {

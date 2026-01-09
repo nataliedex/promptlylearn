@@ -85,6 +85,7 @@ export interface QuestionResult {
   helpConversation?: CoachConversation;
   inputSource: "typed" | "voice";
   audioPath?: string;
+  reflectionAudioPath?: string;
 }
 
 /**
@@ -148,10 +149,11 @@ export async function askQuestion(
   inputSource = result.source;
   audioPath = result.audioPath;
 
-  // Ask for reflection (also supports voice)
+  // Ask for reflection (also supports voice, with audio saved)
   console.log("\nOptional: Explain your thinking ('v' for voice, or enter to skip):");
-  const reflectionResult = await getInput(rl, "> ", true);
+  const reflectionResult = await getInput(rl, "> ", true, true); // allowEmpty=true, saveAudio=true
   const reflection = reflectionResult?.text || undefined;
+  const reflectionAudioPath = reflectionResult?.audioPath;
 
   return {
     response: result.response,
@@ -159,7 +161,8 @@ export async function askQuestion(
     hintUsed,
     helpConversation,
     inputSource,
-    audioPath
+    audioPath,
+    reflectionAudioPath
   };
 }
 

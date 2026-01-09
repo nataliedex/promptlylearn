@@ -43,6 +43,12 @@ function getClient(): OpenAI | null {
   return openaiClient;
 }
 
+export interface InputResult {
+  text: string;
+  source: "typed" | "voice";
+  audioPath?: string;
+}
+
 /**
  * Get text input - either typed or via voice
  * Type 'v' for voice, or just type your response
@@ -50,8 +56,9 @@ function getClient(): OpenAI | null {
 export async function getInput(
   rl: readline.Interface,
   prompt: string,
-  allowEmpty: boolean = false
-): Promise<{ text: string; source: "typed" | "voice" } | null> {
+  allowEmpty: boolean = false,
+  saveAudio: boolean = false
+): Promise<InputResult | null> {
   return new Promise((resolve) => {
     const ask = () => {
       rl.question(prompt, async (answer) => {
@@ -59,9 +66,9 @@ export async function getInput(
         const lower = trimmed.toLowerCase();
 
         if (lower === "v" || lower === "voice") {
-          const voiceResult = await recordAndTranscribe(false); // Don't save audio for reflections
+          const voiceResult = await recordAndTranscribe(saveAudio);
           if (voiceResult) {
-            resolve({ text: voiceResult.text, source: "voice" });
+            resolve({ text: voiceResult.text, source: "voice", audioPath: voiceResult.audioPath });
           } else {
             ask(); // Try again
           }

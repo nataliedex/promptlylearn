@@ -75,13 +75,19 @@ async function runPrompt(
   // Get student's answer (with help support)
   const result = await askQuestion(rl, prompt.input, prompt.hints);
 
+  // Combine response and reflection for evaluation (treat as full answer)
+  let fullAnswer = result.response;
+  if (result.reflection) {
+    fullAnswer = `${result.response}\n\nStudent's reasoning: ${result.reflection}`;
+  }
+
   // Build a mini submission for this single prompt to get feedback
   const miniSubmission = {
     assignmentId: lesson.id,
     studentId: student.id,
     responses: [{
       promptId: prompt.id,
-      response: result.response,
+      response: fullAnswer, // Use combined response + reflection for evaluation
       reflection: result.reflection,
       hintUsed: result.hintUsed
     }],
@@ -103,7 +109,7 @@ async function runPrompt(
     await speak(score.comment);
   }
 
-  // Build the response object
+  // Build the response object (store original response, not combined)
   const response: PromptResponse = {
     promptId: prompt.id,
     response: result.response,
@@ -111,6 +117,7 @@ async function runPrompt(
     hintUsed: result.hintUsed,
     inputSource: result.inputSource,
     audioPath: result.audioPath,
+    reflectionAudioPath: result.reflectionAudioPath,
     helpConversation: result.helpConversation
   };
 
