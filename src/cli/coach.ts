@@ -266,9 +266,9 @@ async function askLine(rl: readline.Interface, prompt: string): Promise<string> 
       rl.question(prompt, async (answer) => {
         const lower = answer.toLowerCase().trim();
         if (lower === "v" || lower === "voice") {
-          const voiceText = await recordAndTranscribe();
-          if (voiceText) {
-            resolve(voiceText);
+          const voiceResult = await recordAndTranscribe(false); // Don't save audio for coach chat
+          if (voiceResult) {
+            resolve(voiceResult.text);
           } else {
             ask(); // Try again
           }

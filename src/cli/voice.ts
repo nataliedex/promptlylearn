@@ -4,6 +4,21 @@ import path from "path";
 import os from "os";
 import OpenAI from "openai";
 
+// Audio storage directory
+const AUDIO_DIR = path.join(__dirname, "../../data/audio");
+
+// Ensure audio directory exists
+function ensureAudioDir(): void {
+  if (!fs.existsSync(AUDIO_DIR)) {
+    fs.mkdirSync(AUDIO_DIR, { recursive: true });
+  }
+}
+
+export interface VoiceResult {
+  text: string;
+  audioPath?: string;
+}
+
 // Dynamic import for node-record-lpcm16 (CommonJS module)
 let record: any;
 
@@ -44,9 +59,9 @@ export async function getInput(
         const lower = trimmed.toLowerCase();
 
         if (lower === "v" || lower === "voice") {
-          const voiceText = await recordAndTranscribe();
-          if (voiceText) {
-            resolve({ text: voiceText, source: "voice" });
+          const voiceResult = await recordAndTranscribe(false); // Don't save audio for reflections
+          if (voiceResult) {
+            resolve({ text: voiceResult.text, source: "voice" });
           } else {
             ask(); // Try again
           }
@@ -105,8 +120,9 @@ export async function speak(text: string): Promise<void> {
 /**
  * Record audio and transcribe with Whisper
  * Starts immediately and stops automatically when silence is detected
+ * Saves audio file for later review if saveAudio is true
  */
-export async function recordAndTranscribe(): Promise<string | null> {
+export async function recordAndTranscribe(saveAudio: boolean = true): Promise<VoiceResult | null> {
   const client = getClient();
   if (!client) {
     console.log("\n(Voice input requires OPENAI_API_KEY)");
@@ -114,7 +130,8 @@ export async function recordAndTranscribe(): Promise<string | null> {
   }
 
   const recorder = await getRecorder();
-  const tempFile = path.join(os.tmpdir(), `promptly-${Date.now()}.wav`);
+  const timestamp = Date.now();
+  const tempFile = path.join(os.tmpdir(), `promptly-${timestamp}.wav`);
 
   console.log("\n🎤 Listening... (speak now, stops when you pause)");
 
@@ -156,15 +173,26 @@ export async function recordAndTranscribe(): Promise<string | null> {
           model: "whisper-1"
         });
 
-        // Clean up temp file
-        fs.unlinkSync(tempFile);
-
         const text = transcription.text.trim();
         if (text) {
           console.log(`\n💬 You said: "${text}"\n`);
-          resolve(text);
+
+          // Save audio file if requested
+          let audioPath: string | undefined;
+          if (saveAudio) {
+            ensureAudioDir();
+            const savedFile = path.join(AUDIO_DIR, `${timestamp}.wav`);
+            fs.copyFileSync(tempFile, savedFile);
+            audioPath = savedFile;
+          }
+
+          // Clean up temp file
+          fs.unlinkSync(tempFile);
+
+          resolve({ text, audioPath });
         } else {
           console.log("Couldn't understand. Please try again.\n");
+          fs.unlinkSync(tempFile);
           resolve(null);
         }
       } catch (error) {

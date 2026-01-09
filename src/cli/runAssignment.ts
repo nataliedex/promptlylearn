@@ -110,6 +110,7 @@ async function runPrompt(
     reflection: result.reflection,
     hintUsed: result.hintUsed,
     inputSource: result.inputSource,
+    audioPath: result.audioPath,
     helpConversation: result.helpConversation
   };
 

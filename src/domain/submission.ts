@@ -16,6 +16,7 @@ export interface PromptResponse {
   reflection?: string; // optional student reasoning
   hintUsed: boolean;
   inputSource?: "typed" | "voice"; // how the response was provided
+  audioPath?: string; // path to saved audio recording (if voice input)
   helpConversation?: CoachConversation; // conversation during question
   moreConversation?: CoachConversation; // exploration after answering
 }

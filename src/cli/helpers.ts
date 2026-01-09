@@ -84,6 +84,7 @@ export interface QuestionResult {
   hintUsed: boolean;
   helpConversation?: CoachConversation;
   inputSource: "typed" | "voice";
+  audioPath?: string;
 }
 
 /**
@@ -102,12 +103,13 @@ export async function askQuestion(
   let hintUsed = false;
   let helpConversation: CoachConversation | undefined;
   let inputSource: "typed" | "voice" = "typed";
+  let audioPath: string | undefined;
 
   console.log(`${promptText}`);
   await speak(promptText);
   console.log("(Type answer, 'v' for voice, or 'help' for guidance)\n");
 
-  const innerAsk = async (): Promise<{ response: string; source: "typed" | "voice" }> => {
+  const innerAsk = async (): Promise<{ response: string; source: "typed" | "voice"; audioPath?: string }> => {
     return new Promise((resolve) => {
       rl.question("> ", async (answer: string) => {
         const lowerAnswer = answer.toLowerCase().trim();
@@ -125,9 +127,9 @@ export async function askQuestion(
           hintUsed = true;
           resolve(await innerAsk());
         } else if (lowerAnswer === "v" || lowerAnswer === "voice") {
-          const voiceText = await recordAndTranscribe();
-          if (voiceText) {
-            resolve({ response: voiceText, source: "voice" });
+          const voiceResult = await recordAndTranscribe();
+          if (voiceResult) {
+            resolve({ response: voiceResult.text, source: "voice", audioPath: voiceResult.audioPath });
           } else {
             console.log("Let's try again.\n");
             resolve(await innerAsk());
@@ -144,6 +146,7 @@ export async function askQuestion(
 
   const result = await innerAsk();
   inputSource = result.source;
+  audioPath = result.audioPath;
 
   // Ask for reflection (also supports voice)
   console.log("\nOptional: Explain your thinking ('v' for voice, or enter to skip):");
@@ -155,7 +158,8 @@ export async function askQuestion(
     reflection,
     hintUsed,
     helpConversation,
-    inputSource
+    inputSource,
+    audioPath
   };
 }
 
@@ -194,9 +198,9 @@ export async function askMore(rl: readline.Interface): Promise<AskMoreResult> {
         } else if (lower === "more") {
           resolve({ wantsMore: true });
         } else if (lower === "v" || lower === "voice") {
-          const voiceText = await recordAndTranscribe();
-          if (voiceText) {
-            resolve({ wantsMore: true, initialQuestion: voiceText });
+          const voiceResult = await recordAndTranscribe(false); // Don't save audio for "more" prompt
+          if (voiceResult) {
+            resolve({ wantsMore: true, initialQuestion: voiceResult.text });
           } else {
             ask(); // Try again
           }
