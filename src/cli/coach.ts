@@ -1,6 +1,6 @@
 import readline from "readline";
 import OpenAI from "openai";
-import { recordAndTranscribe } from "./voice";
+import { recordAndTranscribe, speak } from "./voice";
 
 /**
  * AI Coach for conversational guidance during lessons.
@@ -83,6 +83,7 @@ The student will type 'done' when they're ready to answer the question.`;
   // Initial coach greeting
   const greeting = await getCoachResponse(client, messages, "The student just asked for help.");
   console.log(`\n🤖 Coach: ${greeting}`);
+  await speak(greeting);
   console.log("\n   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
   console.log("   💡 'v' for voice | 'done' to answer the question");
   console.log("   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
@@ -105,6 +106,8 @@ The student will type 'done' when they're ready to answer the question.`;
 
       const response = await getCoachResponse(client, messages, studentInput);
       console.log(`\n🤖 Coach: ${response}\n`);
+      await speak(response);
+      console.log("   (Say 'done' when you're ready to answer the question)\n");
       conversation.turns.push({ role: "coach", message: response });
       messages.push({ role: "assistant", content: response });
     }
@@ -175,6 +178,7 @@ The student will type 'done' when they're ready to move on.`;
 
     const response = await getCoachResponse(client, messages, initialQuestion);
     console.log(`\n🤖 Coach: ${response}`);
+    await speak(response);
     console.log("\n   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     console.log("   💡 'v' for voice | 'done' to continue");
     console.log("   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
@@ -184,6 +188,7 @@ The student will type 'done' when they're ready to move on.`;
     // No initial question, give a generic greeting
     const greeting = await getCoachResponse(client, messages, "The student wants to learn more about this topic.");
     console.log(`\n🤖 Coach: ${greeting}`);
+    await speak(greeting);
     console.log("\n   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     console.log("   💡 'v' for voice | 'done' to continue");
     console.log("   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
@@ -197,7 +202,9 @@ The student will type 'done' when they're ready to move on.`;
     const studentInput = await askLine(rl, "> ");
 
     if (isExitCommand(studentInput)) {
-      console.log("\n🤖 Coach: Great curiosity! Keep asking questions. Ready for the next challenge!\n");
+      const exitMsg = "Great curiosity! Keep asking questions. Ready for the next challenge!";
+      console.log(`\n🤖 Coach: ${exitMsg}\n`);
+      await speak(exitMsg);
       chatting = false;
     } else if (studentInput.trim() === "") {
       // Empty input, just continue
@@ -208,6 +215,8 @@ The student will type 'done' when they're ready to move on.`;
 
       const response = await getCoachResponse(client, messages, studentInput);
       console.log(`\n🤖 Coach: ${response}\n`);
+      await speak(response);
+      console.log("   (Say 'done' when you're ready for the next question)\n");
       conversation.turns.push({ role: "coach", message: response });
       messages.push({ role: "assistant", content: response });
     }

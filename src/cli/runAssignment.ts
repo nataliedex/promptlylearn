@@ -11,6 +11,7 @@ import { showProgressSummary } from "./progressSummary";
 import { reviewPastSessions } from "./sessionReplay";
 import { runEducatorDashboard } from "./educatorDashboard";
 import { startMoreConversation } from "./coach";
+import { speak } from "./voice";
 import { Student } from "../domain/student";
 import { Lesson } from "../domain/lesson";
 import { PromptResponse } from "../domain/submission";
@@ -99,6 +100,7 @@ async function runPrompt(
   console.log(`Score: ${score?.score || 0}/50`);
   if (score?.comment) {
     console.log(`Feedback: ${score.comment}`);
+    await speak(score.comment);
   }
 
   // Build the response object
@@ -142,6 +144,11 @@ async function runLesson(student: Student, lesson: Lesson): Promise<void> {
   console.log(`Questions: ${lesson.prompts.length}`);
   console.log(`\nTip: Type 'help' to chat with the AI coach!`);
   console.log(`${"=".repeat(50)}`);
+
+  // Coach greeting
+  const greeting = `Hello ${student.name}! Today we're going to work on ${lesson.title}. ${lesson.description} We have ${lesson.prompts.length} questions to work through together. Remember, you can type 'v' to speak your answers, or type 'help' if you need me. Let's get started!`;
+  console.log(`\n🤖 Coach: ${greeting}\n`);
+  await speak(greeting);
 
   // Collect responses one at a time with immediate feedback
   const responses: PromptResponse[] = [];
@@ -193,8 +200,12 @@ async function runLesson(student: Student, lesson: Lesson): Promise<void> {
   console.log(`${"=".repeat(50)}`);
   console.log(`\nFinal Score: ${finalEvaluation.totalScore}/100`);
   console.log(`\nOverall Feedback: ${finalEvaluation.feedback}`);
-  console.log(`\nSession saved! Great work, ${student.name}!`);
   console.log(`${"=".repeat(50)}\n`);
+
+  // Coach closing message
+  const closing = `Great job, ${student.name}! You finished the ${lesson.title} lesson and scored ${finalEvaluation.totalScore} out of 100 points. ${finalEvaluation.feedback} I'm so proud of your hard work today. See you next time!`;
+  console.log(`🤖 Coach: ${closing}\n`);
+  await speak(closing);
 }
 
 /**

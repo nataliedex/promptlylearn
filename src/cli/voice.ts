@@ -62,6 +62,47 @@ export async function getInput(
 }
 
 /**
+ * Speak text using OpenAI TTS
+ */
+export async function speak(text: string): Promise<void> {
+  const client = getClient();
+  if (!client) {
+    return; // Silently skip if no API key
+  }
+
+  const tempFile = path.join(os.tmpdir(), `promptly-speech-${Date.now()}.mp3`);
+
+  try {
+    const response = await client.audio.speech.create({
+      model: "tts-1",
+      voice: "nova", // Friendly voice good for kids
+      input: text
+    });
+
+    const buffer = Buffer.from(await response.arrayBuffer());
+    fs.writeFileSync(tempFile, buffer);
+
+    // Play audio using afplay (macOS) or play (sox)
+    const { execSync } = await import("child_process");
+    try {
+      execSync(`afplay "${tempFile}"`, { stdio: "ignore" });
+    } catch {
+      // Try sox play as fallback
+      try {
+        execSync(`play "${tempFile}"`, { stdio: "ignore" });
+      } catch {
+        // Silently fail if neither works
+      }
+    }
+
+    // Clean up
+    fs.unlinkSync(tempFile);
+  } catch (error) {
+    // Silently fail - text is still shown
+  }
+}
+
+/**
  * Record audio and transcribe with Whisper
  * Starts immediately and stops automatically when silence is detected
  */

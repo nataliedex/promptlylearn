@@ -4,7 +4,7 @@ import { StudentStore } from "../stores/studentStore";
 import { SessionStore } from "../stores/sessionStore";
 import { CoachConversation } from "../domain/submission";
 import { startHelpConversation } from "./coach";
-import { recordAndTranscribe, getInput } from "./voice";
+import { recordAndTranscribe, getInput, speak } from "./voice";
 
 /**
  * Generate a simple unique ID (good enough for local development)
@@ -104,6 +104,7 @@ export async function askQuestion(
   let inputSource: "typed" | "voice" = "typed";
 
   console.log(`${promptText}`);
+  await speak(promptText);
   console.log("(Type answer, 'v' for voice, or 'help' for guidance)\n");
 
   const innerAsk = async (): Promise<{ response: string; source: "typed" | "voice" }> => {
