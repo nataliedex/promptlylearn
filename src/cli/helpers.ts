@@ -4,6 +4,7 @@ import { StudentStore } from "../stores/studentStore";
 import { SessionStore } from "../stores/sessionStore";
 import { CoachConversation } from "../domain/submission";
 import { startHelpConversation } from "./coach";
+import { recordAndTranscribe, getInput } from "./voice";
 
 /**
  * Generate a simple unique ID (good enough for local development)
@@ -82,15 +83,16 @@ export interface QuestionResult {
   reflection?: string;
   hintUsed: boolean;
   helpConversation?: CoachConversation;
+  inputSource: "typed" | "voice";
 }
 
 /**
- * Ask a question with support for AI coach help
+ * Ask a question with support for AI coach help and voice input
  *
- * Student can type:
- * - "help" to start a conversation with the AI coach
- * - "hint" for static hints (fallback)
- * - Their answer to continue
+ * Student can:
+ * - Type their answer
+ * - Type "v" for voice input (auto-stops on silence)
+ * - Type "help" for AI coach guidance
  */
 export async function askQuestion(
   rl: readline.Interface,
@@ -99,53 +101,61 @@ export async function askQuestion(
 ): Promise<QuestionResult> {
   let hintUsed = false;
   let helpConversation: CoachConversation | undefined;
+  let inputSource: "typed" | "voice" = "typed";
 
-  return new Promise((resolve) => {
-    const showPrompt = () => {
-      console.log(`${promptText}`);
-      console.log("(Type 'help' to talk with the AI coach, or answer below)\n");
-    };
+  console.log(`${promptText}`);
+  console.log("(Type answer, 'v' for voice, or 'help' for guidance)\n");
 
-    showPrompt();
-
-    const innerAsk = () => {
+  const innerAsk = async (): Promise<{ response: string; source: "typed" | "voice" }> => {
+    return new Promise((resolve) => {
       rl.question("> ", async (answer: string) => {
         const lowerAnswer = answer.toLowerCase().trim();
 
         if (lowerAnswer === "help") {
-          // Start AI coach conversation
           hintUsed = true;
           helpConversation = await startHelpConversation(rl, promptText, hints || []);
-          innerAsk(); // Ask again after help conversation
+          resolve(await innerAsk());
         } else if (lowerAnswer === "hint") {
-          // Fallback to static hints
           if (hints && hints.length > 0) {
             console.log("\n📝 Hint:", hints.join("; "), "\n");
           } else {
-            console.log("\nNo hints available. Try 'help' to talk with the AI coach.\n");
+            console.log("\nNo hints available. Try 'help' for AI coach.\n");
           }
           hintUsed = true;
-          innerAsk();
+          resolve(await innerAsk());
+        } else if (lowerAnswer === "v" || lowerAnswer === "voice") {
+          const voiceText = await recordAndTranscribe();
+          if (voiceText) {
+            resolve({ response: voiceText, source: "voice" });
+          } else {
+            console.log("Let's try again.\n");
+            resolve(await innerAsk());
+          }
         } else if (lowerAnswer === "") {
-          // Empty answer, ask again
-          console.log("Please type your answer, or 'help' for guidance.\n");
-          innerAsk();
+          console.log("Type answer, 'v' for voice, or 'help' for guidance.\n");
+          resolve(await innerAsk());
         } else {
-          // Got an answer, ask for reflection
-          rl.question("\nOptional: Explain your thinking (or press enter to skip):\n> ", (reflection) => {
-            resolve({
-              response: answer,
-              reflection: reflection.trim() || undefined,
-              hintUsed,
-              helpConversation
-            });
-          });
+          resolve({ response: answer, source: "typed" });
         }
       });
-    };
+    });
+  };
 
-    innerAsk();
-  });
+  const result = await innerAsk();
+  inputSource = result.source;
+
+  // Ask for reflection (also supports voice)
+  console.log("\nOptional: Explain your thinking ('v' for voice, or enter to skip):");
+  const reflectionResult = await getInput(rl, "> ", true);
+  const reflection = reflectionResult?.text || undefined;
+
+  return {
+    response: result.response,
+    reflection,
+    hintUsed,
+    helpConversation,
+    inputSource
+  };
 }
 
 /**
@@ -167,20 +177,34 @@ export interface AskMoreResult {
 
 /**
  * Ask if student wants to explore more (for "more" feature)
- * Accepts "more" OR any question as a trigger to start exploration
+ * Accepts "more", a question, or "v" for voice
  */
 export async function askMore(rl: readline.Interface): Promise<AskMoreResult> {
+  console.log("\nWant to explore more? ('more', ask a question, 'v' for voice, or enter to continue)");
+
   return new Promise((resolve) => {
-    rl.question("\nWant to explore this topic more? (type 'more', ask a question, or press enter to continue): ", (answer) => {
-      const trimmed = answer.trim();
-      if (trimmed === "") {
-        resolve({ wantsMore: false });
-      } else if (trimmed.toLowerCase() === "more") {
-        resolve({ wantsMore: true });
-      } else {
-        // They typed a question - start exploration with their question
-        resolve({ wantsMore: true, initialQuestion: trimmed });
-      }
-    });
+    const ask = () => {
+      rl.question("> ", async (answer) => {
+        const trimmed = answer.trim();
+        const lower = trimmed.toLowerCase();
+
+        if (trimmed === "") {
+          resolve({ wantsMore: false });
+        } else if (lower === "more") {
+          resolve({ wantsMore: true });
+        } else if (lower === "v" || lower === "voice") {
+          const voiceText = await recordAndTranscribe();
+          if (voiceText) {
+            resolve({ wantsMore: true, initialQuestion: voiceText });
+          } else {
+            ask(); // Try again
+          }
+        } else {
+          // They typed a question
+          resolve({ wantsMore: true, initialQuestion: trimmed });
+        }
+      });
+    };
+    ask();
   });
 }
