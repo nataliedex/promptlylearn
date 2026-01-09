@@ -25,6 +25,15 @@ OPENAI_API_KEY=sk-your-key-here
 
 Without an API key, the app falls back to `FakeEvaluator` (rule-based scoring).
 
+### Voice Input (Whisper)
+
+Voice input requires SoX (Sound eXchange) for audio recording:
+```bash
+brew install sox  # macOS
+```
+
+Voice is available throughout the app - type `v` at any prompt to speak instead of type. Recording starts immediately and auto-stops after 2 seconds of silence.
+
 ## Architecture
 
 The project follows a layered architecture with domain-driven design principles:
@@ -34,6 +43,7 @@ src/
 ├── cli/                  # Command-line interaction layer
 │   ├── runAssignment.ts  # Main app entry point with role selection
 │   ├── helpers.ts        # Input helpers (askQuestion, askMenu, askForStudent)
+│   ├── voice.ts          # Whisper voice input (recording + transcription)
 │   ├── coach.ts          # AI coach for conversational help and exploration
 │   ├── progressSummary.ts# Display student progress report
 │   ├── sessionReplay.ts  # Review past session answers and feedback
@@ -75,10 +85,12 @@ data/                     # Runtime data (gitignored)
 1. Enter name (returning students are recognized)
 2. Main menu: Start lesson / Review past sessions / View progress / Exit
 3. During questions:
+   - Type answer or `v` for voice input
    - Type `help` → Conversational AI coach (Socratic guidance, no direct answers)
    - Type `hint` → Static hints fallback
-4. After each answer: Get immediate feedback, option to type `more` for deeper exploration
-5. Evaluator scores submissions via LLM or rule-based fallback
+4. After each answer: Get immediate feedback, option to type `more` (or ask a question) for deeper exploration
+5. Voice input (`v`) works everywhere: answers, reflections, coach conversations
+6. Evaluator scores submissions via LLM or rule-based fallback
 
 **Educator Mode:**
 1. Dashboard shows class overview (total students, sessions, average score)
