@@ -25,14 +25,19 @@ OPENAI_API_KEY=sk-your-key-here
 
 Without an API key, the app falls back to `FakeEvaluator` (rule-based scoring).
 
-### Voice Input (Whisper)
+### Voice Features (Whisper + TTS)
 
-Voice input requires SoX (Sound eXchange) for audio recording:
+Requires SoX (Sound eXchange) for audio recording:
 ```bash
 brew install sox  # macOS
 ```
 
-Voice is available throughout the app - type `v` at any prompt to speak instead of type. Recording starts immediately and auto-stops after 2 seconds of silence.
+**Voice Input:** Type `v` at any prompt to speak instead of type. Recording starts immediately and auto-stops after 2 seconds of silence.
+
+**Text-to-Speech:** The coach speaks aloud using OpenAI TTS (nova voice):
+- Reads questions before student answers
+- Speaks all coach responses and feedback
+- Gives spoken greeting at lesson start and closing at lesson end
 
 ## Architecture
 
