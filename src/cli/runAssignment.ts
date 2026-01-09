@@ -237,7 +237,7 @@ async function runLesson(
     console.log(`\nTip: Type 'help' to chat with the AI coach!`);
     console.log(`${"=".repeat(50)}`);
 
-    const greeting = `Hello ${student.name}! Today we're going to work on ${lesson.title}. ${lesson.description} We have ${lesson.prompts.length} questions to work through together. Remember, you can type 'v' to speak your answers, or type 'help' if you need me. Let's get started!`;
+    const greeting = `Hello ${student.name}! Today we're working on ${lesson.title}. Type 'v' to speak your answers or 'help' if you need me. Let's go!`;
     console.log(`\n🤖 Coach: ${greeting}\n`);
     await speak(greeting);
   }
