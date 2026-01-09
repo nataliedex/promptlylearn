@@ -4,6 +4,7 @@ import { Session } from "../domain/session";
 import { StudentStore } from "../stores/studentStore";
 import { SessionStore } from "../stores/sessionStore";
 import { askMenu } from "./helpers";
+import { displaySessionReplay } from "./sessionReplay";
 
 /**
  * Main educator dashboard
@@ -198,10 +199,46 @@ async function viewStudentDetails(
   const recent = sessions.slice(0, 5);
   for (const session of recent) {
     const date = new Date(session.completedAt).toLocaleDateString();
-    console.log(`     ${date} - ${session.lessonTitle}: ${session.evaluation.totalScore}/100`);
+    // Check if any responses have audio
+    const hasAudio = session.submission.responses.some(r => r.audioPath);
+    const audioIcon = hasAudio ? " 🎤" : "";
+    console.log(`     ${date} - ${session.lessonTitle}: ${session.evaluation.totalScore}/100${audioIcon}`);
   }
 
+  // Offer to review a specific session
   console.log("");
+  const reviewChoice = await askMenu(rl, [
+    "Review a session (with audio playback)",
+    "Back to dashboard"
+  ]);
+
+  if (reviewChoice === 1 && sessions.length > 0) {
+    await reviewStudentSession(rl, sessions);
+  }
+}
+
+/**
+ * Let educator review a specific student session with audio playback
+ */
+async function reviewStudentSession(
+  rl: readline.Interface,
+  sessions: Session[]
+): Promise<void> {
+  console.log("\nSelect a session to review:\n");
+
+  const options = sessions.map(s => {
+    const date = new Date(s.completedAt).toLocaleDateString();
+    const hasAudio = s.submission.responses.some(r => r.audioPath);
+    const audioIcon = hasAudio ? " 🎤" : "";
+    return `${date} - ${s.lessonTitle} (${s.evaluation.totalScore}/100)${audioIcon}`;
+  });
+
+  const choice = await askMenu(rl, [...options, "Back"]);
+
+  if (choice <= sessions.length) {
+    const session = sessions[choice - 1];
+    await displaySessionReplay(rl, session, true); // isEducator = true for audio playback
+  }
 }
 
 /**

@@ -77,6 +77,38 @@ export async function getInput(
 }
 
 /**
+ * Play an audio file (for educator review of recordings)
+ */
+export async function playAudio(audioPath: string): Promise<boolean> {
+  const fs = await import("fs");
+
+  if (!fs.existsSync(audioPath)) {
+    console.log("   Audio file not found.");
+    return false;
+  }
+
+  try {
+    const { execSync } = await import("child_process");
+    try {
+      execSync(`afplay "${audioPath}"`, { stdio: "ignore" });
+      return true;
+    } catch {
+      // Try sox play as fallback
+      try {
+        execSync(`play "${audioPath}"`, { stdio: "ignore" });
+        return true;
+      } catch {
+        console.log("   Could not play audio (afplay/sox not available).");
+        return false;
+      }
+    }
+  } catch (error) {
+    console.log("   Error playing audio.");
+    return false;
+  }
+}
+
+/**
  * Speak text using OpenAI TTS
  */
 export async function speak(text: string): Promise<void> {

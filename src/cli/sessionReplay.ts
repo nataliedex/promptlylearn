@@ -2,7 +2,8 @@ import readline from "readline";
 import { Student } from "../domain/student";
 import { Session } from "../domain/session";
 import { SessionStore } from "../stores/sessionStore";
-import { askMenu } from "./helpers";
+import { askMenu, askYesNo } from "./helpers";
+import { playAudio } from "./voice";
 
 /**
  * Let the student review their past sessions
@@ -33,13 +34,20 @@ export async function reviewPastSessions(
   }
 
   const session = sessions[choice - 1];
-  displaySessionReplay(session);
+  await displaySessionReplay(rl, session);
 }
 
 /**
  * Display a full replay of a session
+ * @param rl - readline interface for interactive prompts
+ * @param session - the session to display
+ * @param isEducator - if true, offer audio playback options
  */
-function displaySessionReplay(session: Session): void {
+export async function displaySessionReplay(
+  rl: readline.Interface,
+  session: Session,
+  isEducator: boolean = false
+): Promise<void> {
   const date = new Date(session.completedAt).toLocaleDateString();
   const time = new Date(session.completedAt).toLocaleTimeString();
 
@@ -63,16 +71,34 @@ function displaySessionReplay(session: Session): void {
     // We don't have the original prompt text stored in session
     // So we'll show the prompt ID and the student's response
     console.log(`Prompt ID: ${response.promptId}`);
-    console.log(`\nYour Answer:`);
+
+    // Show input method
+    if (response.inputSource === "voice") {
+      console.log(`Input: 🎤 Voice`);
+    } else {
+      console.log(`Input: ⌨️  Typed`);
+    }
+
+    console.log(`\nAnswer:`);
     console.log(`  "${response.response}"`);
 
+    // Offer audio playback for educators
+    if (response.audioPath && isEducator) {
+      console.log(`\n   🔊 Audio recording available`);
+      const wantToPlay = await askYesNo(rl, "   Play recording?");
+      if (wantToPlay) {
+        console.log("   Playing...");
+        await playAudio(response.audioPath);
+      }
+    }
+
     if (response.reflection) {
-      console.log(`\nYour Reflection:`);
+      console.log(`\nReflection:`);
       console.log(`  "${response.reflection}"`);
     }
 
     if (response.hintUsed) {
-      console.log(`\n  (You used a hint)`);
+      console.log(`\n  (Used hint or coach help)`);
     }
 
     if (criteriaScore) {
