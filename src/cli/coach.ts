@@ -76,7 +76,9 @@ The student will type 'done' when they're ready to answer the question.`;
   // Initial coach greeting
   const greeting = await getCoachResponse(client, messages, "The student just asked for help.");
   console.log(`\n🤖 Coach: ${greeting}`);
-  console.log("   (Type your question, or 'done' to answer)\n");
+  console.log("\n   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+  console.log("   💡 Type 'done', 'exit', or 'quit' to answer the question");
+  console.log("   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
   conversation.turns.push({ role: "coach", message: greeting });
 
   // Conversation loop
@@ -84,7 +86,7 @@ The student will type 'done' when they're ready to answer the question.`;
   while (chatting) {
     const studentInput = await askLine(rl, "> ");
 
-    if (studentInput.toLowerCase() === "done") {
+    if (isExitCommand(studentInput)) {
       console.log("\nOk! Ready for your answer.\n");
       chatting = false;
     } else {
@@ -149,7 +151,9 @@ The student will type 'done' when they're ready to move on.`;
   // Initial coach message
   const greeting = await getCoachResponse(client, messages, "The student wants to learn more about this topic.");
   console.log(`\n🤖 Coach: ${greeting}`);
-  console.log("   (Ask questions to explore, or 'done' to continue)\n");
+  console.log("\n   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+  console.log("   💡 Type 'done', 'exit', or 'quit' to continue to the next question");
+  console.log("   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
   conversation.turns.push({ role: "coach", message: greeting });
 
   // Conversation loop
@@ -157,7 +161,7 @@ The student will type 'done' when they're ready to move on.`;
   while (chatting) {
     const studentInput = await askLine(rl, "> ");
 
-    if (studentInput.toLowerCase() === "done") {
+    if (isExitCommand(studentInput)) {
       console.log("\n🤖 Coach: Great curiosity! Keep asking questions. Ready for the next challenge!\n");
       chatting = false;
     } else {
@@ -195,6 +199,14 @@ async function getCoachResponse(
     console.error("Coach error:", error);
     return "I'm having trouble thinking right now. Try again or type 'done' to continue.";
   }
+}
+
+/**
+ * Check if input is an exit command
+ */
+function isExitCommand(input: string): boolean {
+  const exitCommands = ["done", "exit", "quit"];
+  return exitCommands.includes(input.toLowerCase().trim());
 }
 
 /**
