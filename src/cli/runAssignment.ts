@@ -111,13 +111,14 @@ async function runPrompt(
   };
 
   // Offer "more" exploration
-  const wantsMore = await askMore(rl);
-  if (wantsMore) {
+  const moreResult = await askMore(rl);
+  if (moreResult.wantsMore) {
     const moreConversation = await startMoreConversation(
       rl,
       prompt.input,
       result.response,
-      score?.comment || "Good effort!"
+      score?.comment || "Good effort!",
+      moreResult.initialQuestion
     );
     response.moreConversation = moreConversation;
   }

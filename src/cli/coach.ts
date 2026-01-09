@@ -111,12 +111,14 @@ The student will type 'done' when they're ready to answer the question.`;
 
 /**
  * Start a "more" conversation (deeper exploration after answering)
+ * @param initialQuestion - Optional question the student already asked at the "more" prompt
  */
 export async function startMoreConversation(
   rl: readline.Interface,
   questionText: string,
   studentAnswer: string,
-  feedback: string
+  feedback: string,
+  initialQuestion?: string
 ): Promise<CoachConversation> {
   const conversation: CoachConversation = {
     mode: "more",
@@ -161,13 +163,29 @@ The student will type 'done' when they're ready to move on.`;
     { role: "system", content: systemPrompt }
   ];
 
-  // Initial coach message
-  const greeting = await getCoachResponse(client, messages, "The student wants to learn more about this topic.");
-  console.log(`\n🤖 Coach: ${greeting}`);
-  console.log("\n   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-  console.log("   💡 Type 'done', 'exit', or 'quit' to continue to the next question");
-  console.log("   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
-  conversation.turns.push({ role: "coach", message: greeting });
+  // Initial coach message - respond to initial question if provided
+  if (initialQuestion) {
+    // Student already asked a question, respond to it directly
+    conversation.turns.push({ role: "student", message: initialQuestion });
+    messages.push({ role: "user", content: initialQuestion });
+
+    const response = await getCoachResponse(client, messages, initialQuestion);
+    console.log(`\n🤖 Coach: ${response}`);
+    console.log("\n   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    console.log("   💡 Type 'done', 'exit', or 'quit' to continue to the next question");
+    console.log("   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+    conversation.turns.push({ role: "coach", message: response });
+    messages.push({ role: "assistant", content: response });
+  } else {
+    // No initial question, give a generic greeting
+    const greeting = await getCoachResponse(client, messages, "The student wants to learn more about this topic.");
+    console.log(`\n🤖 Coach: ${greeting}`);
+    console.log("\n   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    console.log("   💡 Type 'done', 'exit', or 'quit' to continue to the next question");
+    console.log("   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+    conversation.turns.push({ role: "coach", message: greeting });
+    messages.push({ role: "assistant", content: greeting });
+  }
 
   // Conversation loop
   let chatting = true;

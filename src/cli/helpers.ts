@@ -160,13 +160,27 @@ export async function askYesNo(rl: readline.Interface, question: string): Promis
   });
 }
 
+export interface AskMoreResult {
+  wantsMore: boolean;
+  initialQuestion?: string;
+}
+
 /**
  * Ask if student wants to explore more (for "more" feature)
+ * Accepts "more" OR any question as a trigger to start exploration
  */
-export async function askMore(rl: readline.Interface): Promise<boolean> {
+export async function askMore(rl: readline.Interface): Promise<AskMoreResult> {
   return new Promise((resolve) => {
-    rl.question("\nWant to explore this topic more? (type 'more' or press enter to continue): ", (answer) => {
-      resolve(answer.toLowerCase().trim() === "more");
+    rl.question("\nWant to explore this topic more? (type 'more', ask a question, or press enter to continue): ", (answer) => {
+      const trimmed = answer.trim();
+      if (trimmed === "") {
+        resolve({ wantsMore: false });
+      } else if (trimmed.toLowerCase() === "more") {
+        resolve({ wantsMore: true });
+      } else {
+        // They typed a question - start exploration with their question
+        resolve({ wantsMore: true, initialQuestion: trimmed });
+      }
     });
   });
 }
