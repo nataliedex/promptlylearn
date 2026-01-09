@@ -56,12 +56,15 @@ src/
 │   ├── coach.ts          # AI coach for conversational help and exploration
 │   ├── progressSummary.ts# Display student progress report
 │   ├── sessionReplay.ts  # Review past session answers and feedback
-│   └── educatorDashboard.ts # Educator view of all students
+│   ├── educatorDashboard.ts # Educator view of all students
+│   └── lessonBuilder.ts  # Dynamic lesson creation workflow
 ├── domain/               # Core business logic and models
+│   └── lessonGenerator.ts # AI-powered lesson generation
 ├── loaders/              # Data loading utilities
 ├── stores/               # Persistence layer (file-based)
 │   ├── studentStore.ts   # Save/load students by name
-│   └── sessionStore.ts   # Save/load sessions
+│   ├── sessionStore.ts   # Save/load sessions
+│   └── lessonStore.ts    # Save generated lessons
 └── data/                 # JSON lesson definitions
 
 data/                     # Runtime data (gitignored)
@@ -104,9 +107,16 @@ data/                     # Runtime data (gitignored)
 **Educator Mode:**
 1. Dashboard shows class overview (total students, sessions, average score)
 2. Student list with session counts, averages, and status flags
-3. Options: View student details / View lesson stats / Refresh / Exit
-4. Student details: Join date, lessons attempted, recent sessions
+3. Options: View student details / View lesson stats / Create new lesson / Refresh / Exit
+4. Student details: Join date, lessons attempted, recent sessions with audio playback
 5. Lesson stats: Attempts, average scores, difficulty indicators
+
+**Dynamic Lesson Builder** (Educator → Create new lesson):
+- Create lessons from: book title, book excerpt, pasted text, topic, or guided description
+- AI generates age-appropriate questions with hints using GPT-4o-mini
+- Review and edit each question before saving
+- Add/remove questions, edit hints, modify title/description
+- Saved lessons appear immediately in student lesson list
 
 ### Available Lessons
 

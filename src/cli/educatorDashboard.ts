@@ -5,6 +5,7 @@ import { StudentStore } from "../stores/studentStore";
 import { SessionStore } from "../stores/sessionStore";
 import { askMenu } from "./helpers";
 import { displaySessionReplay } from "./sessionReplay";
+import { runLessonBuilder } from "./lessonBuilder";
 
 /**
  * Main educator dashboard
@@ -32,6 +33,7 @@ export async function runEducatorDashboard(rl: readline.Interface): Promise<void
     const choice = await askMenu(rl, [
       "View student details",
       "View lesson stats",
+      "Create new lesson",
       "Refresh dashboard",
       "Exit to main menu"
     ]);
@@ -44,6 +46,9 @@ export async function runEducatorDashboard(rl: readline.Interface): Promise<void
         viewLessonStats(allSessions);
         break;
       case 3:
+        await runLessonBuilder(rl);
+        break;
+      case 4:
         // Refresh
         const refreshedStudents = studentStore.getAll();
         const refreshedSessions = sessionStore.getAll();
@@ -53,7 +58,7 @@ export async function runEducatorDashboard(rl: readline.Interface): Promise<void
         displayClassStats(refreshedStudents, refreshedSessions);
         displayStudentList(refreshedStudents, refreshedSessions);
         break;
-      case 4:
+      case 5:
         running = false;
         break;
     }
