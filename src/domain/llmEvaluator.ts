@@ -28,13 +28,14 @@ export class LLMEvaluator implements Evaluator {
     const criteriaScores: { criterionId: string; score: number; comment?: string }[] = [];
     let totalScore = 0;
     const feedbackParts: string[] = [];
+    const gradeLevel = lesson.gradeLevel || "2nd grade"; // Default for backwards compatibility
 
     // Evaluate each response
     for (const response of submission.responses) {
       const prompt = lesson.prompts.find(p => p.id === response.promptId);
       if (!prompt) continue;
 
-      const score = await this.evaluateResponse(prompt, response);
+      const score = await this.evaluateResponse(prompt, response, gradeLevel);
       criteriaScores.push(score);
       totalScore += score.score;
       if (score.comment) {
@@ -54,38 +55,46 @@ export class LLMEvaluator implements Evaluator {
 
   private async evaluateResponse(
     prompt: Prompt,
-    response: PromptResponse
+    response: PromptResponse,
+    gradeLevel: string
   ): Promise<{ criterionId: string; score: number; comment?: string }> {
-    const systemPrompt = `You are an educational evaluator assessing student understanding.
-Your job is to evaluate whether the student genuinely understands the concept, not just whether they gave a "correct" answer.
+    const systemPrompt = `You are a warm, encouraging coach giving feedback to a ${gradeLevel} student.
 
-Scoring criteria (total 100 points split across all prompts, but score this single response out of 50):
-- understanding (0-25): Does the response show genuine understanding of the concept? Look for:
-  - Original explanations in their own words
-  - Correct use of concepts
-  - Ability to connect ideas
-  - RED FLAG: Copy/pasted or memorized-sounding answers without real comprehension
+Your job is to evaluate whether the student genuinely understands the concept and provide age-appropriate feedback.
 
-- reasoning (0-15): Quality of their reflection/thought process:
-  - Did they explain HOW they arrived at their answer?
-  - Do they show metacognition (awareness of their own thinking)?
-  - Did they use hints? (slight penalty, but good reasoning can offset it)
+Scoring criteria (score this response out of 50):
+- understanding (0-25): Does the response show genuine understanding?
+- reasoning (0-15): Did they explain their thinking?
+- clarity (0-10): Is the response clear?
 
-- clarity (0-10): Is the response clear and well-articulated?
-  - Organized thoughts
-  - Clear communication
-  - Appropriate level of detail
+CRITICAL - Your feedback comment MUST be:
+- Written for the student's grade level (use age-appropriate language)
+- Short (1-2 simple sentences)
+- Warm and encouraging, like a kind teacher
+- Use simple words they would understand
+- Celebrate what they did well FIRST
+- If something needs work, phrase it as an encouraging question or gentle suggestion
 
-Return your evaluation as JSON with this exact format:
+GOOD feedback examples:
+- "Great job thinking about how Sam felt! You really understood the story."
+- "You explained your thinking so well! I love how you used the clues from the story."
+- "Nice work! What do you think happened next?"
+- "You're on the right track! Can you tell me more about why you think that?"
+
+BAD feedback (NEVER say things like):
+- "Your response lacks detail" (too academic)
+- "Try to elaborate on..." (too formal)
+- "Your response is quite brief" (discouraging)
+- "Include specific clues to strengthen your explanation" (too complex)
+
+Return your evaluation as JSON:
 {
   "understanding": <0-25>,
   "reasoning": <0-15>,
   "clarity": <0-10>,
   "total": <sum of above, 0-50>,
-  "comment": "<brief, encouraging feedback for the student>"
-}
-
-Be encouraging but honest. The goal is to help the student learn.`;
+  "comment": "<warm, simple feedback appropriate for the student's grade level>"
+}`;
 
     const userPrompt = `Evaluate this student response:
 

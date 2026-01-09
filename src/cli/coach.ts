@@ -280,3 +280,117 @@ async function askLine(rl: readline.Interface, prompt: string): Promise<string> 
     ask();
   });
 }
+
+export interface ElaborationResult {
+  elaborations: string[];
+  conversation: CoachConversation;
+}
+
+/**
+ * Coach helps student elaborate on their answer with Socratic follow-up questions.
+ * Returns the student's elaborations to be added to their full answer.
+ */
+export async function coachElaboration(
+  rl: readline.Interface,
+  questionText: string,
+  studentAnswer: string,
+  gradeLevel: string = "2nd grade"
+): Promise<ElaborationResult | null> {
+  const client = getClient();
+
+  if (!client) {
+    return null;
+  }
+
+  const conversation: CoachConversation = {
+    mode: "help",
+    turns: []
+  };
+
+  const elaborations: string[] = [];
+
+  const systemPrompt = `You are a warm, encouraging coach helping a ${gradeLevel} student explain their thinking more fully.
+
+The student just answered this question:
+"${questionText}"
+
+Their answer was: "${studentAnswer}"
+
+Your job is to ask ONE simple follow-up question to help them share more of their thinking.
+
+Rules:
+- Ask simple questions appropriate for the student's grade level
+- Be warm and encouraging ("Great start! Can you tell me more about...")
+- Focus on getting them to explain WHY or HOW they know something
+- Ask about specific details from the text or their experience
+- Keep your question SHORT (1-2 sentences max)
+- Do NOT give them the answer or tell them what to say
+- Do NOT criticize their answer
+
+Good follow-up questions:
+- "I like that! What made you think of that?"
+- "Great! Can you tell me more about how you figured that out?"
+- "Nice thinking! What clues helped you know that?"
+- "That's interesting! Why do you think that happened?"
+
+After they respond, you may ask ONE more follow-up if helpful, then say "Great job sharing your thinking!" to end.`;
+
+  const messages: { role: "system" | "user" | "assistant"; content: string }[] = [
+    { role: "system", content: systemPrompt }
+  ];
+
+  // Get first follow-up question
+  const firstQuestion = await getCoachResponse(client, messages, "Ask a follow-up question to help the student elaborate.");
+
+  console.log(`\n🤖 Coach: ${firstQuestion}`);
+  await speak(firstQuestion);
+  console.log("   ('v' for voice, or type your answer)\n");
+
+  conversation.turns.push({ role: "coach", message: firstQuestion });
+  messages.push({ role: "assistant", content: firstQuestion });
+
+  // Get student's first elaboration
+  const response1 = await askLine(rl, "> ");
+
+  if (response1.trim()) {
+    elaborations.push(response1.trim());
+    conversation.turns.push({ role: "student", message: response1.trim() });
+    messages.push({ role: "user", content: response1.trim() });
+
+    // Decide if we need a second follow-up or can wrap up
+    const followUp = await getCoachResponse(
+      client,
+      messages,
+      "Either ask ONE more brief follow-up question OR if they've shared enough, respond with just: Great job sharing your thinking!"
+    );
+
+    // Check if coach wants to wrap up or ask another question
+    if (followUp.toLowerCase().includes("great job")) {
+      console.log(`\n🤖 Coach: ${followUp}\n`);
+      await speak(followUp);
+      conversation.turns.push({ role: "coach", message: followUp });
+    } else {
+      // One more follow-up
+      console.log(`\n🤖 Coach: ${followUp}`);
+      await speak(followUp);
+      console.log("   ('v' for voice, or type your answer)\n");
+      conversation.turns.push({ role: "coach", message: followUp });
+
+      const response2 = await askLine(rl, "> ");
+      if (response2.trim()) {
+        elaborations.push(response2.trim());
+        conversation.turns.push({ role: "student", message: response2.trim() });
+      }
+
+      const closing = "Great job sharing your thinking!";
+      console.log(`\n🤖 Coach: ${closing}\n`);
+      await speak(closing);
+      conversation.turns.push({ role: "coach", message: closing });
+    }
+  }
+
+  return {
+    elaborations,
+    conversation
+  };
+}

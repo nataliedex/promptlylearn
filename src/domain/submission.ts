@@ -14,11 +14,13 @@ export interface PromptResponse {
   promptId: string;
   response: string;
   reflection?: string; // optional student reasoning
+  elaborations?: string[]; // additional details from coach follow-up questions
   hintUsed: boolean;
   inputSource?: "typed" | "voice"; // how the response was provided
   audioPath?: string; // path to saved audio recording (if voice input)
   reflectionAudioPath?: string; // path to reflection audio (if voice input)
   helpConversation?: CoachConversation; // conversation during question
+  elaborationConversation?: CoachConversation; // coach helping elaborate after answering
   moreConversation?: CoachConversation; // exploration after answering
 }
 

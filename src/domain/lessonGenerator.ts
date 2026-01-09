@@ -27,7 +27,8 @@ function getClient(): OpenAI | null {
   return openaiClient;
 }
 
-const BASE_SYSTEM_PROMPT = `You are an expert elementary education curriculum designer creating lessons for 2nd grade students (ages 7-8).
+function getSystemPrompt(gradeLevel: string): string {
+  return `You are an expert education curriculum designer creating lessons for ${gradeLevel} students.
 
 Your lessons should:
 - Use age-appropriate vocabulary and sentence structure
@@ -55,6 +56,7 @@ Important:
 - The "type" should always be "explain"
 - Questions should ask students to explain their thinking, not just give answers
 - Make hints helpful but don't give away the answer`;
+}
 
 function buildUserPrompt(params: LessonParams): string {
   const { mode, content, difficulty, questionCount } = params;
@@ -163,11 +165,13 @@ export async function generateLesson(params: LessonParams): Promise<Lesson | nul
     return null;
   }
 
+  const gradeLevel = params.gradeLevel || "2nd grade";
+
   try {
     const completion = await client.chat.completions.create({
       model: "gpt-4o-mini",
       messages: [
-        { role: "system", content: BASE_SYSTEM_PROMPT },
+        { role: "system", content: getSystemPrompt(gradeLevel) },
         { role: "user", content: buildUserPrompt(params) }
       ],
       temperature: 0.7,
@@ -195,6 +199,7 @@ export async function generateLesson(params: LessonParams): Promise<Lesson | nul
       title: generated.title,
       description: generated.description,
       difficulty: params.difficulty,
+      gradeLevel,
       prompts: generated.prompts.map((p, index): Prompt => ({
         id: p.id || `q${index + 1}`,
         type: "explain",

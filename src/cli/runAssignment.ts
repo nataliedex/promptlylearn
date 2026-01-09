@@ -10,7 +10,7 @@ import { SessionStore } from "../stores/sessionStore";
 import { showProgressSummary } from "./progressSummary";
 import { reviewPastSessions } from "./sessionReplay";
 import { runEducatorDashboard } from "./educatorDashboard";
-import { startMoreConversation } from "./coach";
+import { startMoreConversation, coachElaboration } from "./coach";
 import { speak } from "./voice";
 import { Student } from "../domain/student";
 import { Lesson } from "../domain/lesson";
@@ -75,10 +75,24 @@ async function runPrompt(
   // Get student's answer (with help support)
   const result = await askQuestion(rl, prompt.input, prompt.hints);
 
-  // Combine response and reflection for evaluation (treat as full answer)
+  // Coach helps student elaborate on their answer with follow-up questions
+  let elaborations: string[] = [];
+  let elaborationConversation;
+  const gradeLevel = lesson.gradeLevel || "2nd grade";
+
+  const elaborationResult = await coachElaboration(rl, prompt.input, result.response, gradeLevel);
+  if (elaborationResult) {
+    elaborations = elaborationResult.elaborations;
+    elaborationConversation = elaborationResult.conversation;
+  }
+
+  // Build full answer: response + reflection + elaborations
   let fullAnswer = result.response;
   if (result.reflection) {
-    fullAnswer = `${result.response}\n\nStudent's reasoning: ${result.reflection}`;
+    fullAnswer += `\n\nStudent's reasoning: ${result.reflection}`;
+  }
+  if (elaborations.length > 0) {
+    fullAnswer += `\n\nStudent's elaborations from follow-up questions: ${elaborations.join(" ")}`;
   }
 
   // Build a mini submission for this single prompt to get feedback
@@ -87,7 +101,7 @@ async function runPrompt(
     studentId: student.id,
     responses: [{
       promptId: prompt.id,
-      response: fullAnswer, // Use combined response + reflection for evaluation
+      response: fullAnswer, // Use combined response + reflection + elaborations
       reflection: result.reflection,
       hintUsed: result.hintUsed
     }],
@@ -114,11 +128,13 @@ async function runPrompt(
     promptId: prompt.id,
     response: result.response,
     reflection: result.reflection,
+    elaborations: elaborations.length > 0 ? elaborations : undefined,
     hintUsed: result.hintUsed,
     inputSource: result.inputSource,
     audioPath: result.audioPath,
     reflectionAudioPath: result.reflectionAudioPath,
-    helpConversation: result.helpConversation
+    helpConversation: result.helpConversation,
+    elaborationConversation
   };
 
   // Offer "more" exploration

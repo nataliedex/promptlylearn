@@ -33,20 +33,24 @@ export async function runLessonBuilder(rl: readline.Interface): Promise<void> {
   const content = await getContentForMode(rl, mode);
   if (!content) return;
 
-  // Step 3: Choose difficulty
+  // Step 3: Choose grade level
+  const gradeLevel = await chooseGradeLevel(rl);
+
+  // Step 4: Choose difficulty
   const difficulty = await chooseDifficulty(rl);
 
-  // Step 4: Choose number of questions
+  // Step 5: Choose number of questions
   const questionCount = await chooseQuestionCount(rl);
 
-  // Step 5: Generate the lesson
+  // Step 6: Generate the lesson
   console.log("\nGenerating lesson with AI...\n");
 
   const params: LessonParams = {
     mode,
     content,
     difficulty,
-    questionCount
+    questionCount,
+    gradeLevel
   };
 
   const lesson = await generateLesson(params);
@@ -175,6 +179,36 @@ async function askForMultilineText(rl: readline.Interface): Promise<string | nul
     console.log(""); // Start on new line
     askLine();
   });
+}
+
+/**
+ * Choose grade level for the lesson
+ */
+async function chooseGradeLevel(rl: readline.Interface): Promise<string> {
+  console.log("\nWhat grade level is this lesson for?\n");
+
+  const choice = await askMenu(rl, [
+    "Kindergarten (K)",
+    "1st grade",
+    "2nd grade",
+    "3rd grade",
+    "4th grade",
+    "5th grade",
+    "Middle school (6th-8th)",
+    "High school (9th-12th)"
+  ]);
+
+  switch (choice) {
+    case 1: return "Kindergarten";
+    case 2: return "1st grade";
+    case 3: return "2nd grade";
+    case 4: return "3rd grade";
+    case 5: return "4th grade";
+    case 6: return "5th grade";
+    case 7: return "middle school";
+    case 8: return "high school";
+    default: return "2nd grade";
+  }
 }
 
 /**
