@@ -87,22 +87,19 @@ export async function displaySessionReplay(
       console.log(`  "${response.reflection}"`);
     }
 
-    // Offer audio playback for educators (play full response: answer + reflection)
+    // Offer audio playback for educators (play full response: answer + reasoning together)
     const hasAudio = response.audioPath || response.reflectionAudioPath;
     if (hasAudio && isEducator) {
-      const audioParts = [];
-      if (response.audioPath) audioParts.push("answer");
-      if (response.reflectionAudioPath) audioParts.push("reasoning");
-      console.log(`\n   🔊 Audio available: ${audioParts.join(" + ")}`);
+      console.log(`\n   🔊 Audio recording available`);
 
       const wantToPlay = await askYesNo(rl, "   Play full response?");
       if (wantToPlay) {
+        console.log("   Playing...");
+        // Play answer and reasoning back-to-back as one full response
         if (response.audioPath) {
-          console.log("   Playing answer...");
           await playAudio(response.audioPath);
         }
         if (response.reflectionAudioPath) {
-          console.log("   Playing reasoning...");
           await playAudio(response.reflectionAudioPath);
         }
       }
