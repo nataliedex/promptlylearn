@@ -14,7 +14,11 @@ npm run build  # Compile TypeScript to dist/
 npm start      # Run compiled JavaScript
 ```
 
-No test framework is currently configured.
+Tests use Jest:
+```bash
+npm test            # Run tests
+npm run test:coverage  # Run with coverage report
+```
 
 ## Environment Setup
 
