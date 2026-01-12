@@ -6,6 +6,12 @@ import { SessionStore } from "../stores/sessionStore";
 import { askMenu } from "./helpers";
 import { displaySessionReplay } from "./sessionReplay";
 import { runLessonBuilder } from "./lessonBuilder";
+import {
+  getClassAnalytics,
+  getStudentAnalytics,
+  formatDuration,
+  getWeeklyActivity,
+} from "../domain/analytics";
 
 /**
  * Main educator dashboard
@@ -34,6 +40,7 @@ export async function runEducatorDashboard(rl: readline.Interface): Promise<void
     const choice = await askMenu(rl, [
       "View student details",
       "View lesson stats",
+      "View class analytics",
       "Create new lesson",
       "Refresh dashboard",
       "Exit to main menu"
@@ -47,9 +54,12 @@ export async function runEducatorDashboard(rl: readline.Interface): Promise<void
         viewLessonStats(allSessions);
         break;
       case 3:
-        await runLessonBuilder(rl);
+        viewClassAnalytics(students, allSessions);
         break;
       case 4:
+        await runLessonBuilder(rl);
+        break;
+      case 5:
         // Refresh
         const refreshedStudents = studentStore.getAll();
         const refreshedSessions = sessionStore.getAll().filter(s => s.status === "completed");
@@ -59,7 +69,7 @@ export async function runEducatorDashboard(rl: readline.Interface): Promise<void
         displayClassStats(refreshedStudents, refreshedSessions);
         displayStudentList(refreshedStudents, refreshedSessions);
         break;
-      case 5:
+      case 6:
         running = false;
         break;
     }
@@ -189,6 +199,24 @@ async function viewStudentDetails(
   console.log(`   Average score: ${avgScore}/100`);
   console.log(`   Best score: ${bestScore}/100`);
   console.log(`   Trend: ${trend}`);
+
+  // Student Analytics
+  const studentAnalytics = getStudentAnalytics(sessions);
+  console.log(`   Engagement score: ${studentAnalytics.engagementScore}/100`);
+
+  if (studentAnalytics.sessionDuration) {
+    console.log(`   Avg session time: ${formatDuration(studentAnalytics.sessionDuration.averageMinutes)}`);
+  }
+
+  // Coach usage for this student
+  if (studentAnalytics.coachUsage.totalInteractions > 0) {
+    console.log(`   Coach interactions: ${studentAnalytics.coachUsage.totalInteractions}`);
+  }
+
+  // Input method preference
+  if (studentAnalytics.inputMethods.voiceCount > 0) {
+    console.log(`   Voice input usage: ${studentAnalytics.inputMethods.voicePercentage}%`);
+  }
 
   // Lessons attempted
   const lessonMap = new Map<string, number[]>();
@@ -371,4 +399,97 @@ function countStrugglingStudents(students: Student[], sessions: Session[]): numb
  */
 function padRight(str: string, len: number): string {
   return str.padEnd(len);
+}
+
+/**
+ * View detailed class analytics
+ */
+function viewClassAnalytics(students: Student[], sessions: Session[]): void {
+  console.log("\n" + "=".repeat(60));
+  console.log("Class Analytics");
+  console.log("=".repeat(60));
+
+  if (sessions.length === 0) {
+    console.log("\n   No sessions completed yet.\n");
+    return;
+  }
+
+  const analytics = getClassAnalytics(students, sessions);
+
+  // Session Duration
+  console.log("\n⏱️  Session Duration:");
+  if (analytics.sessionDuration) {
+    console.log(`   Average: ${formatDuration(analytics.sessionDuration.averageMinutes)}`);
+    console.log(`   Fastest: ${formatDuration(analytics.sessionDuration.fastestMinutes)}`);
+    console.log(`   Slowest: ${formatDuration(analytics.sessionDuration.slowestMinutes)}`);
+  } else {
+    console.log("   No duration data available.");
+  }
+
+  // Coach Usage
+  console.log("\n🎓 Coach Usage:");
+  console.log(`   Students using coach: ${analytics.coachUsage.studentsUsingCoach}/${students.length} (${analytics.coachUsage.percentageUsingCoach}%)`);
+  console.log(`   Help requests: ${analytics.coachUsage.helpRequestCount}`);
+  console.log(`   Elaboration conversations: ${analytics.coachUsage.elaborationCount}`);
+  console.log(`   "Tell me more" explorations: ${analytics.coachUsage.moreExplorationCount}`);
+  if (analytics.coachUsage.totalInteractions > 0) {
+    console.log(`   Avg turns per conversation: ${analytics.coachUsage.avgTurnsPerInteraction}`);
+  }
+
+  // Hint Usage
+  console.log("\n💡 Hint Usage:");
+  console.log(`   Hint usage rate: ${analytics.hintUsage.hintUsageRate}% (${analytics.hintUsage.totalHintsUsed}/${analytics.hintUsage.totalResponses})`);
+  if (analytics.hintUsage.totalHintsUsed > 0 && analytics.hintUsage.totalResponses - analytics.hintUsage.totalHintsUsed > 0) {
+    console.log(`   Avg score with hint: ${analytics.hintUsage.avgScoreWithHint}/50`);
+    console.log(`   Avg score without hint: ${analytics.hintUsage.avgScoreWithoutHint}/50`);
+  }
+
+  // Top Performers
+  if (analytics.topPerformers.length > 0) {
+    console.log("\n⭐ Top Performers:");
+    for (const student of analytics.topPerformers) {
+      console.log(`   ${student.name}: ${student.avgScore}/100`);
+    }
+  }
+
+  // Students Needing Support
+  if (analytics.needsSupport.length > 0) {
+    console.log("\n⚠️  Students Needing Support:");
+    for (const student of analytics.needsSupport) {
+      console.log(`   ${student.name}: ${student.avgScore}/100 - ${student.issue}`);
+    }
+  }
+
+  // Weekly Activity
+  console.log("\n📅 Weekly Activity (Last 4 Weeks):");
+  const weeklyActivity = getWeeklyActivity(sessions, 4);
+  console.log("   " + padRight("Week", 10) + padRight("Sessions", 12) + "Avg Score");
+  console.log("   " + "-".repeat(32));
+  for (const week of weeklyActivity) {
+    const scoreDisplay = week.sessions > 0 ? `${week.avgScore}/100` : "-";
+    console.log(
+      "   " +
+      padRight(week.week, 10) +
+      padRight(week.sessions.toString(), 12) +
+      scoreDisplay
+    );
+  }
+
+  // Lesson Difficulty (hardest first)
+  if (analytics.lessonDifficulty.length > 0) {
+    console.log("\n📚 Lesson Difficulty (Hardest First):");
+    console.log("   " + padRight("Lesson", 30) + padRight("Avg Score", 12) + "Attempts");
+    console.log("   " + "-".repeat(52));
+    for (const lesson of analytics.lessonDifficulty.slice(0, 5)) {
+      const indicator = lesson.avgScore < 50 ? "🔴" : lesson.avgScore < 70 ? "🟡" : "🟢";
+      console.log(
+        "   " +
+        padRight(`${indicator} ${lesson.title}`.slice(0, 29), 30) +
+        padRight(`${lesson.avgScore}/100`, 12) +
+        lesson.attempts.toString()
+      );
+    }
+  }
+
+  console.log("");
 }
