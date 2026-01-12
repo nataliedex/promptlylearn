@@ -8,6 +8,7 @@ import lessonsRouter from "./routes/lessons";
 import evaluateRouter from "./routes/evaluate";
 import analyticsRouter from "./routes/analytics";
 import voiceRouter from "./routes/voice";
+import standardsRouter from "./routes/standards";
 
 dotenv.config();
 
@@ -28,6 +29,7 @@ app.use("/api/lessons", lessonsRouter);
 app.use("/api/evaluate", evaluateRouter);
 app.use("/api/analytics", analyticsRouter);
 app.use("/api/voice", voiceRouter);
+app.use("/api/standards", standardsRouter);
 
 // Health check
 app.get("/api/health", (req, res) => {

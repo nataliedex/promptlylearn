@@ -17,6 +17,7 @@ router.get("/", (req, res) => {
       difficulty: lesson.difficulty,
       gradeLevel: lesson.gradeLevel,
       promptCount: lesson.prompts.length,
+      standards: lesson.standards,
     }));
     res.json(lessonList);
   } catch (error) {

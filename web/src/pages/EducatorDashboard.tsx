@@ -1,25 +1,28 @@
 import { useState, useEffect } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { getStudents, getSessions, getClassAnalytics, type Student, type Session } from "../services/api";
+import { getStudents, getSessions, getClassAnalytics, getLessons, type Student, type Session, type LessonSummary } from "../services/api";
 
 export default function EducatorDashboard() {
   const navigate = useNavigate();
   const [students, setStudents] = useState<Student[]>([]);
   const [sessions, setSessions] = useState<Session[]>([]);
+  const [lessons, setLessons] = useState<LessonSummary[]>([]);
   const [classAnalytics, setClassAnalytics] = useState<any>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     async function loadData() {
       try {
-        const [studentsData, sessionsData, analyticsData] = await Promise.all([
+        const [studentsData, sessionsData, analyticsData, lessonsData] = await Promise.all([
           getStudents(),
           getSessions(undefined, "completed"),
           getClassAnalytics(),
+          getLessons(),
         ]);
         setStudents(studentsData);
         setSessions(sessionsData);
         setClassAnalytics(analyticsData);
+        setLessons(lessonsData);
       } catch (err) {
         console.error("Failed to load educator dashboard:", err);
       } finally {
@@ -127,6 +130,67 @@ export default function EducatorDashboard() {
           </div>
         </div>
       )}
+
+      {/* Standards Coverage */}
+      {(() => {
+        const allStandards = lessons.flatMap(l => l.standards || []);
+        const uniqueStandards = [...new Set(allStandards)].sort();
+        const standardsByStrand: Record<string, string[]> = {};
+
+        uniqueStandards.forEach(code => {
+          const strand = code.split('.')[0]; // e.g., "RL" from "RL.2.1"
+          if (!standardsByStrand[strand]) {
+            standardsByStrand[strand] = [];
+          }
+          standardsByStrand[strand].push(code);
+        });
+
+        const strandNames: Record<string, string> = {
+          RL: "Reading Literature",
+          RI: "Reading Informational",
+          RF: "Reading Foundational",
+          W: "Writing",
+          SL: "Speaking & Listening",
+          L: "Language",
+        };
+
+        if (uniqueStandards.length === 0) return null;
+
+        return (
+          <div className="card">
+            <h3 style={{ marginBottom: "16px" }}>📋 Ohio Learning Standards Coverage</h3>
+            <p style={{ color: "#666", marginBottom: "16px", fontSize: "0.9rem" }}>
+              {uniqueStandards.length} standards covered across {lessons.filter(l => l.standards && l.standards.length > 0).length} lessons
+            </p>
+            <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+              {Object.entries(standardsByStrand).map(([strand, codes]) => (
+                <div key={strand}>
+                  <p style={{ fontWeight: 600, marginBottom: "8px", color: "#1565c0" }}>
+                    {strandNames[strand] || strand} ({codes.length})
+                  </p>
+                  <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
+                    {codes.map(code => (
+                      <span
+                        key={code}
+                        style={{
+                          background: "#e3f2fd",
+                          color: "#1565c0",
+                          padding: "4px 8px",
+                          borderRadius: "4px",
+                          fontSize: "0.8rem",
+                          fontWeight: 500,
+                        }}
+                      >
+                        {code}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Two-column layout for performers/support on desktop */}
       <div className="two-column">

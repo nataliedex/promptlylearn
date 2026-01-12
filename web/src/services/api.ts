@@ -14,6 +14,7 @@ export interface LessonSummary {
   difficulty: "beginner" | "intermediate" | "advanced";
   gradeLevel?: string;
   promptCount: number;
+  standards?: string[];
 }
 
 export interface Prompt {
@@ -21,6 +22,7 @@ export interface Prompt {
   type: string;
   input: string;
   hints: string[];
+  standards?: string[];
 }
 
 export interface Lesson {
@@ -30,6 +32,20 @@ export interface Lesson {
   difficulty: "beginner" | "intermediate" | "advanced";
   gradeLevel?: string;
   prompts: Prompt[];
+  standards?: string[];
+}
+
+export interface Standard {
+  code: string;
+  description: string;
+  strand: string;
+  strandName: string;
+}
+
+export interface GradeStandards {
+  grade: string;
+  gradeName: string;
+  standards: Standard[];
 }
 
 export interface PromptResponse {
@@ -241,4 +257,13 @@ export async function textToSpeech(text: string, voice: string = "nova"): Promis
     method: "POST",
     body: JSON.stringify({ text, voice }),
   });
+}
+
+// Standards
+export async function getStandardsForGrade(gradeLevel: string): Promise<GradeStandards> {
+  return fetchJson(`${API_BASE}/standards/${encodeURIComponent(gradeLevel)}`);
+}
+
+export async function getReadingStandards(gradeLevel: string): Promise<Standard[]> {
+  return fetchJson(`${API_BASE}/standards/${encodeURIComponent(gradeLevel)}/reading`);
 }

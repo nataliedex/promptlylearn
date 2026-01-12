@@ -1,0 +1,467 @@
+{
+  "source": "Ohio Learning Standards for English Language Arts",
+  "version": "2017",
+  "url": "https://education.ohio.gov/Topics/Learning-in-Ohio/English-Language-Art/English-Language-Arts-Standards",
+  "grades": {
+    "K": {
+      "name": "Kindergarten",
+      "strands": {
+        "RL": {
+          "name": "Reading: Literature",
+          "standards": {
+            "RL.K.1": "With prompting and support, ask and answer questions about key details in a text.",
+            "RL.K.2": "With prompting and support, retell familiar stories, including key details.",
+            "RL.K.3": "With prompting and support, identify characters, settings, and major events in a story.",
+            "RL.K.4": "Ask and answer questions about unknown words in a text.",
+            "RL.K.5": "Recognize common types of texts (e.g., storybooks, poems).",
+            "RL.K.6": "With prompting and support, name the author and illustrator of a story and define the role of each in telling the story.",
+            "RL.K.7": "With prompting and support, describe the relationship between illustrations and the story in which they appear.",
+            "RL.K.9": "With prompting and support, compare and contrast the adventures and experiences of characters in familiar stories.",
+            "RL.K.10": "Actively engage in group reading activities with purpose and understanding."
+          }
+        },
+        "RI": {
+          "name": "Reading: Informational Text",
+          "standards": {
+            "RI.K.1": "With prompting and support, ask and answer questions about key details in a text.",
+            "RI.K.2": "With prompting and support, identify the main topic and retell key details of a text.",
+            "RI.K.3": "With prompting and support, describe the connection between two individuals, events, ideas, or pieces of information in a text.",
+            "RI.K.4": "With prompting and support, ask and answer questions about unknown words in a text.",
+            "RI.K.5": "Identify the front cover, back cover, and title page of a book.",
+            "RI.K.6": "Name the author and illustrator of a text and define the role of each in presenting the ideas or information in a text.",
+            "RI.K.7": "With prompting and support, describe the relationship between illustrations and the text in which they appear.",
+            "RI.K.8": "With prompting and support, identify the reasons an author gives to support points in a text.",
+            "RI.K.9": "With prompting and support, identify basic similarities in and differences between two texts on the same topic.",
+            "RI.K.10": "Actively engage in group reading activities with purpose and understanding."
+          }
+        },
+        "RF": {
+          "name": "Reading: Foundational Skills",
+          "standards": {
+            "RF.K.1": "Demonstrate understanding of the organization and basic features of print.",
+            "RF.K.2": "Demonstrate understanding of spoken words, syllables, and sounds (phonemes).",
+            "RF.K.3": "Know and apply grade-level phonics and word analysis skills in decoding words.",
+            "RF.K.4": "Read emergent-reader texts with purpose and understanding."
+          }
+        },
+        "W": {
+          "name": "Writing",
+          "standards": {
+            "W.K.1": "Use a combination of drawing, dictating, and writing to compose opinion pieces in which they tell a reader the topic or the name of the book they are writing about and state an opinion or preference about the topic or book.",
+            "W.K.2": "Use a combination of drawing, dictating, and writing to compose informative/explanatory texts in which they name what they are writing about and supply some information about the topic.",
+            "W.K.3": "Use a combination of drawing, dictating, and writing to narrate a single event or several loosely linked events, tell about the events in the order in which they occurred, and provide a reaction to what happened.",
+            "W.K.5": "With guidance and support from adults, respond to questions and suggestions from peers and add details to strengthen writing as needed.",
+            "W.K.6": "With guidance and support from adults, explore a variety of digital tools to produce and publish writing, including in collaboration with peers.",
+            "W.K.7": "Participate in shared research and writing projects.",
+            "W.K.8": "With guidance and support from adults, recall information from experiences or gather information from provided sources to answer a question."
+          }
+        },
+        "SL": {
+          "name": "Speaking and Listening",
+          "standards": {
+            "SL.K.1": "Participate in collaborative conversations with diverse partners about kindergarten topics and texts with peers and adults in small and larger groups.",
+            "SL.K.2": "Confirm understanding of a text read aloud or information presented orally or through other media by asking and answering questions about key details and requesting clarification if something is not understood.",
+            "SL.K.3": "Ask and answer questions in order to seek help, get information, or clarify something that is not understood.",
+            "SL.K.4": "Describe familiar people, places, things, and events and, with prompting and support, provide additional detail.",
+            "SL.K.5": "Add drawings or other visual displays to descriptions as desired to provide additional detail.",
+            "SL.K.6": "Speak audibly and express thoughts, feelings, and ideas clearly."
+          }
+        },
+        "L": {
+          "name": "Language",
+          "standards": {
+            "L.K.1": "Demonstrate command of the conventions of standard English grammar and usage when writing or speaking.",
+            "L.K.2": "Demonstrate command of the conventions of standard English capitalization, punctuation, and spelling when writing.",
+            "L.K.4": "Determine or clarify the meaning of unknown and multiple-meaning words and phrases based on kindergarten reading and content.",
+            "L.K.5": "With guidance and support from adults, explore word relationships and nuances in word meanings.",
+            "L.K.6": "Use words and phrases acquired through conversations, reading and being read to, and responding to texts."
+          }
+        }
+      }
+    },
+    "1": {
+      "name": "1st Grade",
+      "strands": {
+        "RL": {
+          "name": "Reading: Literature",
+          "standards": {
+            "RL.1.1": "Ask and answer questions about key details in a text.",
+            "RL.1.2": "Retell stories, including key details, and demonstrate understanding of their central message or lesson.",
+            "RL.1.3": "Describe characters, settings, and major events in a story, using key details.",
+            "RL.1.4": "Identify words and phrases in stories or poems that suggest feelings or appeal to the senses.",
+            "RL.1.5": "Explain major differences between books that tell stories and books that give information, drawing on a wide reading of a range of text types.",
+            "RL.1.6": "Identify who is telling the story at various points in a text.",
+            "RL.1.7": "Use illustrations and details in a story to describe its characters, setting, or events.",
+            "RL.1.9": "Compare and contrast the adventures and experiences of characters in stories.",
+            "RL.1.10": "With prompting and support, read prose and poetry of appropriate complexity for grade 1."
+          }
+        },
+        "RI": {
+          "name": "Reading: Informational Text",
+          "standards": {
+            "RI.1.1": "Ask and answer questions about key details in a text.",
+            "RI.1.2": "Identify the main topic and retell key details of a text.",
+            "RI.1.3": "Describe the connection between two individuals, events, ideas, or pieces of information in a text.",
+            "RI.1.4": "Ask and answer questions to help determine or clarify the meaning of words and phrases in a text.",
+            "RI.1.5": "Know and use various text features to locate key facts or information in a text.",
+            "RI.1.6": "Distinguish between information provided by pictures or other illustrations and information provided by the words in a text.",
+            "RI.1.7": "Use the illustrations and details in a text to describe its key ideas.",
+            "RI.1.8": "Identify the reasons an author gives to support points in a text.",
+            "RI.1.9": "Identify basic similarities in and differences between two texts on the same topic.",
+            "RI.1.10": "With prompting and support, read informational texts appropriately complex for grade 1."
+          }
+        },
+        "RF": {
+          "name": "Reading: Foundational Skills",
+          "standards": {
+            "RF.1.1": "Demonstrate understanding of the organization and basic features of print.",
+            "RF.1.2": "Demonstrate understanding of spoken words, syllables, and sounds (phonemes).",
+            "RF.1.3": "Know and apply grade-level phonics and word analysis skills in decoding words.",
+            "RF.1.4": "Read with sufficient accuracy and fluency to support comprehension."
+          }
+        },
+        "W": {
+          "name": "Writing",
+          "standards": {
+            "W.1.1": "Write opinion pieces in which they introduce the topic or name the book they are writing about, state an opinion, supply a reason for the opinion, and provide some sense of closure.",
+            "W.1.2": "Write informative/explanatory texts in which they name a topic, supply some facts about the topic, and provide some sense of closure.",
+            "W.1.3": "Write narratives in which they recount two or more appropriately sequenced events, include some details regarding what happened, use temporal words to signal event order, and provide some sense of closure.",
+            "W.1.5": "With guidance and support from adults, focus on a topic, respond to questions and suggestions from peers, and add details to strengthen writing as needed.",
+            "W.1.6": "With guidance and support from adults, use a variety of digital tools to produce and publish writing, including in collaboration with peers.",
+            "W.1.7": "Participate in shared research and writing projects.",
+            "W.1.8": "With guidance and support from adults, recall information from experiences or gather information from provided sources to answer a question."
+          }
+        },
+        "SL": {
+          "name": "Speaking and Listening",
+          "standards": {
+            "SL.1.1": "Participate in collaborative conversations with diverse partners about grade 1 topics and texts with peers and adults in small and larger groups.",
+            "SL.1.2": "Ask and answer questions about key details in a text read aloud or information presented orally or through other media.",
+            "SL.1.3": "Ask and answer questions about what a speaker says in order to gather additional information or clarify something that is not understood.",
+            "SL.1.4": "Describe people, places, things, and events with relevant details, expressing ideas and feelings clearly.",
+            "SL.1.5": "Add drawings or other visual displays to descriptions when appropriate to clarify ideas, thoughts, and feelings.",
+            "SL.1.6": "Produce complete sentences when appropriate to task and situation."
+          }
+        },
+        "L": {
+          "name": "Language",
+          "standards": {
+            "L.1.1": "Demonstrate command of the conventions of standard English grammar and usage when writing or speaking.",
+            "L.1.2": "Demonstrate command of the conventions of standard English capitalization, punctuation, and spelling when writing.",
+            "L.1.4": "Determine or clarify the meaning of unknown and multiple-meaning words and phrases based on grade 1 reading and content, choosing flexibly from an array of strategies.",
+            "L.1.5": "With guidance and support from adults, demonstrate understanding of word relationships and nuances in word meanings.",
+            "L.1.6": "Use words and phrases acquired through conversations, reading and being read to, and responding to texts, including using frequently occurring conjunctions to signal simple relationships."
+          }
+        }
+      }
+    },
+    "2": {
+      "name": "2nd Grade",
+      "strands": {
+        "RL": {
+          "name": "Reading: Literature",
+          "standards": {
+            "RL.2.1": "Ask and answer such questions as who, what, where, when, why, and how to demonstrate understanding of key details in a text.",
+            "RL.2.2": "Recount stories, including fables and folktales from diverse cultures, and determine their central message, lesson, or moral.",
+            "RL.2.3": "Describe how characters in a story respond to major events and challenges.",
+            "RL.2.4": "Describe how words and phrases supply rhythm and meaning in a story, poem, or song.",
+            "RL.2.5": "Describe the overall structure of a story, including describing how the beginning introduces the story and the ending concludes the action.",
+            "RL.2.6": "Acknowledge differences in the points of view of characters, including by speaking in a different voice for each character when reading dialogue aloud.",
+            "RL.2.7": "Use information gained from the illustrations and words in a print or digital text to demonstrate understanding of its characters, setting, or plot.",
+            "RL.2.9": "Compare and contrast two or more versions of the same story by different authors or from different cultures.",
+            "RL.2.10": "By the end of the year, read and comprehend literature, including stories and poetry, in the grades 2-3 text complexity band proficiently, with scaffolding as needed at the high end of the range."
+          }
+        },
+        "RI": {
+          "name": "Reading: Informational Text",
+          "standards": {
+            "RI.2.1": "Ask and answer such questions as who, what, where, when, why, and how to demonstrate understanding of key details in a text.",
+            "RI.2.2": "Identify the main topic of a multiparagraph text as well as the focus of specific paragraphs within the text.",
+            "RI.2.3": "Describe the connection between a series of historical events, scientific ideas or concepts, or steps in technical procedures in a text.",
+            "RI.2.4": "Determine the meaning of words and phrases in a text relevant to a grade 2 topic or subject area.",
+            "RI.2.5": "Know and use various text features to locate key facts or information in a text efficiently.",
+            "RI.2.6": "Identify the main purpose of a text, including what the author wants to answer, explain, or describe.",
+            "RI.2.7": "Explain how specific images contribute to and clarify a text.",
+            "RI.2.8": "Describe how reasons support specific points the author makes in a text.",
+            "RI.2.9": "Compare and contrast the most important points presented by two texts on the same topic.",
+            "RI.2.10": "By the end of year, read and comprehend informational texts, including history/social studies, science, and technical texts, in the grades 2-3 text complexity band proficiently, with scaffolding as needed at the high end of the range."
+          }
+        },
+        "RF": {
+          "name": "Reading: Foundational Skills",
+          "standards": {
+            "RF.2.3": "Know and apply grade-level phonics and word analysis skills in decoding words.",
+            "RF.2.4": "Read with sufficient accuracy and fluency to support comprehension."
+          }
+        },
+        "W": {
+          "name": "Writing",
+          "standards": {
+            "W.2.1": "Write opinion pieces in which they introduce the topic or book they are writing about, state an opinion, supply reasons that support the opinion, use linking words to connect opinion and reasons, and provide a concluding statement or section.",
+            "W.2.2": "Write informative/explanatory texts in which they introduce a topic, use facts and definitions to develop points, and provide a concluding statement or section.",
+            "W.2.3": "Write narratives in which they recount a well-elaborated event or short sequence of events, include details to describe actions, thoughts, and feelings, use temporal words to signal event order, and provide a sense of closure.",
+            "W.2.5": "With guidance and support from adults and peers, focus on a topic and strengthen writing as needed by revising and editing.",
+            "W.2.6": "With guidance and support from adults, use a variety of digital tools to produce and publish writing, including in collaboration with peers.",
+            "W.2.7": "Participate in shared research and writing projects.",
+            "W.2.8": "Recall information from experiences or gather information from provided sources to answer a question."
+          }
+        },
+        "SL": {
+          "name": "Speaking and Listening",
+          "standards": {
+            "SL.2.1": "Participate in collaborative conversations with diverse partners about grade 2 topics and texts with peers and adults in small and larger groups.",
+            "SL.2.2": "Recount or describe key ideas or details from a text read aloud or information presented orally or through other media.",
+            "SL.2.3": "Ask and answer questions about what a speaker says in order to clarify comprehension, gather additional information, or deepen understanding of a topic or issue.",
+            "SL.2.4": "Tell a story or recount an experience with appropriate facts and relevant, descriptive details, speaking audibly in coherent sentences.",
+            "SL.2.5": "Create audio recordings of stories or poems; add drawings or other visual displays to stories or recounts of experiences when appropriate to clarify ideas, thoughts, and feelings.",
+            "SL.2.6": "Produce complete sentences when appropriate to task and situation in order to provide requested detail or clarification."
+          }
+        },
+        "L": {
+          "name": "Language",
+          "standards": {
+            "L.2.1": "Demonstrate command of the conventions of standard English grammar and usage when writing or speaking.",
+            "L.2.2": "Demonstrate command of the conventions of standard English capitalization, punctuation, and spelling when writing.",
+            "L.2.3": "Use knowledge of language and its conventions when writing, speaking, reading, or listening.",
+            "L.2.4": "Determine or clarify the meaning of unknown and multiple-meaning words and phrases based on grade 2 reading and content, choosing flexibly from an array of strategies.",
+            "L.2.5": "Demonstrate understanding of word relationships and nuances in word meanings.",
+            "L.2.6": "Use words and phrases acquired through conversations, reading and being read to, and responding to texts, including using adjectives and adverbs to describe."
+          }
+        }
+      }
+    },
+    "3": {
+      "name": "3rd Grade",
+      "strands": {
+        "RL": {
+          "name": "Reading: Literature",
+          "standards": {
+            "RL.3.1": "Ask and answer questions to demonstrate understanding of a text, referring explicitly to the text as the basis for the answers.",
+            "RL.3.2": "Recount stories, including fables, folktales, and myths from diverse cultures; determine the central message, lesson, or moral and explain how it is conveyed through key details in the text.",
+            "RL.3.3": "Describe characters in a story and explain how their actions contribute to the sequence of events.",
+            "RL.3.4": "Determine the meaning of words and phrases as they are used in a text, distinguishing literal from nonliteral language.",
+            "RL.3.5": "Refer to parts of stories, dramas, and poems when writing or speaking about a text, using terms such as chapter, scene, and stanza; describe how each successive part builds on earlier sections.",
+            "RL.3.6": "Distinguish their own point of view from that of the narrator or those of the characters.",
+            "RL.3.7": "Explain how specific aspects of a text's illustrations contribute to what is conveyed by the words in a story.",
+            "RL.3.9": "Compare and contrast the themes, settings, and plots of stories written by the same author about the same or similar characters.",
+            "RL.3.10": "By the end of the year, read and comprehend literature, including stories, dramas, and poetry, at the high end of the grades 2-3 text complexity band independently and proficiently."
+          }
+        },
+        "RI": {
+          "name": "Reading: Informational Text",
+          "standards": {
+            "RI.3.1": "Ask and answer questions to demonstrate understanding of a text, referring explicitly to the text as the basis for the answers.",
+            "RI.3.2": "Determine the main idea of a text; recount the key details and explain how they support the main idea.",
+            "RI.3.3": "Describe the relationship between a series of historical events, scientific ideas or concepts, or steps in technical procedures in a text, using language that pertains to time, sequence, and cause/effect.",
+            "RI.3.4": "Determine the meaning of general academic and domain-specific words and phrases in a text relevant to a grade 3 topic or subject area.",
+            "RI.3.5": "Use text features and search tools to locate information relevant to a given topic efficiently.",
+            "RI.3.6": "Distinguish their own point of view from that of the author of a text.",
+            "RI.3.7": "Use information gained from illustrations and the words in a text to demonstrate understanding of the text.",
+            "RI.3.8": "Describe the logical connection between particular sentences and paragraphs in a text.",
+            "RI.3.9": "Compare and contrast the most important points and key details presented in two texts on the same topic.",
+            "RI.3.10": "By the end of the year, read and comprehend informational texts, including history/social studies, science, and technical texts, at the high end of the grades 2-3 text complexity band independently and proficiently."
+          }
+        },
+        "RF": {
+          "name": "Reading: Foundational Skills",
+          "standards": {
+            "RF.3.3": "Know and apply grade-level phonics and word analysis skills in decoding words.",
+            "RF.3.4": "Read with sufficient accuracy and fluency to support comprehension."
+          }
+        },
+        "W": {
+          "name": "Writing",
+          "standards": {
+            "W.3.1": "Write opinion pieces on topics or texts, supporting a point of view with reasons.",
+            "W.3.2": "Write informative/explanatory texts to examine a topic and convey ideas and information clearly.",
+            "W.3.3": "Write narratives to develop real or imagined experiences or events using effective technique, descriptive details, and clear event sequences.",
+            "W.3.4": "With guidance and support from adults, produce writing in which the development and organization are appropriate to task and purpose.",
+            "W.3.5": "With guidance and support from peers and adults, develop and strengthen writing as needed by planning, revising, and editing.",
+            "W.3.6": "With guidance and support from adults, use technology to produce and publish writing as well as to interact and collaborate with others.",
+            "W.3.7": "Conduct short research projects that build knowledge about a topic.",
+            "W.3.8": "Recall information from experiences or gather information from print and digital sources; take brief notes on sources and sort evidence into provided categories.",
+            "W.3.10": "Write routinely over extended time frames and shorter time frames for a range of discipline-specific tasks, purposes, and audiences."
+          }
+        },
+        "SL": {
+          "name": "Speaking and Listening",
+          "standards": {
+            "SL.3.1": "Engage effectively in a range of collaborative discussions with diverse partners on grade 3 topics and texts, building on others' ideas and expressing their own clearly.",
+            "SL.3.2": "Determine the main ideas and supporting details of a text read aloud or information presented in diverse media and formats, including visually, quantitatively, and orally.",
+            "SL.3.3": "Ask and answer questions about information from a speaker, offering appropriate elaboration and detail.",
+            "SL.3.4": "Report on a topic or text, tell a story, or recount an experience with appropriate facts and relevant, descriptive details, speaking clearly at an understandable pace.",
+            "SL.3.5": "Create engaging audio recordings of stories or poems that demonstrate fluid reading at an understandable pace; add visual displays when appropriate to emphasize or enhance certain facts or details.",
+            "SL.3.6": "Speak in complete sentences when appropriate to task and situation in order to provide requested detail or clarification."
+          }
+        },
+        "L": {
+          "name": "Language",
+          "standards": {
+            "L.3.1": "Demonstrate command of the conventions of standard English grammar and usage when writing or speaking.",
+            "L.3.2": "Demonstrate command of the conventions of standard English capitalization, punctuation, and spelling when writing.",
+            "L.3.3": "Use knowledge of language and its conventions when writing, speaking, reading, or listening.",
+            "L.3.4": "Determine or clarify the meaning of unknown and multiple-meaning words and phrases based on grade 3 reading and content, choosing flexibly from a range of strategies.",
+            "L.3.5": "Demonstrate understanding of word relationships and nuances in word meanings.",
+            "L.3.6": "Acquire and use accurately grade-appropriate conversational, general academic, and domain-specific words and phrases, including those that signal spatial and temporal relationships."
+          }
+        }
+      }
+    },
+    "4": {
+      "name": "4th Grade",
+      "strands": {
+        "RL": {
+          "name": "Reading: Literature",
+          "standards": {
+            "RL.4.1": "Refer to details and examples in a text when explaining what the text says explicitly and when drawing inferences from the text.",
+            "RL.4.2": "Determine a theme of a story, drama, or poem from details in the text; summarize the text.",
+            "RL.4.3": "Describe in depth a character, setting, or event in a story or drama, drawing on specific details in the text.",
+            "RL.4.4": "Determine the meaning of words and phrases as they are used in a text, including those that allude to significant characters found in mythology.",
+            "RL.4.5": "Explain major differences between poems, drama, and prose, and refer to the structural elements of poems and drama when writing or speaking about a text.",
+            "RL.4.6": "Compare and contrast the point of view from which different stories are narrated, including the difference between first- and third-person narrations.",
+            "RL.4.7": "Make connections between the text of a story or drama and a visual or oral presentation of the text, identifying where each version reflects specific descriptions and directions in the text.",
+            "RL.4.9": "Compare and contrast the treatment of similar themes and topics and patterns of events in stories, myths, and traditional literature from different cultures.",
+            "RL.4.10": "By the end of the year, read and comprehend literature, including stories, dramas, and poetry, in the grades 4-5 text complexity band proficiently, with scaffolding as needed at the high end of the range."
+          }
+        },
+        "RI": {
+          "name": "Reading: Informational Text",
+          "standards": {
+            "RI.4.1": "Refer to details and examples in a text when explaining what the text says explicitly and when drawing inferences from the text.",
+            "RI.4.2": "Determine the main idea of a text and explain how it is supported by key details; summarize the text.",
+            "RI.4.3": "Explain events, procedures, ideas, or concepts in a historical, scientific, or technical text, including what happened and why, based on specific information in the text.",
+            "RI.4.4": "Determine the meaning of general academic and domain-specific words or phrases in a text relevant to a grade 4 topic or subject area.",
+            "RI.4.5": "Describe the overall structure of events, ideas, concepts, or information in a text or part of a text.",
+            "RI.4.6": "Compare and contrast a firsthand and secondhand account of the same event or topic; describe the differences in focus and the information provided.",
+            "RI.4.7": "Interpret information presented visually, orally, or quantitatively and explain how the information contributes to an understanding of the text in which it appears.",
+            "RI.4.8": "Explain how an author uses reasons and evidence to support particular points in a text.",
+            "RI.4.9": "Integrate information from two texts on the same topic in order to write or speak about the subject knowledgeably.",
+            "RI.4.10": "By the end of year, read and comprehend informational texts, including history/social studies, science, and technical texts, in the grades 4-5 text complexity band proficiently, with scaffolding as needed at the high end of the range."
+          }
+        },
+        "RF": {
+          "name": "Reading: Foundational Skills",
+          "standards": {
+            "RF.4.3": "Know and apply grade-level phonics and word analysis skills in decoding words.",
+            "RF.4.4": "Read with sufficient accuracy and fluency to support comprehension."
+          }
+        },
+        "W": {
+          "name": "Writing",
+          "standards": {
+            "W.4.1": "Write opinion pieces on topics or texts, supporting a point of view with reasons and information.",
+            "W.4.2": "Write informative/explanatory texts to examine a topic and convey ideas and information clearly.",
+            "W.4.3": "Write narratives to develop real or imagined experiences or events using effective technique, descriptive details, and clear event sequences.",
+            "W.4.4": "Produce clear and coherent writing in which the development and organization are appropriate to task, purpose, and audience.",
+            "W.4.5": "With guidance and support from peers and adults, develop and strengthen writing as needed by planning, revising, and editing.",
+            "W.4.6": "With some guidance and support from adults, use technology, including the Internet, to produce and publish writing as well as to interact and collaborate with others.",
+            "W.4.7": "Conduct short research projects that build knowledge through investigation of different aspects of a topic.",
+            "W.4.8": "Recall relevant information from experiences or gather relevant information from print and digital sources; take notes and categorize information, and provide a list of sources.",
+            "W.4.9": "Draw evidence from literary or informational texts to support analysis, reflection, and research.",
+            "W.4.10": "Write routinely over extended time frames and shorter time frames for a range of discipline-specific tasks, purposes, and audiences."
+          }
+        },
+        "SL": {
+          "name": "Speaking and Listening",
+          "standards": {
+            "SL.4.1": "Engage effectively in a range of collaborative discussions with diverse partners on grade 4 topics and texts, building on others' ideas and expressing their own clearly.",
+            "SL.4.2": "Paraphrase portions of a text read aloud or information presented in diverse media and formats, including visually, quantitatively, and orally.",
+            "SL.4.3": "Identify the reasons and evidence a speaker provides to support particular points.",
+            "SL.4.4": "Report on a topic or text, tell a story, or recount an experience in an organized manner, using appropriate facts and relevant, descriptive details to support main ideas or themes; speak clearly at an understandable pace.",
+            "SL.4.5": "Add audio recordings and visual displays to presentations when appropriate to enhance the development of main ideas or themes.",
+            "SL.4.6": "Differentiate between contexts that call for formal English and situations where informal discourse is appropriate; use formal English when appropriate to task and situation."
+          }
+        },
+        "L": {
+          "name": "Language",
+          "standards": {
+            "L.4.1": "Demonstrate command of the conventions of standard English grammar and usage when writing or speaking.",
+            "L.4.2": "Demonstrate command of the conventions of standard English capitalization, punctuation, and spelling when writing.",
+            "L.4.3": "Use knowledge of language and its conventions when writing, speaking, reading, or listening.",
+            "L.4.4": "Determine or clarify the meaning of unknown and multiple-meaning words and phrases based on grade 4 reading and content, choosing flexibly from a range of strategies.",
+            "L.4.5": "Demonstrate understanding of figurative language, word relationships, and nuances in word meanings.",
+            "L.4.6": "Acquire and use accurately grade-appropriate general academic and domain-specific words and phrases, including those that signal precise actions, emotions, or states of being and that are basic to a particular topic."
+          }
+        }
+      }
+    },
+    "5": {
+      "name": "5th Grade",
+      "strands": {
+        "RL": {
+          "name": "Reading: Literature",
+          "standards": {
+            "RL.5.1": "Quote accurately from a text when explaining what the text says explicitly and when drawing inferences from the text.",
+            "RL.5.2": "Determine a theme of a story, drama, or poem from details in the text, including how characters in a story or drama respond to challenges or how the speaker in a poem reflects upon a topic; summarize the text.",
+            "RL.5.3": "Compare and contrast two or more characters, settings, or events in a story or drama, drawing on specific details in the text.",
+            "RL.5.4": "Determine the meaning of words and phrases as they are used in a text, including figurative language such as metaphors and similes.",
+            "RL.5.5": "Explain how a series of chapters, scenes, or stanzas fits together to provide the overall structure of a particular story, drama, or poem.",
+            "RL.5.6": "Describe how a narrator's or speaker's point of view influences how events are described.",
+            "RL.5.7": "Analyze how visual and multimedia elements contribute to the meaning, tone, or beauty of a text.",
+            "RL.5.9": "Compare and contrast stories in the same genre on their approaches to similar themes and topics.",
+            "RL.5.10": "By the end of the year, read and comprehend literature, including stories, dramas, and poetry, at the high end of the grades 4-5 text complexity band independently and proficiently."
+          }
+        },
+        "RI": {
+          "name": "Reading: Informational Text",
+          "standards": {
+            "RI.5.1": "Quote accurately from a text when explaining what the text says explicitly and when drawing inferences from the text.",
+            "RI.5.2": "Determine two or more main ideas of a text and explain how they are supported by key details; summarize the text.",
+            "RI.5.3": "Explain the relationships or interactions between two or more individuals, events, ideas, or concepts in a historical, scientific, or technical text based on specific information in the text.",
+            "RI.5.4": "Determine the meaning of general academic and domain-specific words and phrases in a text relevant to a grade 5 topic or subject area.",
+            "RI.5.5": "Compare and contrast the overall structure of events, ideas, concepts, or information in two or more texts.",
+            "RI.5.6": "Analyze multiple accounts of the same event or topic, noting important similarities and differences in the point of view they represent.",
+            "RI.5.7": "Draw on information from multiple print or digital sources, demonstrating the ability to locate an answer to a question quickly or to solve a problem efficiently.",
+            "RI.5.8": "Explain how an author uses reasons and evidence to support particular points in a text, identifying which reasons and evidence support which point(s).",
+            "RI.5.9": "Integrate information from several texts on the same topic in order to write or speak about the subject knowledgeably.",
+            "RI.5.10": "By the end of the year, read and comprehend informational texts, including history/social studies, science, and technical texts, at the high end of the grades 4-5 text complexity band independently and proficiently."
+          }
+        },
+        "RF": {
+          "name": "Reading: Foundational Skills",
+          "standards": {
+            "RF.5.3": "Know and apply grade-level phonics and word analysis skills in decoding words.",
+            "RF.5.4": "Read with sufficient accuracy and fluency to support comprehension."
+          }
+        },
+        "W": {
+          "name": "Writing",
+          "standards": {
+            "W.5.1": "Write opinion pieces on topics or texts, supporting a point of view with reasons and information.",
+            "W.5.2": "Write informative/explanatory texts to examine a topic and convey ideas and information clearly.",
+            "W.5.3": "Write narratives to develop real or imagined experiences or events using effective technique, descriptive details, and clear event sequences.",
+            "W.5.4": "Produce clear and coherent writing in which the development and organization are appropriate to task, purpose, and audience.",
+            "W.5.5": "With guidance and support from peers and adults, develop and strengthen writing as needed by planning, revising, editing, rewriting, or trying a new approach.",
+            "W.5.6": "With some guidance and support from adults, use technology, including the Internet, to produce and publish writing as well as to interact and collaborate with others.",
+            "W.5.7": "Conduct short research projects that use several sources to build knowledge through investigation of different aspects of a topic.",
+            "W.5.8": "Recall relevant information from experiences or gather relevant information from print and digital sources; summarize or paraphrase information in notes and finished work, and provide a list of sources.",
+            "W.5.9": "Draw evidence from literary or informational texts to support analysis, reflection, and research.",
+            "W.5.10": "Write routinely over extended time frames and shorter time frames for a range of discipline-specific tasks, purposes, and audiences."
+          }
+        },
+        "SL": {
+          "name": "Speaking and Listening",
+          "standards": {
+            "SL.5.1": "Engage effectively in a range of collaborative discussions with diverse partners on grade 5 topics and texts, building on others' ideas and expressing their own clearly.",
+            "SL.5.2": "Summarize a written text read aloud or information presented in diverse media and formats, including visually, quantitatively, and orally.",
+            "SL.5.3": "Summarize the points a speaker makes and explain how each claim is supported by reasons and evidence.",
+            "SL.5.4": "Report on a topic or text or present an opinion, sequencing ideas logically and using appropriate facts and relevant, descriptive details to support main ideas or themes; speak clearly at an understandable pace.",
+            "SL.5.5": "Include multimedia components and visual displays in presentations when appropriate to enhance the development of main ideas or themes.",
+            "SL.5.6": "Adapt speech to a variety of contexts and tasks, using formal English when appropriate to task and situation."
+          }
+        },
+        "L": {
+          "name": "Language",
+          "standards": {
+            "L.5.1": "Demonstrate command of the conventions of standard English grammar and usage when writing or speaking.",
+            "L.5.2": "Demonstrate command of the conventions of standard English capitalization, punctuation, and spelling when writing.",
+            "L.5.3": "Use knowledge of language and its conventions when writing, speaking, reading, or listening.",
+            "L.5.4": "Determine or clarify the meaning of unknown and multiple-meaning words and phrases based on grade 5 reading and content, choosing flexibly from a range of strategies.",
+            "L.5.5": "Demonstrate understanding of figurative language, word relationships, and nuances in word meanings.",
+            "L.5.6": "Acquire and use accurately grade-appropriate general academic and domain-specific words and phrases, including those that signal contrast, addition, and other logical relationships."
+          }
+        }
+      }
+    }
+  }
+}

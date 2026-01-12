@@ -2,6 +2,12 @@ import OpenAI from "openai";
 import { Lesson } from "./lesson";
 import { Prompt } from "./prompt";
 import { getUniqueLessonId } from "../stores/lessonStore";
+import {
+  getReadingStandards,
+  formatStandardsForPrompt,
+  normalizeGradeLevel,
+  type Standard,
+} from "./standards";
 
 export type CreationMode = "book-title" | "book-excerpt" | "pasted-text" | "topic" | "guided";
 
@@ -27,26 +33,33 @@ function getClient(): OpenAI | null {
   return openaiClient;
 }
 
-function getSystemPrompt(gradeLevel: string): string {
+function getSystemPrompt(gradeLevel: string, standards: Standard[]): string {
+  const standardsText = standards.length > 0
+    ? `\n\nAlign your questions with these Ohio Learning Standards for ${gradeLevel}:\n${formatStandardsForPrompt(standards, 8)}`
+    : "";
+
   return `You are an expert education curriculum designer creating lessons for ${gradeLevel} students.
 
 Your lessons should:
-- Use age-appropriate vocabulary and sentence structure
+- Use age-appropriate vocabulary and sentence structure for ${gradeLevel}
 - Focus on comprehension, critical thinking, and explaining reasoning
 - Include helpful hints that guide without giving away answers
 - Ask "why" and "how" questions, not just "what" questions
 - Create questions that encourage students to explain their thinking
+- Align with grade-level learning standards${standardsText}
 
 You MUST respond with valid JSON matching this exact structure:
 {
   "title": "Lesson Title",
   "description": "A brief, engaging description of what students will learn",
+  "standards": ["RL.2.1", "RL.2.3"],
   "prompts": [
     {
       "id": "q1",
       "type": "explain",
       "input": "The question text that students will see and answer",
-      "hints": ["First helpful hint", "Second helpful hint"]
+      "hints": ["First helpful hint", "Second helpful hint"],
+      "standards": ["RL.2.1"]
     }
   ]
 }
@@ -55,7 +68,9 @@ Important:
 - Each prompt must have exactly 2 hints
 - The "type" should always be "explain"
 - Questions should ask students to explain their thinking, not just give answers
-- Make hints helpful but don't give away the answer`;
+- Make hints helpful but don't give away the answer
+- Include relevant standard codes (like RL.2.1, RI.2.2) for each question based on what skill it assesses
+- The lesson-level "standards" array should list all standards covered in the lesson`;
 }
 
 function buildUserPrompt(params: LessonParams): string {
@@ -146,11 +161,13 @@ Remember: Ask questions that require students to explain their thinking.`;
 interface GeneratedLesson {
   title: string;
   description: string;
+  standards?: string[];
   prompts: {
     id: string;
     type: string;
     input: string;
     hints: string[];
+    standards?: string[];
   }[];
 }
 
@@ -167,11 +184,14 @@ export async function generateLesson(params: LessonParams): Promise<Lesson | nul
 
   const gradeLevel = params.gradeLevel || "2nd grade";
 
+  // Get relevant standards for the grade level
+  const standards = getReadingStandards(gradeLevel);
+
   try {
     const completion = await client.chat.completions.create({
       model: "gpt-4o-mini",
       messages: [
-        { role: "system", content: getSystemPrompt(gradeLevel) },
+        { role: "system", content: getSystemPrompt(gradeLevel, standards) },
         { role: "user", content: buildUserPrompt(params) }
       ],
       temperature: 0.7,
@@ -200,11 +220,13 @@ export async function generateLesson(params: LessonParams): Promise<Lesson | nul
       description: generated.description,
       difficulty: params.difficulty,
       gradeLevel,
+      standards: generated.standards || [],
       prompts: generated.prompts.map((p, index): Prompt => ({
         id: p.id || `q${index + 1}`,
         type: "explain",
         input: p.input,
-        hints: p.hints || []
+        hints: p.hints || [],
+        standards: p.standards || []
       }))
     };
 
