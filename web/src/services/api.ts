@@ -186,3 +186,59 @@ export async function getStudentAnalytics(studentId: string): Promise<StudentAna
 export async function getClassAnalytics(): Promise<any> {
   return fetchJson(`${API_BASE}/analytics/class`);
 }
+
+// Lesson Generation Types
+export type CreationMode = "book-title" | "book-excerpt" | "pasted-text" | "topic" | "guided";
+
+export interface LessonParams {
+  mode: CreationMode;
+  content: string;
+  difficulty: "beginner" | "intermediate" | "advanced";
+  questionCount: number;
+  gradeLevel?: string;
+}
+
+// Lesson Generation
+export async function generateLesson(params: LessonParams): Promise<Lesson> {
+  return fetchJson(`${API_BASE}/lessons/generate`, {
+    method: "POST",
+    body: JSON.stringify(params),
+  });
+}
+
+export async function generateQuestion(
+  lessonContext: string,
+  existingQuestions: string[],
+  difficulty: string
+): Promise<Prompt> {
+  return fetchJson(`${API_BASE}/lessons/generate-question`, {
+    method: "POST",
+    body: JSON.stringify({ lessonContext, existingQuestions, difficulty }),
+  });
+}
+
+export async function saveLesson(lesson: Lesson): Promise<{ lesson: Lesson; filePath: string }> {
+  return fetchJson(`${API_BASE}/lessons`, {
+    method: "POST",
+    body: JSON.stringify(lesson),
+  });
+}
+
+// Voice Features
+export async function checkVoiceStatus(): Promise<{ available: boolean }> {
+  return fetchJson(`${API_BASE}/voice/status`);
+}
+
+export async function transcribeAudio(audioBase64: string, format: string = "webm"): Promise<{ text: string }> {
+  return fetchJson(`${API_BASE}/voice/transcribe`, {
+    method: "POST",
+    body: JSON.stringify({ audio: audioBase64, format }),
+  });
+}
+
+export async function textToSpeech(text: string, voice: string = "nova"): Promise<{ audio: string; format: string }> {
+  return fetchJson(`${API_BASE}/voice/speak`, {
+    method: "POST",
+    body: JSON.stringify({ text, voice }),
+  });
+}

@@ -9,6 +9,7 @@ import {
   type Session,
   type PromptResponse,
 } from "../services/api";
+import { useVoice } from "../hooks/useVoice";
 
 export default function Lesson() {
   const { studentId, lessonId } = useParams<{ studentId: string; lessonId: string }>();
@@ -25,6 +26,17 @@ export default function Lesson() {
   const [feedback, setFeedback] = useState<{ score: number; comment: string } | null>(null);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
+
+  const {
+    isRecording,
+    isTranscribing,
+    isSpeaking,
+    voiceAvailable,
+    startRecording,
+    stopRecording,
+    speak,
+    cancelRecording,
+  } = useVoice();
 
   useEffect(() => {
     async function loadData() {
@@ -49,6 +61,31 @@ export default function Lesson() {
   }, [lessonId, sessionId]);
 
   const currentPrompt = lesson?.prompts[currentIndex];
+
+  // Speak the question when it loads
+  useEffect(() => {
+    if (currentPrompt && voiceAvailable && !feedback) {
+      speak(currentPrompt.input);
+    }
+  }, [currentPrompt?.id, voiceAvailable]);
+
+  // Speak feedback when it arrives
+  useEffect(() => {
+    if (feedback && voiceAvailable) {
+      speak(feedback.comment);
+    }
+  }, [feedback, voiceAvailable]);
+
+  const handleVoiceInput = async () => {
+    if (isRecording) {
+      const text = await stopRecording();
+      if (text) {
+        setAnswer(text);
+      }
+    } else {
+      await startRecording();
+    }
+  };
 
   const handleShowHint = () => {
     if (!currentPrompt) return;
@@ -181,7 +218,20 @@ export default function Lesson() {
 
       {/* Question */}
       <div className="card question-card">
-        <h2>{currentPrompt.input}</h2>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "12px" }}>
+          <h2 style={{ flex: 1 }}>{currentPrompt.input}</h2>
+          {voiceAvailable && (
+            <button
+              className="btn btn-secondary"
+              onClick={() => speak(currentPrompt.input)}
+              disabled={isSpeaking}
+              style={{ padding: "8px 12px", flexShrink: 0 }}
+              title="Read question aloud"
+            >
+              {isSpeaking ? "🔊" : "🔈"}
+            </button>
+          )}
+        </div>
 
         {!feedback ? (
           <>
@@ -189,9 +239,23 @@ export default function Lesson() {
               <textarea
                 value={answer}
                 onChange={(e) => setAnswer(e.target.value)}
-                placeholder="Type your answer here..."
-                disabled={submitting}
+                placeholder={isRecording ? "🎤 Listening..." : isTranscribing ? "⏳ Transcribing..." : "Type your answer here or use the microphone..."}
+                disabled={submitting || isRecording || isTranscribing}
               />
+              {voiceAvailable && (
+                <button
+                  className={`btn ${isRecording ? "btn-primary" : "btn-secondary"}`}
+                  onClick={handleVoiceInput}
+                  disabled={submitting || isTranscribing}
+                  style={{
+                    marginTop: "8px",
+                    width: "100%",
+                    background: isRecording ? "#f44336" : undefined,
+                  }}
+                >
+                  {isRecording ? "🛑 Stop Recording" : isTranscribing ? "⏳ Transcribing..." : "🎤 Use Voice Input"}
+                </button>
+              )}
             </div>
 
             {/* Hints */}
@@ -234,7 +298,20 @@ export default function Lesson() {
                 feedback.score >= 35 ? "success" : "needs-work"
               }`}
             >
-              <div className="score-display">{feedback.score}/50</div>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <div className="score-display">{feedback.score}/50</div>
+                {voiceAvailable && (
+                  <button
+                    className="btn btn-secondary"
+                    onClick={() => speak(feedback.comment)}
+                    disabled={isSpeaking}
+                    style={{ padding: "8px 12px" }}
+                    title="Read feedback aloud"
+                  >
+                    {isSpeaking ? "🔊" : "🔈"}
+                  </button>
+                )}
+              </div>
               <p>{feedback.comment}</p>
             </div>
 

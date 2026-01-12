@@ -1,8 +1,9 @@
 import { useState, useEffect } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { getStudents, getSessions, getClassAnalytics, type Student, type Session } from "../services/api";
 
 export default function EducatorDashboard() {
+  const navigate = useNavigate();
   const [students, setStudents] = useState<Student[]>([]);
   const [sessions, setSessions] = useState<Session[]>([]);
   const [classAnalytics, setClassAnalytics] = useState<any>(null);
@@ -59,6 +60,13 @@ export default function EducatorDashboard() {
       <div className="header">
         <h1>Educator Dashboard</h1>
         <p>Monitor student progress and performance</p>
+        <button
+          className="btn btn-primary"
+          onClick={() => navigate("/educator/create-lesson")}
+          style={{ marginTop: "16px" }}
+        >
+          + Create New Lesson
+        </button>
       </div>
 
       {/* Class Stats */}

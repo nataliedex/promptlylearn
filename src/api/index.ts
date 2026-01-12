@@ -7,6 +7,7 @@ import sessionsRouter from "./routes/sessions";
 import lessonsRouter from "./routes/lessons";
 import evaluateRouter from "./routes/evaluate";
 import analyticsRouter from "./routes/analytics";
+import voiceRouter from "./routes/voice";
 
 dotenv.config();
 
@@ -20,12 +21,16 @@ app.use(cors({
 }));
 app.use(express.json());
 
+// Middleware for larger audio payloads
+app.use(express.json({ limit: "10mb" }));
+
 // Routes
 app.use("/api/students", studentsRouter);
 app.use("/api/sessions", sessionsRouter);
 app.use("/api/lessons", lessonsRouter);
 app.use("/api/evaluate", evaluateRouter);
 app.use("/api/analytics", analyticsRouter);
+app.use("/api/voice", voiceRouter);
 
 // Health check
 app.get("/api/health", (req, res) => {
