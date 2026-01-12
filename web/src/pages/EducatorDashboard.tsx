@@ -90,7 +90,7 @@ export default function EducatorDashboard() {
       {classAnalytics && (
         <div className="card">
           <h3 style={{ marginBottom: "16px" }}>📊 Class Analytics</h3>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: "16px" }}>
             <div>
               <p style={{ color: "#666", fontSize: "0.9rem" }}>Students Using Coach</p>
               <p style={{ fontSize: "1.2rem", fontWeight: 600 }}>
@@ -120,58 +120,61 @@ export default function EducatorDashboard() {
         </div>
       )}
 
-      {/* Top Performers */}
-      {classAnalytics?.topPerformers?.length > 0 && (
-        <div className="card">
-          <h3 style={{ marginBottom: "16px" }}>⭐ Top Performers</h3>
-          {classAnalytics.topPerformers.map((student: any) => (
-            <div
-              key={student.name}
-              style={{
-                display: "flex",
-                justifyContent: "space-between",
-                padding: "8px 0",
-                borderBottom: "1px solid #eee",
-              }}
-            >
-              <span>{student.name}</span>
-              <span style={{ fontWeight: 600, color: "#667eea" }}>
-                {student.avgScore}/100
-              </span>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* Needs Support */}
-      {classAnalytics?.needsSupport?.length > 0 && (
-        <div className="card" style={{ borderLeft: "4px solid #ff9800" }}>
-          <h3 style={{ marginBottom: "16px" }}>⚠️ Needs Support</h3>
-          {classAnalytics.needsSupport.map((student: any) => (
-            <div
-              key={student.name}
-              style={{
-                display: "flex",
-                justifyContent: "space-between",
-                padding: "8px 0",
-                borderBottom: "1px solid #eee",
-              }}
-            >
-              <div>
+      {/* Two-column layout for performers/support on desktop */}
+      <div className="two-column">
+        {/* Top Performers */}
+        {classAnalytics?.topPerformers?.length > 0 && (
+          <div className="card">
+            <h3 style={{ marginBottom: "16px" }}>⭐ Top Performers</h3>
+            {classAnalytics.topPerformers.map((student: any) => (
+              <div
+                key={student.name}
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  padding: "8px 0",
+                  borderBottom: "1px solid #eee",
+                }}
+              >
                 <span>{student.name}</span>
-                <span
-                  style={{ marginLeft: "8px", color: "#666", fontSize: "0.9rem" }}
-                >
-                  - {student.issue}
+                <span style={{ fontWeight: 600, color: "#667eea" }}>
+                  {student.avgScore}/100
                 </span>
               </div>
-              <span style={{ fontWeight: 600, color: "#ff9800" }}>
-                {student.avgScore}/100
-              </span>
-            </div>
-          ))}
-        </div>
-      )}
+            ))}
+          </div>
+        )}
+
+        {/* Needs Support */}
+        {classAnalytics?.needsSupport?.length > 0 && (
+          <div className="card" style={{ borderLeft: "4px solid #ff9800" }}>
+            <h3 style={{ marginBottom: "16px" }}>⚠️ Needs Support</h3>
+            {classAnalytics.needsSupport.map((student: any) => (
+              <div
+                key={student.name}
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  padding: "8px 0",
+                  borderBottom: "1px solid #eee",
+                }}
+              >
+                <div>
+                  <span>{student.name}</span>
+                  <span
+                    style={{ marginLeft: "8px", color: "#666", fontSize: "0.9rem" }}
+                  >
+                    - {student.issue}
+                  </span>
+                </div>
+                <span style={{ fontWeight: 600, color: "#ff9800" }}>
+                  {student.avgScore}/100
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
 
       {/* Student List */}
       <div className="card">
@@ -179,6 +182,7 @@ export default function EducatorDashboard() {
         {students.length === 0 ? (
           <p style={{ color: "#666" }}>No students yet.</p>
         ) : (
+          <div className="table-wrapper">
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
               <tr style={{ borderBottom: "2px solid #eee" }}>
@@ -221,6 +225,7 @@ export default function EducatorDashboard() {
               })}
             </tbody>
           </table>
+          </div>
         )}
       </div>
 

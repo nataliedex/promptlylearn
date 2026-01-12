@@ -148,23 +148,25 @@ export default function StudentDashboard() {
           <h2 style={{ color: "white", marginTop: "32px", marginBottom: "16px" }}>
             Recent Sessions
           </h2>
-          {sessions.slice(0, 5).map((session) => (
-            <div key={session.id} className="card">
-              <div style={{ display: "flex", justifyContent: "space-between" }}>
-                <div>
-                  <strong>{session.lessonTitle}</strong>
-                  <p style={{ color: "#666", fontSize: "0.9rem" }}>
-                    {new Date(session.completedAt || session.startedAt).toLocaleDateString()}
-                  </p>
-                </div>
-                <div style={{ textAlign: "right" }}>
-                  <div className="score-display" style={{ fontSize: "1.5rem" }}>
-                    {session.evaluation?.totalScore ?? 0}/100
+          <div className="session-list">
+            {sessions.slice(0, 6).map((session) => (
+              <div key={session.id} className="card">
+                <div style={{ display: "flex", justifyContent: "space-between" }}>
+                  <div>
+                    <strong>{session.lessonTitle}</strong>
+                    <p style={{ color: "#666", fontSize: "0.9rem" }}>
+                      {new Date(session.completedAt || session.startedAt).toLocaleDateString()}
+                    </p>
+                  </div>
+                  <div style={{ textAlign: "right" }}>
+                    <div className="score-display" style={{ fontSize: "1.5rem" }}>
+                      {session.evaluation?.totalScore ?? 0}/100
+                    </div>
                   </div>
                 </div>
               </div>
-            </div>
-          ))}
+            ))}
+          </div>
         </>
       )}
     </div>

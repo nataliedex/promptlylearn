@@ -45,7 +45,7 @@ export default function Home() {
         <p>Practice explaining your thinking and grow your understanding</p>
       </div>
 
-      <div className="card">
+      <div className="card centered-form">
         <h2 style={{ marginBottom: "24px", textAlign: "center" }}>Welcome!</h2>
 
         <form onSubmit={handleStudentLogin}>

@@ -95,8 +95,13 @@ textarea:focus {
 
 /* Layout */
 .container {
-  max-width: 800px;
+  max-width: 1200px;
   margin: 0 auto;
+  padding: 0 20px;
+}
+
+.container.narrow {
+  max-width: 600px;
 }
 
 .header {
@@ -106,7 +111,7 @@ textarea:focus {
 
 .header h1 {
   color: white;
-  font-size: 2.5rem;
+  font-size: 2rem;
   margin-bottom: 8px;
   text-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
 }
@@ -116,19 +121,39 @@ textarea:focus {
   font-size: 1.1rem;
 }
 
+@media (min-width: 768px) {
+  .header h1 {
+    font-size: 2.5rem;
+  }
+}
+
 /* Lesson cards */
 .lesson-grid {
   display: grid;
   gap: 16px;
+  grid-template-columns: 1fr;
+}
+
+@media (min-width: 600px) {
+  .lesson-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (min-width: 900px) {
+  .lesson-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
 }
 
 .lesson-card {
   cursor: pointer;
-  transition: transform 0.2s ease;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
 }
 
 .lesson-card:hover {
   transform: translateY(-4px);
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.15);
 }
 
 .lesson-card h3 {
@@ -139,6 +164,7 @@ textarea:focus {
 .lesson-card p {
   color: #666;
   margin-bottom: 12px;
+  font-size: 0.95rem;
 }
 
 .difficulty-badge {
@@ -222,9 +248,21 @@ textarea:focus {
 /* Stats */
 .stats-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  grid-template-columns: repeat(2, 1fr);
   gap: 16px;
   margin-bottom: 24px;
+}
+
+@media (min-width: 600px) {
+  .stats-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+@media (min-width: 900px) {
+  .stats-grid {
+    grid-template-columns: repeat(4, 1fr);
+  }
 }
 
 .stat-card {
@@ -241,6 +279,12 @@ textarea:focus {
 .stat-card .label {
   color: #666;
   font-size: 0.9rem;
+}
+
+@media (min-width: 768px) {
+  .stat-card .value {
+    font-size: 2.5rem;
+  }
 }
 
 /* Back button */
@@ -344,4 +388,101 @@ textarea:focus {
   text-align: right;
   font-size: 0.9rem;
   color: #666;
+}
+
+/* Two-column layout for desktop */
+.two-column {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 24px;
+}
+
+@media (min-width: 900px) {
+  .two-column {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+/* Dashboard layout for educator */
+.dashboard-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 24px;
+}
+
+@media (min-width: 768px) {
+  .dashboard-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (min-width: 1024px) {
+  .dashboard-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .dashboard-grid .full-width {
+    grid-column: 1 / -1;
+  }
+}
+
+/* Session cards */
+.session-list {
+  display: grid;
+  gap: 16px;
+}
+
+@media (min-width: 768px) {
+  .session-list {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+/* Table responsive wrapper */
+.table-wrapper {
+  overflow-x: auto;
+}
+
+.table-wrapper table {
+  min-width: 600px;
+}
+
+/* Center content on large screens */
+.centered-form {
+  max-width: 500px;
+  margin: 0 auto;
+}
+
+@media (min-width: 768px) {
+  .centered-form {
+    margin-top: 60px;
+  }
+}
+
+/* Question layout for desktop */
+@media (min-width: 900px) {
+  .question-card {
+    padding: 32px;
+  }
+
+  .question-card h2 {
+    font-size: 1.75rem;
+  }
+
+  .question-input textarea {
+    min-height: 150px;
+    font-size: 1.1rem;
+  }
+}
+
+/* Navigation buttons responsive */
+@media (min-width: 600px) {
+  .nav-buttons {
+    justify-content: flex-end;
+  }
+
+  .nav-buttons .btn {
+    flex: none;
+    min-width: 150px;
+  }
 }
