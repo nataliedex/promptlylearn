@@ -19,9 +19,6 @@ app.use(cors({
   origin: ["http://localhost:5173", "http://localhost:3000"],
   credentials: true,
 }));
-app.use(express.json());
-
-// Middleware for larger audio payloads
 app.use(express.json({ limit: "10mb" }));
 
 // Routes

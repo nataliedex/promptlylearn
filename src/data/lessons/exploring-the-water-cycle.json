@@ -1,0 +1,27 @@
+{
+  "id": "exploring-the-water-cycle",
+  "title": "Exploring the Water Cycle",
+  "description": "In this lesson, students will learn about the water cycle and how water moves through different stages like evaporation, condensation, and precipitation. They will explain each part of the cycle and how it connects to our world.",
+  "difficulty": "beginner",
+  "gradeLevel": "2nd grade",
+  "prompts": [
+    {
+      "id": "q1",
+      "type": "explain",
+      "input": "Can you explain what happens during evaporation in the water cycle? Why is this step important?",
+      "hints": [
+        "Think about what happens to water when the sun shines on it.",
+        "How do you think the water changes during this process?"
+      ]
+    },
+    {
+      "id": "q2",
+      "type": "explain",
+      "input": "Can you describe what happens to rainwater after it falls to the ground? How does it help plants and animals?",
+      "hints": [
+        "Think about where the water goes after it lands.",
+        "Consider how plants and animals use water to live."
+      ]
+    }
+  ]
+}

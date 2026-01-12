@@ -32,6 +32,8 @@ export default function Lesson() {
     isTranscribing,
     isSpeaking,
     voiceAvailable,
+    error: voiceError,
+    recordingDuration,
     startRecording,
     stopRecording,
     speak,
@@ -243,18 +245,29 @@ export default function Lesson() {
                 disabled={submitting || isRecording || isTranscribing}
               />
               {voiceAvailable && (
-                <button
-                  className={`btn ${isRecording ? "btn-primary" : "btn-secondary"}`}
-                  onClick={handleVoiceInput}
-                  disabled={submitting || isTranscribing}
-                  style={{
-                    marginTop: "8px",
-                    width: "100%",
-                    background: isRecording ? "#f44336" : undefined,
-                  }}
-                >
-                  {isRecording ? "🛑 Stop Recording" : isTranscribing ? "⏳ Transcribing..." : "🎤 Use Voice Input"}
-                </button>
+                <>
+                  <button
+                    className={`btn ${isRecording ? "btn-primary" : "btn-secondary"}`}
+                    onClick={handleVoiceInput}
+                    disabled={submitting || isTranscribing}
+                    style={{
+                      marginTop: "8px",
+                      width: "100%",
+                      background: isRecording ? "#f44336" : undefined,
+                    }}
+                  >
+                    {isRecording
+                      ? `🛑 Stop Recording (${recordingDuration}s)`
+                      : isTranscribing
+                      ? "⏳ Transcribing..."
+                      : "🎤 Use Voice Input"}
+                  </button>
+                  {voiceError && (
+                    <p style={{ color: "#f44336", fontSize: "0.9rem", marginTop: "8px" }}>
+                      {voiceError}
+                    </p>
+                  )}
+                </>
               )}
             </div>
 
