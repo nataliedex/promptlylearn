@@ -40,6 +40,7 @@ export default function Lesson() {
   // Voice mode state
   const [voiceState, setVoiceState] = useState<VoiceState>("idle");
   const [voiceStarted, setVoiceStarted] = useState(false);
+  const [lessonStarted, setLessonStarted] = useState(false); // User must click to start (browser autoplay policy)
   const isProcessingRef = useRef(false);
 
   const {
@@ -88,13 +89,18 @@ export default function Lesson() {
 
   const currentPrompt = lesson?.prompts[currentIndex];
 
-  // Voice mode: Start the question flow when prompt loads
+  // Voice mode: Start the question flow when prompt loads (after user clicks Start)
   useEffect(() => {
-    if (mode === "voice" && currentPrompt && voiceAvailable && !feedback && !voiceStarted) {
+    if (mode === "voice" && currentPrompt && voiceAvailable && !feedback && !voiceStarted && lessonStarted) {
       setVoiceStarted(true);
       startVoiceFlow();
     }
-  }, [currentPrompt?.id, voiceAvailable, mode, feedback, voiceStarted]);
+  }, [currentPrompt?.id, voiceAvailable, mode, feedback, voiceStarted, lessonStarted]);
+
+  // Handler for the Start Lesson button (provides user interaction for browser autoplay policy)
+  const handleStartLesson = () => {
+    setLessonStarted(true);
+  };
 
   const startVoiceFlow = async () => {
     if (!currentPrompt || isProcessingRef.current) return;
@@ -443,14 +449,37 @@ export default function Lesson() {
           }}
           onClick={voiceState === "listening" ? handleVoiceTap : undefined}
         >
-          {/* Question display */}
-          {!feedback && (
+          {/* Start Lesson Button - shown before lesson begins */}
+          {!lessonStarted && (
+            <div>
+              <div style={{ fontSize: "4rem", marginBottom: "24px" }}>🎤</div>
+              <h2 style={{ marginBottom: "16px" }}>Ready for Voice Lesson</h2>
+              <p style={{ color: "#666", marginBottom: "32px" }}>
+                The coach will read each question aloud, then listen for your answer.
+              </p>
+              <button
+                className="btn btn-primary"
+                onClick={handleStartLesson}
+                style={{
+                  padding: "20px 48px",
+                  fontSize: "1.3rem",
+                  borderRadius: "12px",
+                }}
+              >
+                Start Lesson
+              </button>
+            </div>
+          )}
+
+          {/* Question display - shown after lesson starts */}
+          {lessonStarted && !feedback && (
             <div style={{ marginBottom: "32px" }}>
               <h2 style={{ fontSize: "1.3rem", lineHeight: 1.5 }}>{currentPrompt.input}</h2>
             </div>
           )}
 
           {/* Voice state indicator */}
+          {lessonStarted && (
           <div style={{ marginBottom: "24px" }}>
             {voiceState === "speaking" && (
               <div className="voice-indicator speaking">
@@ -497,9 +526,10 @@ export default function Lesson() {
               </div>
             )}
           </div>
+          )}
 
           {/* Feedback display in voice mode */}
-          {feedback && (
+          {lessonStarted && feedback && (
             <div style={{ marginBottom: "24px" }}>
               {/* Score */}
               <div
@@ -550,12 +580,12 @@ export default function Lesson() {
           )}
 
           {/* Voice error */}
-          {voiceError && (
+          {lessonStarted && voiceError && (
             <p style={{ color: "#f44336", marginTop: "16px" }}>{voiceError}</p>
           )}
 
           {/* Next button (shows when conversation is done) */}
-          {feedback && !feedback.shouldContinue && voiceState === "idle" && (
+          {lessonStarted && feedback && !feedback.shouldContinue && voiceState === "idle" && (
             <button
               className="btn btn-primary"
               onClick={handleNext}
