@@ -96,13 +96,6 @@ export default function Lesson() {
     }
   }, [currentPrompt?.id, voiceAvailable, mode, feedback, voiceStarted]);
 
-  // Voice mode: Handle feedback flow
-  useEffect(() => {
-    if (mode === "voice" && feedback && voiceAvailable && !isProcessingRef.current) {
-      handleVoiceFeedbackFlow();
-    }
-  }, [feedback, mode, voiceAvailable]);
-
   const startVoiceFlow = async () => {
     if (!currentPrompt || isProcessingRef.current) return;
     isProcessingRef.current = true;
@@ -119,26 +112,27 @@ export default function Lesson() {
     isProcessingRef.current = false;
   };
 
-  const handleVoiceFeedbackFlow = async () => {
-    if (!feedback || isProcessingRef.current) return;
-    isProcessingRef.current = true;
+  // Speak coach feedback and optionally start recording for follow-up
+  const speakFeedbackAndContinue = async (coachFeedback: string, followUpQuestion?: string, shouldContinue?: boolean) => {
     setVoiceState("speaking");
 
     // Speak feedback and follow-up question
-    const message = feedback.followUpQuestion
-      ? `${feedback.feedback} ${feedback.followUpQuestion}`
-      : feedback.feedback;
+    const message = followUpQuestion
+      ? `${coachFeedback} ${followUpQuestion}`
+      : coachFeedback;
 
     await speak(message);
 
     // If there's a follow-up question, start recording for response
-    if (feedback.shouldContinue && feedback.followUpQuestion) {
+    if (shouldContinue && followUpQuestion) {
       await new Promise((r) => setTimeout(r, 500));
       setVoiceState("listening");
       await startRecording();
+      isProcessingRef.current = false;
+    } else {
+      setVoiceState("idle");
+      isProcessingRef.current = false;
     }
-
-    isProcessingRef.current = false;
   };
 
   // Voice mode: Handle tap to stop and submit
@@ -192,6 +186,10 @@ export default function Lesson() {
         setConversationHistory([
           { role: "coach", message: `${coachResponse.feedback} ${coachResponse.followUpQuestion}` },
         ]);
+      } else {
+        setConversationHistory([
+          { role: "coach", message: coachResponse.feedback },
+        ]);
       }
 
       // Update session
@@ -216,9 +214,21 @@ export default function Lesson() {
           ? { ...prev, submission: { ...prev.submission, responses: updatedResponses } }
           : null
       );
+
+      setSubmitting(false);
+
+      // In voice mode, speak the feedback and continue the conversation
+      if (mode === "voice") {
+        await speakFeedbackAndContinue(
+          coachResponse.feedback,
+          coachResponse.followUpQuestion,
+          coachResponse.shouldContinue
+        );
+      } else {
+        isProcessingRef.current = false;
+      }
     } catch (err) {
       console.error("Failed to submit:", err);
-    } finally {
       setSubmitting(false);
       isProcessingRef.current = false;
     }
@@ -266,25 +276,22 @@ export default function Lesson() {
       );
 
       setFollowUpAnswer("");
+      setIsConversing(false);
 
       // In voice mode, speak the response and maybe continue recording
       if (mode === "voice") {
-        isProcessingRef.current = true;
-        setVoiceState("speaking");
-        await speak(coachMessage);
-
-        if (coachResponse.shouldContinue && coachResponse.followUpQuestion) {
-          await new Promise((r) => setTimeout(r, 500));
-          setVoiceState("listening");
-          await startRecording();
-        }
+        await speakFeedbackAndContinue(
+          coachResponse.feedback,
+          coachResponse.followUpQuestion,
+          coachResponse.shouldContinue
+        );
+      } else {
         isProcessingRef.current = false;
       }
     } catch (err) {
       console.error("Failed to continue conversation:", err);
-    } finally {
       setIsConversing(false);
-      if (mode !== "voice") isProcessingRef.current = false;
+      isProcessingRef.current = false;
     }
   };
 
