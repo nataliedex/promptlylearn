@@ -267,3 +267,59 @@ export async function getStandardsForGrade(gradeLevel: string): Promise<GradeSta
 export async function getReadingStandards(gradeLevel: string): Promise<Standard[]> {
   return fetchJson(`${API_BASE}/standards/${encodeURIComponent(gradeLevel)}/reading`);
 }
+
+// Coach Types
+export interface ConversationMessage {
+  role: "student" | "coach";
+  message: string;
+}
+
+export interface CoachFeedbackResponse {
+  feedback: string;
+  score: number;
+  isCorrect: boolean;
+  followUpQuestion?: string;
+  encouragement: string;
+  shouldContinue: boolean;
+}
+
+export interface CoachContinueResponse {
+  feedback: string;
+  followUpQuestion?: string;
+  encouragement: string;
+  shouldContinue: boolean;
+}
+
+// Coach API Functions
+export async function getCoachFeedback(
+  lessonId: string,
+  promptId: string,
+  studentAnswer: string,
+  gradeLevel?: string
+): Promise<CoachFeedbackResponse> {
+  return fetchJson(`${API_BASE}/coach/feedback`, {
+    method: "POST",
+    body: JSON.stringify({ lessonId, promptId, studentAnswer, gradeLevel }),
+  });
+}
+
+export async function continueCoachConversation(
+  lessonId: string,
+  promptId: string,
+  studentAnswer: string,
+  studentResponse: string,
+  conversationHistory: ConversationMessage[],
+  gradeLevel?: string
+): Promise<CoachContinueResponse> {
+  return fetchJson(`${API_BASE}/coach/continue`, {
+    method: "POST",
+    body: JSON.stringify({
+      lessonId,
+      promptId,
+      studentAnswer,
+      studentResponse,
+      conversationHistory,
+      gradeLevel,
+    }),
+  });
+}

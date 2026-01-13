@@ -4,10 +4,13 @@ import {
   getLesson,
   getSession,
   updateSession,
-  evaluateResponse,
+  getCoachFeedback,
+  continueCoachConversation,
   type Lesson as LessonType,
   type Session,
   type PromptResponse,
+  type ConversationMessage,
+  type CoachFeedbackResponse,
 } from "../services/api";
 import { useVoice } from "../hooks/useVoice";
 
@@ -23,7 +26,10 @@ export default function Lesson() {
   const [answer, setAnswer] = useState("");
   const [showHint, setShowHint] = useState(false);
   const [hintIndex, setHintIndex] = useState(0);
-  const [feedback, setFeedback] = useState<{ score: number; comment: string } | null>(null);
+  const [feedback, setFeedback] = useState<CoachFeedbackResponse | null>(null);
+  const [conversationHistory, setConversationHistory] = useState<ConversationMessage[]>([]);
+  const [followUpAnswer, setFollowUpAnswer] = useState("");
+  const [isConversing, setIsConversing] = useState(false);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
 
@@ -103,45 +109,41 @@ export default function Lesson() {
 
     setSubmitting(true);
     setFeedback(null);
+    setConversationHistory([]);
 
     try {
+      // Get conversational coach feedback
+      const coachResponse = await getCoachFeedback(
+        lessonId,
+        currentPrompt.id,
+        answer.trim(),
+        lesson?.gradeLevel
+      );
+
+      setFeedback(coachResponse);
+
+      // Initialize conversation history with the feedback
+      if (coachResponse.followUpQuestion) {
+        setConversationHistory([
+          { role: "coach", message: `${coachResponse.feedback} ${coachResponse.followUpQuestion}` },
+        ]);
+      }
+
+      // Update session with response
       const response: PromptResponse = {
         promptId: currentPrompt.id,
         response: answer.trim(),
         hintUsed: showHint,
       };
 
-      // Evaluate the response
-      const result = await evaluateResponse(response, lessonId);
-      setFeedback({ score: result.score, comment: result.comment });
-
-      // Update session
       const updatedResponses = [...session.submission.responses, response];
-      const isComplete = currentIndex >= lesson!.prompts.length - 1;
 
       await updateSession(session.id, {
         submission: {
           ...session.submission,
           responses: updatedResponses,
         },
-        currentPromptIndex: currentIndex + 1,
-        status: isComplete ? "completed" : "in_progress",
-        completedAt: isComplete ? new Date().toISOString() : undefined,
-        evaluation: isComplete
-          ? {
-              totalScore: Math.round(
-                updatedResponses.reduce((sum, r, i) => {
-                  // Simple scoring placeholder
-                  return sum + result.score;
-                }, 0) / updatedResponses.length * 2
-              ),
-              feedback: "Great work completing the lesson!",
-              criteriaScores: updatedResponses.map((r) => ({
-                criterionId: r.promptId,
-                score: result.score,
-              })),
-            }
-          : undefined,
+        currentPromptIndex: currentIndex,
       });
 
       setSession((prev) =>
@@ -159,18 +161,91 @@ export default function Lesson() {
     }
   };
 
-  const handleNext = () => {
-    if (!lesson) return;
+  const handleFollowUpSubmit = async () => {
+    if (!followUpAnswer.trim() || !currentPrompt || !lessonId || !feedback) return;
 
-    if (currentIndex < lesson.prompts.length - 1) {
+    setIsConversing(true);
+
+    try {
+      // Add student's response to history
+      const newHistory: ConversationMessage[] = [
+        ...conversationHistory,
+        { role: "student", message: followUpAnswer.trim() },
+      ];
+
+      // Get coach's response
+      const coachResponse = await continueCoachConversation(
+        lessonId,
+        currentPrompt.id,
+        answer,
+        followUpAnswer.trim(),
+        newHistory,
+        lesson?.gradeLevel
+      );
+
+      // Add coach response to history
+      const coachMessage = coachResponse.followUpQuestion
+        ? `${coachResponse.feedback} ${coachResponse.followUpQuestion}`
+        : coachResponse.feedback;
+
+      newHistory.push({ role: "coach", message: coachMessage });
+      setConversationHistory(newHistory);
+
+      // Update feedback state to track if conversation should continue
+      setFeedback((prev) =>
+        prev
+          ? {
+              ...prev,
+              shouldContinue: coachResponse.shouldContinue,
+              followUpQuestion: coachResponse.followUpQuestion,
+            }
+          : null
+      );
+
+      setFollowUpAnswer("");
+    } catch (err) {
+      console.error("Failed to continue conversation:", err);
+    } finally {
+      setIsConversing(false);
+    }
+  };
+
+  const handleNext = async () => {
+    if (!lesson || !session) return;
+
+    const isComplete = currentIndex >= lesson.prompts.length - 1;
+
+    if (isComplete) {
+      // Update session as completed
+      await updateSession(session.id, {
+        currentPromptIndex: currentIndex + 1,
+        status: "completed",
+        completedAt: new Date().toISOString(),
+        evaluation: {
+          totalScore: Math.round(
+            session.submission.responses.reduce((sum, r) => sum + (feedback?.score || 50), 0) /
+              Math.max(session.submission.responses.length, 1)
+          ),
+          feedback: "Great work completing the lesson!",
+          criteriaScores: session.submission.responses.map((r) => ({
+            criterionId: r.promptId,
+            score: feedback?.score || 50,
+          })),
+        },
+      });
+      navigate(`/student/${studentId}/progress`);
+    } else {
+      // Move to next question
+      await updateSession(session.id, {
+        currentPromptIndex: currentIndex + 1,
+      });
       setCurrentIndex(currentIndex + 1);
       setAnswer("");
       setShowHint(false);
       setHintIndex(0);
       setFeedback(null);
-    } else {
-      // Lesson complete
-      navigate(`/student/${studentId}/progress`);
+      setConversationHistory([]);
+      setFollowUpAnswer("");
     }
   };
 
@@ -305,27 +380,140 @@ export default function Lesson() {
           </>
         ) : (
           <>
-            {/* Feedback */}
-            <div
-              className={`card feedback-card ${
-                feedback.score >= 35 ? "success" : "needs-work"
-              }`}
-            >
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                <div className="score-display">{feedback.score}/50</div>
-                {voiceAvailable && (
-                  <button
-                    className="btn btn-secondary"
-                    onClick={() => speak(feedback.comment)}
-                    disabled={isSpeaking}
-                    style={{ padding: "8px 12px" }}
-                    title="Read feedback aloud"
-                  >
-                    {isSpeaking ? "🔊" : "🔈"}
-                  </button>
-                )}
+            {/* Coach Conversation */}
+            <div className="coach-conversation" style={{ marginTop: "16px" }}>
+              {/* Score indicator */}
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "12px",
+                  marginBottom: "16px",
+                  padding: "12px",
+                  background: feedback.isCorrect ? "#e8f5e9" : "#fff3e0",
+                  borderRadius: "8px",
+                }}
+              >
+                <span style={{ fontSize: "1.5rem" }}>{feedback.isCorrect ? "✨" : "💭"}</span>
+                <div>
+                  <p style={{ margin: 0, fontWeight: 600, color: feedback.isCorrect ? "#2e7d32" : "#ef6c00" }}>
+                    {feedback.encouragement}
+                  </p>
+                  <p style={{ margin: 0, fontSize: "0.85rem", color: "#666" }}>
+                    Score: {feedback.score}/100
+                  </p>
+                </div>
               </div>
-              <p>{feedback.comment}</p>
+
+              {/* Conversation history */}
+              <div
+                style={{
+                  maxHeight: "300px",
+                  overflowY: "auto",
+                  marginBottom: "16px",
+                }}
+              >
+                {conversationHistory.map((msg, i) => (
+                  <div
+                    key={i}
+                    style={{
+                      display: "flex",
+                      justifyContent: msg.role === "student" ? "flex-end" : "flex-start",
+                      marginBottom: "12px",
+                    }}
+                  >
+                    <div
+                      style={{
+                        maxWidth: "85%",
+                        padding: "12px 16px",
+                        borderRadius: msg.role === "student" ? "16px 16px 4px 16px" : "16px 16px 16px 4px",
+                        background: msg.role === "student" ? "#667eea" : "#f5f5f5",
+                        color: msg.role === "student" ? "white" : "#333",
+                      }}
+                    >
+                      {msg.role === "coach" && (
+                        <span style={{ marginRight: "8px" }}>🤖</span>
+                      )}
+                      {msg.message}
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Follow-up input */}
+              {feedback.shouldContinue && feedback.followUpQuestion && (
+                <div style={{ marginBottom: "16px" }}>
+                  <div style={{ display: "flex", gap: "8px" }}>
+                    <input
+                      type="text"
+                      value={followUpAnswer}
+                      onChange={(e) => setFollowUpAnswer(e.target.value)}
+                      placeholder="Type your response..."
+                      disabled={isConversing}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" && followUpAnswer.trim()) {
+                          handleFollowUpSubmit();
+                        }
+                      }}
+                      style={{
+                        flex: 1,
+                        padding: "12px 16px",
+                        borderRadius: "24px",
+                        border: "2px solid #e0e0e0",
+                        fontSize: "1rem",
+                      }}
+                    />
+                    <button
+                      className="btn btn-primary"
+                      onClick={handleFollowUpSubmit}
+                      disabled={!followUpAnswer.trim() || isConversing}
+                      style={{ borderRadius: "24px", padding: "12px 20px" }}
+                    >
+                      {isConversing ? "..." : "Send"}
+                    </button>
+                  </div>
+                  {voiceAvailable && (
+                    <button
+                      className={`btn ${isRecording ? "btn-primary" : "btn-secondary"}`}
+                      onClick={async () => {
+                        if (isRecording) {
+                          const text = await stopRecording();
+                          if (text) setFollowUpAnswer(text);
+                        } else {
+                          await startRecording();
+                        }
+                      }}
+                      disabled={isConversing || isTranscribing}
+                      style={{
+                        marginTop: "8px",
+                        width: "100%",
+                        background: isRecording ? "#f44336" : undefined,
+                      }}
+                    >
+                      {isRecording
+                        ? `🛑 Stop (${recordingDuration}s)`
+                        : isTranscribing
+                        ? "⏳ Transcribing..."
+                        : "🎤 Use Voice"}
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {/* Speak last coach message */}
+              {voiceAvailable && conversationHistory.length > 0 && (
+                <button
+                  className="btn btn-secondary"
+                  onClick={() => {
+                    const lastCoachMsg = [...conversationHistory].reverse().find((m) => m.role === "coach");
+                    if (lastCoachMsg) speak(lastCoachMsg.message);
+                  }}
+                  disabled={isSpeaking}
+                  style={{ marginBottom: "16px", width: "100%" }}
+                >
+                  {isSpeaking ? "🔊 Speaking..." : "🔈 Read Coach Response"}
+                </button>
+              )}
             </div>
 
             <div className="nav-buttons">
