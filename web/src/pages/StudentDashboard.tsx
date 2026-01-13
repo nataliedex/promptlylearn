@@ -42,7 +42,7 @@ export default function StudentDashboard() {
     loadData();
   }, [studentId]);
 
-  const handleStartLesson = async (lesson: LessonSummary) => {
+  const handleStartLesson = async (lesson: LessonSummary, mode: "voice" | "type") => {
     if (!student) return;
 
     try {
@@ -52,7 +52,7 @@ export default function StudentDashboard() {
         lessonId: lesson.id,
         lessonTitle: lesson.title,
       });
-      navigate(`/student/${student.id}/lesson/${lesson.id}?session=${session.id}`);
+      navigate(`/student/${student.id}/lesson/${lesson.id}?session=${session.id}&mode=${mode}`);
     } catch (err) {
       console.error("Failed to start lesson:", err);
     }
@@ -123,20 +123,48 @@ export default function StudentDashboard() {
       <h2 style={{ color: "white", marginBottom: "16px" }}>Available Lessons</h2>
       <div className="lesson-grid">
         {lessons.map((lesson) => (
-          <div
-            key={lesson.id}
-            className="card lesson-card"
-            onClick={() => handleStartLesson(lesson)}
-          >
+          <div key={lesson.id} className="card lesson-card" style={{ cursor: "default" }}>
             <h3>{lesson.title}</h3>
             <p>{lesson.description}</p>
-            <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+            <div style={{ display: "flex", gap: "8px", alignItems: "center", marginBottom: "16px" }}>
               <span className={`difficulty-badge difficulty-${lesson.difficulty}`}>
                 {lesson.difficulty}
               </span>
               <span style={{ color: "#666", fontSize: "0.9rem" }}>
                 {lesson.promptCount} questions
               </span>
+            </div>
+            <div style={{ display: "flex", gap: "12px" }}>
+              <button
+                className="btn btn-primary"
+                onClick={() => handleStartLesson(lesson, "voice")}
+                style={{
+                  flex: 1,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: "8px",
+                  padding: "12px 16px",
+                }}
+              >
+                <span style={{ fontSize: "1.2rem" }}>🎤</span>
+                <span>Voice</span>
+              </button>
+              <button
+                className="btn btn-secondary"
+                onClick={() => handleStartLesson(lesson, "type")}
+                style={{
+                  flex: 1,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: "8px",
+                  padding: "12px 16px",
+                }}
+              >
+                <span style={{ fontSize: "1.2rem" }}>⌨️</span>
+                <span>Type</span>
+              </button>
             </div>
           </div>
         ))}

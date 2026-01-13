@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { useParams, useNavigate, useSearchParams, Link } from "react-router-dom";
 import {
   getLesson,
@@ -14,10 +14,14 @@ import {
 } from "../services/api";
 import { useVoice } from "../hooks/useVoice";
 
+type LessonMode = "voice" | "type";
+type VoiceState = "idle" | "speaking" | "listening" | "processing";
+
 export default function Lesson() {
   const { studentId, lessonId } = useParams<{ studentId: string; lessonId: string }>();
   const [searchParams] = useSearchParams();
   const sessionId = searchParams.get("session");
+  const mode = (searchParams.get("mode") as LessonMode) || "type";
   const navigate = useNavigate();
 
   const [lesson, setLesson] = useState<LessonType | null>(null);
@@ -33,6 +37,11 @@ export default function Lesson() {
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
 
+  // Voice mode state
+  const [voiceState, setVoiceState] = useState<VoiceState>("idle");
+  const [voiceStarted, setVoiceStarted] = useState(false);
+  const isProcessingRef = useRef(false);
+
   const {
     isRecording,
     isTranscribing,
@@ -46,6 +55,15 @@ export default function Lesson() {
     cancelRecording,
   } = useVoice();
 
+  // Update voice state based on hook states
+  useEffect(() => {
+    if (isSpeaking) setVoiceState("speaking");
+    else if (isRecording) setVoiceState("listening");
+    else if (isTranscribing) setVoiceState("processing");
+    else if (!isProcessingRef.current) setVoiceState("idle");
+  }, [isSpeaking, isRecording, isTranscribing]);
+
+  // Load lesson data
   useEffect(() => {
     async function loadData() {
       if (!lessonId || !sessionId) return;
@@ -70,69 +88,116 @@ export default function Lesson() {
 
   const currentPrompt = lesson?.prompts[currentIndex];
 
-  // Speak the question when it loads
+  // Voice mode: Start the question flow when prompt loads
   useEffect(() => {
-    if (currentPrompt && voiceAvailable && !feedback) {
-      speak(currentPrompt.input);
+    if (mode === "voice" && currentPrompt && voiceAvailable && !feedback && !voiceStarted) {
+      setVoiceStarted(true);
+      startVoiceFlow();
     }
-  }, [currentPrompt?.id, voiceAvailable]);
+  }, [currentPrompt?.id, voiceAvailable, mode, feedback, voiceStarted]);
 
-  // Speak feedback when it arrives
+  // Voice mode: Handle feedback flow
   useEffect(() => {
-    if (feedback && voiceAvailable) {
-      speak(feedback.comment);
+    if (mode === "voice" && feedback && voiceAvailable && !isProcessingRef.current) {
+      handleVoiceFeedbackFlow();
     }
-  }, [feedback, voiceAvailable]);
+  }, [feedback, mode, voiceAvailable]);
 
-  const handleVoiceInput = async () => {
-    if (isRecording) {
-      const text = await stopRecording();
-      if (text) {
-        setAnswer(text);
-      }
-    } else {
+  const startVoiceFlow = async () => {
+    if (!currentPrompt || isProcessingRef.current) return;
+    isProcessingRef.current = true;
+    setVoiceState("speaking");
+
+    // Speak the question
+    await speak(currentPrompt.input);
+
+    // Wait a moment then start recording
+    await new Promise((r) => setTimeout(r, 500));
+
+    setVoiceState("listening");
+    await startRecording();
+    isProcessingRef.current = false;
+  };
+
+  const handleVoiceFeedbackFlow = async () => {
+    if (!feedback || isProcessingRef.current) return;
+    isProcessingRef.current = true;
+    setVoiceState("speaking");
+
+    // Speak feedback and follow-up question
+    const message = feedback.followUpQuestion
+      ? `${feedback.feedback} ${feedback.followUpQuestion}`
+      : feedback.feedback;
+
+    await speak(message);
+
+    // If there's a follow-up question, start recording for response
+    if (feedback.shouldContinue && feedback.followUpQuestion) {
+      await new Promise((r) => setTimeout(r, 500));
+      setVoiceState("listening");
       await startRecording();
     }
+
+    isProcessingRef.current = false;
   };
 
-  const handleShowHint = () => {
-    if (!currentPrompt) return;
-    if (!showHint) {
-      setShowHint(true);
-    } else if (hintIndex < currentPrompt.hints.length - 1) {
-      setHintIndex(hintIndex + 1);
+  // Voice mode: Handle tap to stop and submit
+  const handleVoiceTap = async () => {
+    if (isRecording) {
+      setVoiceState("processing");
+      isProcessingRef.current = true;
+
+      const text = await stopRecording();
+
+      if (text) {
+        if (!feedback) {
+          // This is the main answer
+          setAnswer(text);
+          await submitAnswer(text);
+        } else {
+          // This is a follow-up response
+          setFollowUpAnswer(text);
+          await submitFollowUp(text);
+        }
+      } else {
+        // No text transcribed, restart recording
+        await new Promise((r) => setTimeout(r, 500));
+        setVoiceState("listening");
+        await startRecording();
+        isProcessingRef.current = false;
+      }
     }
   };
 
-  const handleSubmit = async () => {
-    if (!answer.trim() || !currentPrompt || !session || !lessonId) return;
+  const submitAnswer = async (answerText: string) => {
+    if (!answerText.trim() || !currentPrompt || !session || !lessonId) {
+      isProcessingRef.current = false;
+      return;
+    }
 
     setSubmitting(true);
-    setFeedback(null);
-    setConversationHistory([]);
+    setVoiceState("processing");
 
     try {
-      // Get conversational coach feedback
       const coachResponse = await getCoachFeedback(
         lessonId,
         currentPrompt.id,
-        answer.trim(),
+        answerText.trim(),
         lesson?.gradeLevel
       );
 
       setFeedback(coachResponse);
 
-      // Initialize conversation history with the feedback
       if (coachResponse.followUpQuestion) {
         setConversationHistory([
           { role: "coach", message: `${coachResponse.feedback} ${coachResponse.followUpQuestion}` },
         ]);
       }
 
-      // Update session with response
+      // Update session
       const response: PromptResponse = {
         promptId: currentPrompt.id,
-        response: answer.trim(),
+        response: answerText.trim(),
         hintUsed: showHint,
       };
 
@@ -148,42 +213,41 @@ export default function Lesson() {
 
       setSession((prev) =>
         prev
-          ? {
-              ...prev,
-              submission: { ...prev.submission, responses: updatedResponses },
-            }
+          ? { ...prev, submission: { ...prev.submission, responses: updatedResponses } }
           : null
       );
     } catch (err) {
       console.error("Failed to submit:", err);
     } finally {
       setSubmitting(false);
+      isProcessingRef.current = false;
     }
   };
 
-  const handleFollowUpSubmit = async () => {
-    if (!followUpAnswer.trim() || !currentPrompt || !lessonId || !feedback) return;
+  const submitFollowUp = async (responseText: string) => {
+    if (!responseText.trim() || !currentPrompt || !lessonId || !feedback) {
+      isProcessingRef.current = false;
+      return;
+    }
 
     setIsConversing(true);
+    setVoiceState("processing");
 
     try {
-      // Add student's response to history
       const newHistory: ConversationMessage[] = [
         ...conversationHistory,
-        { role: "student", message: followUpAnswer.trim() },
+        { role: "student", message: responseText.trim() },
       ];
 
-      // Get coach's response
       const coachResponse = await continueCoachConversation(
         lessonId,
         currentPrompt.id,
         answer,
-        followUpAnswer.trim(),
+        responseText.trim(),
         newHistory,
         lesson?.gradeLevel
       );
 
-      // Add coach response to history
       const coachMessage = coachResponse.followUpQuestion
         ? `${coachResponse.feedback} ${coachResponse.followUpQuestion}`
         : coachResponse.feedback;
@@ -191,7 +255,6 @@ export default function Lesson() {
       newHistory.push({ role: "coach", message: coachMessage });
       setConversationHistory(newHistory);
 
-      // Update feedback state to track if conversation should continue
       setFeedback((prev) =>
         prev
           ? {
@@ -203,10 +266,61 @@ export default function Lesson() {
       );
 
       setFollowUpAnswer("");
+
+      // In voice mode, speak the response and maybe continue recording
+      if (mode === "voice") {
+        isProcessingRef.current = true;
+        setVoiceState("speaking");
+        await speak(coachMessage);
+
+        if (coachResponse.shouldContinue && coachResponse.followUpQuestion) {
+          await new Promise((r) => setTimeout(r, 500));
+          setVoiceState("listening");
+          await startRecording();
+        }
+        isProcessingRef.current = false;
+      }
     } catch (err) {
       console.error("Failed to continue conversation:", err);
     } finally {
       setIsConversing(false);
+      if (mode !== "voice") isProcessingRef.current = false;
+    }
+  };
+
+  // Type mode handlers
+  const handleShowHint = () => {
+    if (!currentPrompt) return;
+    if (!showHint) {
+      setShowHint(true);
+    } else if (hintIndex < currentPrompt.hints.length - 1) {
+      setHintIndex(hintIndex + 1);
+    }
+  };
+
+  const handleSubmit = async () => {
+    await submitAnswer(answer);
+  };
+
+  const handleFollowUpSubmit = async () => {
+    await submitFollowUp(followUpAnswer);
+  };
+
+  const handleVoiceInput = async () => {
+    if (isRecording) {
+      const text = await stopRecording();
+      if (text) setAnswer(text);
+    } else {
+      await startRecording();
+    }
+  };
+
+  const handleFollowUpVoiceInput = async () => {
+    if (isRecording) {
+      const text = await stopRecording();
+      if (text) setFollowUpAnswer(text);
+    } else {
+      await startRecording();
     }
   };
 
@@ -216,14 +330,13 @@ export default function Lesson() {
     const isComplete = currentIndex >= lesson.prompts.length - 1;
 
     if (isComplete) {
-      // Update session as completed
       await updateSession(session.id, {
         currentPromptIndex: currentIndex + 1,
         status: "completed",
         completedAt: new Date().toISOString(),
         evaluation: {
           totalScore: Math.round(
-            session.submission.responses.reduce((sum, r) => sum + (feedback?.score || 50), 0) /
+            session.submission.responses.reduce((sum) => sum + (feedback?.score || 50), 0) /
               Math.max(session.submission.responses.length, 1)
           ),
           feedback: "Great work completing the lesson!",
@@ -235,7 +348,6 @@ export default function Lesson() {
       });
       navigate(`/student/${studentId}/progress`);
     } else {
-      // Move to next question
       await updateSession(session.id, {
         currentPromptIndex: currentIndex + 1,
       });
@@ -246,6 +358,8 @@ export default function Lesson() {
       setFeedback(null);
       setConversationHistory([]);
       setFollowUpAnswer("");
+      setVoiceStarted(false);
+      isProcessingRef.current = false;
     }
   };
 
@@ -272,7 +386,178 @@ export default function Lesson() {
   }
 
   const progress = ((currentIndex + 1) / lesson.prompts.length) * 100;
+  const isVoiceMode = mode === "voice";
 
+  // Voice mode UI
+  if (isVoiceMode) {
+    return (
+      <div className="container">
+        <Link to={`/student/${studentId}`} className="back-btn">
+          ← Exit Lesson
+        </Link>
+
+        <div className="header">
+          <h1>{lesson.title}</h1>
+          <p>
+            Question {currentIndex + 1} of {lesson.prompts.length}
+          </p>
+        </div>
+
+        {/* Progress bar */}
+        <div className="card" style={{ padding: "12px 24px" }}>
+          <div className="progress-bar">
+            <div className="progress-bar-fill" style={{ width: `${progress}%` }}></div>
+          </div>
+        </div>
+
+        {/* Voice interaction card */}
+        <div
+          className="card"
+          style={{
+            textAlign: "center",
+            padding: "32px",
+            minHeight: "400px",
+            display: "flex",
+            flexDirection: "column",
+            justifyContent: "center",
+          }}
+          onClick={voiceState === "listening" ? handleVoiceTap : undefined}
+        >
+          {/* Question display */}
+          {!feedback && (
+            <div style={{ marginBottom: "32px" }}>
+              <h2 style={{ fontSize: "1.3rem", lineHeight: 1.5 }}>{currentPrompt.input}</h2>
+            </div>
+          )}
+
+          {/* Voice state indicator */}
+          <div style={{ marginBottom: "24px" }}>
+            {voiceState === "speaking" && (
+              <div className="voice-indicator speaking">
+                <div style={{ fontSize: "4rem", marginBottom: "16px" }}>🔊</div>
+                <p style={{ fontSize: "1.2rem", color: "#667eea" }}>Coach is speaking...</p>
+              </div>
+            )}
+
+            {voiceState === "listening" && (
+              <div
+                className="voice-indicator listening"
+                style={{ cursor: "pointer" }}
+              >
+                <div
+                  style={{
+                    fontSize: "5rem",
+                    marginBottom: "16px",
+                    animation: "pulse 1.5s infinite",
+                  }}
+                >
+                  🎤
+                </div>
+                <p style={{ fontSize: "1.2rem", color: "#4caf50", fontWeight: 600 }}>
+                  Listening... ({recordingDuration}s)
+                </p>
+                <p style={{ fontSize: "1rem", color: "#666", marginTop: "8px" }}>
+                  Tap anywhere when done speaking
+                </p>
+              </div>
+            )}
+
+            {voiceState === "processing" && (
+              <div className="voice-indicator processing">
+                <div className="loading-spinner" style={{ margin: "0 auto 16px" }}></div>
+                <p style={{ fontSize: "1.2rem", color: "#666" }}>
+                  {isTranscribing ? "Transcribing..." : "Thinking..."}
+                </p>
+              </div>
+            )}
+
+            {voiceState === "idle" && !feedback && (
+              <div className="voice-indicator idle">
+                <p style={{ fontSize: "1rem", color: "#666" }}>Starting voice interaction...</p>
+              </div>
+            )}
+          </div>
+
+          {/* Feedback display in voice mode */}
+          {feedback && (
+            <div style={{ marginBottom: "24px" }}>
+              {/* Score */}
+              <div
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: "12px",
+                  padding: "12px 24px",
+                  background: feedback.isCorrect ? "#e8f5e9" : "#fff3e0",
+                  borderRadius: "24px",
+                  marginBottom: "16px",
+                }}
+              >
+                <span style={{ fontSize: "1.5rem" }}>{feedback.isCorrect ? "✨" : "💭"}</span>
+                <span style={{ fontWeight: 600, color: feedback.isCorrect ? "#2e7d32" : "#ef6c00" }}>
+                  {feedback.encouragement}
+                </span>
+              </div>
+
+              {/* Conversation bubbles */}
+              <div style={{ maxHeight: "200px", overflowY: "auto", marginTop: "16px" }}>
+                {conversationHistory.map((msg, i) => (
+                  <div
+                    key={i}
+                    style={{
+                      display: "flex",
+                      justifyContent: msg.role === "student" ? "flex-end" : "flex-start",
+                      marginBottom: "8px",
+                    }}
+                  >
+                    <div
+                      style={{
+                        maxWidth: "85%",
+                        padding: "10px 14px",
+                        borderRadius: msg.role === "student" ? "16px 16px 4px 16px" : "16px 16px 16px 4px",
+                        background: msg.role === "student" ? "#667eea" : "#f0f0f0",
+                        color: msg.role === "student" ? "white" : "#333",
+                        fontSize: "0.95rem",
+                        textAlign: "left",
+                      }}
+                    >
+                      {msg.message}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Voice error */}
+          {voiceError && (
+            <p style={{ color: "#f44336", marginTop: "16px" }}>{voiceError}</p>
+          )}
+
+          {/* Next button (shows when conversation is done) */}
+          {feedback && !feedback.shouldContinue && voiceState === "idle" && (
+            <button
+              className="btn btn-primary"
+              onClick={handleNext}
+              style={{ marginTop: "24px", padding: "16px 32px", fontSize: "1.1rem" }}
+            >
+              {currentIndex < lesson.prompts.length - 1 ? "Next Question →" : "Finish Lesson 🎉"}
+            </button>
+          )}
+        </div>
+
+        {/* CSS for pulse animation */}
+        <style>{`
+          @keyframes pulse {
+            0%, 100% { transform: scale(1); opacity: 1; }
+            50% { transform: scale(1.1); opacity: 0.8; }
+          }
+        `}</style>
+      </div>
+    );
+  }
+
+  // Type mode UI (original)
   return (
     <div className="container">
       <Link to={`/student/${studentId}`} className="back-btn">
@@ -295,20 +580,7 @@ export default function Lesson() {
 
       {/* Question */}
       <div className="card question-card">
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "12px" }}>
-          <h2 style={{ flex: 1 }}>{currentPrompt.input}</h2>
-          {voiceAvailable && (
-            <button
-              className="btn btn-secondary"
-              onClick={() => speak(currentPrompt.input)}
-              disabled={isSpeaking}
-              style={{ padding: "8px 12px", flexShrink: 0 }}
-              title="Read question aloud"
-            >
-              {isSpeaking ? "🔊" : "🔈"}
-            </button>
-          )}
-        </div>
+        <h2>{currentPrompt.input}</h2>
 
         {!feedback ? (
           <>
@@ -316,34 +588,9 @@ export default function Lesson() {
               <textarea
                 value={answer}
                 onChange={(e) => setAnswer(e.target.value)}
-                placeholder={isRecording ? "🎤 Listening..." : isTranscribing ? "⏳ Transcribing..." : "Type your answer here or use the microphone..."}
-                disabled={submitting || isRecording || isTranscribing}
+                placeholder="Type your answer here..."
+                disabled={submitting}
               />
-              {voiceAvailable && (
-                <>
-                  <button
-                    className={`btn ${isRecording ? "btn-primary" : "btn-secondary"}`}
-                    onClick={handleVoiceInput}
-                    disabled={submitting || isTranscribing}
-                    style={{
-                      marginTop: "8px",
-                      width: "100%",
-                      background: isRecording ? "#f44336" : undefined,
-                    }}
-                  >
-                    {isRecording
-                      ? `🛑 Stop Recording (${recordingDuration}s)`
-                      : isTranscribing
-                      ? "⏳ Transcribing..."
-                      : "🎤 Use Voice Input"}
-                  </button>
-                  {voiceError && (
-                    <p style={{ color: "#f44336", fontSize: "0.9rem", marginTop: "8px" }}>
-                      {voiceError}
-                    </p>
-                  )}
-                </>
-              )}
             </div>
 
             {/* Hints */}
@@ -362,10 +609,7 @@ export default function Lesson() {
               <button
                 className="btn btn-secondary"
                 onClick={handleShowHint}
-                disabled={
-                  submitting ||
-                  (showHint && hintIndex >= currentPrompt.hints.length - 1)
-                }
+                disabled={submitting || (showHint && hintIndex >= currentPrompt.hints.length - 1)}
               >
                 {showHint ? "More Hints" : "Need a Hint?"}
               </button>
@@ -406,13 +650,7 @@ export default function Lesson() {
               </div>
 
               {/* Conversation history */}
-              <div
-                style={{
-                  maxHeight: "300px",
-                  overflowY: "auto",
-                  marginBottom: "16px",
-                }}
-              >
+              <div style={{ maxHeight: "300px", overflowY: "auto", marginBottom: "16px" }}>
                 {conversationHistory.map((msg, i) => (
                   <div
                     key={i}
@@ -431,9 +669,7 @@ export default function Lesson() {
                         color: msg.role === "student" ? "white" : "#333",
                       }}
                     >
-                      {msg.role === "coach" && (
-                        <span style={{ marginRight: "8px" }}>🤖</span>
-                      )}
+                      {msg.role === "coach" && <span style={{ marginRight: "8px" }}>🤖</span>}
                       {msg.message}
                     </div>
                   </div>
@@ -472,55 +708,13 @@ export default function Lesson() {
                       {isConversing ? "..." : "Send"}
                     </button>
                   </div>
-                  {voiceAvailable && (
-                    <button
-                      className={`btn ${isRecording ? "btn-primary" : "btn-secondary"}`}
-                      onClick={async () => {
-                        if (isRecording) {
-                          const text = await stopRecording();
-                          if (text) setFollowUpAnswer(text);
-                        } else {
-                          await startRecording();
-                        }
-                      }}
-                      disabled={isConversing || isTranscribing}
-                      style={{
-                        marginTop: "8px",
-                        width: "100%",
-                        background: isRecording ? "#f44336" : undefined,
-                      }}
-                    >
-                      {isRecording
-                        ? `🛑 Stop (${recordingDuration}s)`
-                        : isTranscribing
-                        ? "⏳ Transcribing..."
-                        : "🎤 Use Voice"}
-                    </button>
-                  )}
                 </div>
-              )}
-
-              {/* Speak last coach message */}
-              {voiceAvailable && conversationHistory.length > 0 && (
-                <button
-                  className="btn btn-secondary"
-                  onClick={() => {
-                    const lastCoachMsg = [...conversationHistory].reverse().find((m) => m.role === "coach");
-                    if (lastCoachMsg) speak(lastCoachMsg.message);
-                  }}
-                  disabled={isSpeaking}
-                  style={{ marginBottom: "16px", width: "100%" }}
-                >
-                  {isSpeaking ? "🔊 Speaking..." : "🔈 Read Coach Response"}
-                </button>
               )}
             </div>
 
             <div className="nav-buttons">
               <button className="btn btn-primary" onClick={handleNext}>
-                {currentIndex < lesson.prompts.length - 1
-                  ? "Next Question →"
-                  : "Finish Lesson 🎉"}
+                {currentIndex < lesson.prompts.length - 1 ? "Next Question →" : "Finish Lesson 🎉"}
               </button>
             </div>
           </>

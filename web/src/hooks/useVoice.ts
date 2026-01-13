@@ -178,38 +178,43 @@ export function useVoice(): UseVoiceReturn {
     }
   }, [isRecording]);
 
-  const speak = useCallback(async (text: string) => {
+  const speak = useCallback(async (text: string): Promise<void> => {
     if (!voiceAvailable || isSpeaking) return;
 
     setIsSpeaking(true);
     setError(null);
 
-    try {
-      const { audio, format } = await textToSpeech(text);
+    return new Promise(async (resolve) => {
+      try {
+        const { audio, format } = await textToSpeech(text);
 
-      // Create audio from base64
-      const audioBlob = new Blob(
-        [Uint8Array.from(atob(audio), (c) => c.charCodeAt(0))],
-        { type: `audio/${format}` }
-      );
-      const audioUrl = URL.createObjectURL(audioBlob);
-      const audioElement = new Audio(audioUrl);
+        // Create audio from base64
+        const audioBlob = new Blob(
+          [Uint8Array.from(atob(audio), (c) => c.charCodeAt(0))],
+          { type: `audio/${format}` }
+        );
+        const audioUrl = URL.createObjectURL(audioBlob);
+        const audioElement = new Audio(audioUrl);
 
-      audioElement.onended = () => {
+        audioElement.onended = () => {
+          setIsSpeaking(false);
+          URL.revokeObjectURL(audioUrl);
+          resolve();
+        };
+
+        audioElement.onerror = () => {
+          setIsSpeaking(false);
+          URL.revokeObjectURL(audioUrl);
+          resolve();
+        };
+
+        await audioElement.play();
+      } catch (err) {
+        setError("Failed to play audio.");
         setIsSpeaking(false);
-        URL.revokeObjectURL(audioUrl);
-      };
-
-      audioElement.onerror = () => {
-        setIsSpeaking(false);
-        URL.revokeObjectURL(audioUrl);
-      };
-
-      await audioElement.play();
-    } catch (err) {
-      setError("Failed to play audio.");
-      setIsSpeaking(false);
-    }
+        resolve();
+      }
+    });
   }, [voiceAvailable, isSpeaking]);
 
   return {
