@@ -26,6 +26,7 @@ export function useVoice(): UseVoiceReturn {
   const recordingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const [recordingDuration, setRecordingDuration] = useState(0);
   const durationIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const isSpeakingRef = useRef(false); // Use ref to track speaking state for blocking check
 
   // Check if voice features are available on mount
   useEffect(() => {
@@ -179,11 +180,18 @@ export function useVoice(): UseVoiceReturn {
   }, [isRecording]);
 
   const speak = useCallback(async (text: string): Promise<boolean> => {
-    if (!voiceAvailable || isSpeaking) {
-      console.log("Speak skipped: voiceAvailable=", voiceAvailable, "isSpeaking=", isSpeaking);
+    // Use ref for the blocking check to avoid stale state issues
+    if (!voiceAvailable) {
+      console.log("Speak skipped: voice not available");
       return false;
     }
 
+    if (isSpeakingRef.current) {
+      console.log("Speak skipped: already speaking");
+      return false;
+    }
+
+    isSpeakingRef.current = true;
     setIsSpeaking(true);
     setError(null);
 
@@ -191,6 +199,7 @@ export function useVoice(): UseVoiceReturn {
       try {
         console.log("Speaking:", text.substring(0, 50) + "...");
         const { audio, format } = await textToSpeech(text);
+        console.log("Got TTS response, format:", format, "audio length:", audio?.length);
 
         // Create audio from base64
         const audioBlob = new Blob(
@@ -201,28 +210,33 @@ export function useVoice(): UseVoiceReturn {
         const audioElement = new Audio(audioUrl);
 
         audioElement.onended = () => {
-          console.log("Speech ended");
+          console.log("Speech ended successfully");
+          isSpeakingRef.current = false;
           setIsSpeaking(false);
           URL.revokeObjectURL(audioUrl);
           resolve(true);
         };
 
         audioElement.onerror = (e) => {
-          console.error("Audio error:", e);
+          console.error("Audio playback error:", e);
+          isSpeakingRef.current = false;
           setIsSpeaking(false);
           URL.revokeObjectURL(audioUrl);
+          setError("Audio playback failed.");
           resolve(false);
         };
 
         await audioElement.play();
-      } catch (err) {
-        console.error("Speak error:", err);
-        setError("Failed to play audio.");
+        console.log("Audio playback started");
+      } catch (err: any) {
+        console.error("Speak error:", err?.message || err);
+        setError("Failed to play audio: " + (err?.message || "Unknown error"));
+        isSpeakingRef.current = false;
         setIsSpeaking(false);
         resolve(false);
       }
     });
-  }, [voiceAvailable, isSpeaking]);
+  }, [voiceAvailable]);
 
   return {
     isRecording,
