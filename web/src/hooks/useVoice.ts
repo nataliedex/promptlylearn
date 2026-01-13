@@ -180,14 +180,16 @@ export function useVoice(): UseVoiceReturn {
   }, [isRecording]);
 
   const speak = useCallback(async (text: string): Promise<boolean> => {
+    console.log("speak() called, voiceAvailable:", voiceAvailable, "isSpeakingRef:", isSpeakingRef.current);
+
     // Use ref for the blocking check to avoid stale state issues
     if (!voiceAvailable) {
-      console.log("Speak skipped: voice not available");
+      console.log("Speak SKIPPED: voice not available");
       return false;
     }
 
     if (isSpeakingRef.current) {
-      console.log("Speak skipped: already speaking");
+      console.log("Speak SKIPPED: already speaking");
       return false;
     }
 

@@ -107,11 +107,12 @@ export default function Lesson() {
     isProcessingRef.current = true;
     setVoiceState("speaking");
 
-    console.log("Starting voice flow, speaking question...");
+    console.log("=== START VOICE FLOW ===");
+    console.log("Speaking QUESTION:", currentPrompt.input.substring(0, 50) + "...");
 
     // Speak the question - wait for it to complete
     const speechSuccess = await speak(currentPrompt.input);
-    console.log("Speech completed, success:", speechSuccess);
+    console.log("QUESTION speech completed, success:", speechSuccess);
 
     // Only start recording after speech finishes
     if (speechSuccess) {
@@ -137,9 +138,10 @@ export default function Lesson() {
       ? `${coachFeedback} ${followUpQuestion}`
       : coachFeedback;
 
-    console.log("Speaking feedback...");
+    console.log("=== SPEAK FEEDBACK ===");
+    console.log("Speaking FEEDBACK:", message.substring(0, 50) + "...");
     const speechSuccess = await speak(message);
-    console.log("Feedback speech completed, success:", speechSuccess);
+    console.log("FEEDBACK speech completed, success:", speechSuccess);
 
     // If there's a follow-up question and speech worked, start recording for response
     if (shouldContinue && followUpQuestion && speechSuccess) {
