@@ -10,7 +10,7 @@ export interface UseVoiceReturn {
   recordingDuration: number;
   startRecording: () => Promise<void>;
   stopRecording: () => Promise<string | null>;
-  speak: (text: string) => Promise<void>;
+  speak: (text: string) => Promise<boolean>;
   cancelRecording: () => void;
 }
 
@@ -178,14 +178,18 @@ export function useVoice(): UseVoiceReturn {
     }
   }, [isRecording]);
 
-  const speak = useCallback(async (text: string): Promise<void> => {
-    if (!voiceAvailable || isSpeaking) return;
+  const speak = useCallback(async (text: string): Promise<boolean> => {
+    if (!voiceAvailable || isSpeaking) {
+      console.log("Speak skipped: voiceAvailable=", voiceAvailable, "isSpeaking=", isSpeaking);
+      return false;
+    }
 
     setIsSpeaking(true);
     setError(null);
 
     return new Promise(async (resolve) => {
       try {
+        console.log("Speaking:", text.substring(0, 50) + "...");
         const { audio, format } = await textToSpeech(text);
 
         // Create audio from base64
@@ -197,22 +201,25 @@ export function useVoice(): UseVoiceReturn {
         const audioElement = new Audio(audioUrl);
 
         audioElement.onended = () => {
+          console.log("Speech ended");
           setIsSpeaking(false);
           URL.revokeObjectURL(audioUrl);
-          resolve();
+          resolve(true);
         };
 
-        audioElement.onerror = () => {
+        audioElement.onerror = (e) => {
+          console.error("Audio error:", e);
           setIsSpeaking(false);
           URL.revokeObjectURL(audioUrl);
-          resolve();
+          resolve(false);
         };
 
         await audioElement.play();
       } catch (err) {
+        console.error("Speak error:", err);
         setError("Failed to play audio.");
         setIsSpeaking(false);
-        resolve();
+        resolve(false);
       }
     });
   }, [voiceAvailable, isSpeaking]);

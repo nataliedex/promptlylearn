@@ -101,14 +101,24 @@ export default function Lesson() {
     isProcessingRef.current = true;
     setVoiceState("speaking");
 
-    // Speak the question
-    await speak(currentPrompt.input);
+    console.log("Starting voice flow, speaking question...");
 
-    // Wait a moment then start recording
-    await new Promise((r) => setTimeout(r, 500));
+    // Speak the question - wait for it to complete
+    const speechSuccess = await speak(currentPrompt.input);
+    console.log("Speech completed, success:", speechSuccess);
 
-    setVoiceState("listening");
-    await startRecording();
+    // Only start recording after speech finishes
+    if (speechSuccess) {
+      // Wait a moment then start recording
+      await new Promise((r) => setTimeout(r, 500));
+      console.log("Starting recording...");
+      setVoiceState("listening");
+      await startRecording();
+    } else {
+      console.log("Speech failed, not starting recording");
+      setVoiceState("idle");
+    }
+
     isProcessingRef.current = false;
   };
 
@@ -121,11 +131,14 @@ export default function Lesson() {
       ? `${coachFeedback} ${followUpQuestion}`
       : coachFeedback;
 
-    await speak(message);
+    console.log("Speaking feedback...");
+    const speechSuccess = await speak(message);
+    console.log("Feedback speech completed, success:", speechSuccess);
 
-    // If there's a follow-up question, start recording for response
-    if (shouldContinue && followUpQuestion) {
+    // If there's a follow-up question and speech worked, start recording for response
+    if (shouldContinue && followUpQuestion && speechSuccess) {
       await new Promise((r) => setTimeout(r, 500));
+      console.log("Starting recording for follow-up...");
       setVoiceState("listening");
       await startRecording();
       isProcessingRef.current = false;
