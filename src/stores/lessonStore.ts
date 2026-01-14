@@ -3,6 +3,7 @@ import path from "path";
 import { Lesson } from "../domain/lesson";
 
 const LESSONS_DIR = path.join(__dirname, "../data/lessons");
+const ARCHIVE_DIR = path.join(LESSONS_DIR, "archive");
 
 /**
  * Ensure the lessons directory exists
@@ -78,4 +79,80 @@ export function deleteLesson(id: string): boolean {
   }
 
   return false;
+}
+
+/**
+ * Ensure the archive directory exists
+ */
+function ensureArchiveDir(): void {
+  if (!fs.existsSync(ARCHIVE_DIR)) {
+    fs.mkdirSync(ARCHIVE_DIR, { recursive: true });
+  }
+}
+
+/**
+ * Archive a lesson by ID (move to archive folder)
+ */
+export function archiveLesson(id: string): boolean {
+  ensureArchiveDir();
+
+  const sourcePath = path.join(LESSONS_DIR, `${id}.json`);
+  const destPath = path.join(ARCHIVE_DIR, `${id}.json`);
+
+  if (fs.existsSync(sourcePath)) {
+    // Read the lesson, add archivedAt timestamp, then move
+    const rawData = fs.readFileSync(sourcePath, "utf-8");
+    const lesson = JSON.parse(rawData);
+    lesson.archivedAt = new Date().toISOString();
+
+    fs.writeFileSync(destPath, JSON.stringify(lesson, null, 2), "utf-8");
+    fs.unlinkSync(sourcePath);
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Unarchive a lesson by ID (move back to main folder)
+ */
+export function unarchiveLesson(id: string): boolean {
+  const sourcePath = path.join(ARCHIVE_DIR, `${id}.json`);
+  const destPath = path.join(LESSONS_DIR, `${id}.json`);
+
+  if (fs.existsSync(sourcePath)) {
+    // Read the lesson, remove archivedAt timestamp, then move
+    const rawData = fs.readFileSync(sourcePath, "utf-8");
+    const lesson = JSON.parse(rawData);
+    delete lesson.archivedAt;
+
+    fs.writeFileSync(destPath, JSON.stringify(lesson, null, 2), "utf-8");
+    fs.unlinkSync(sourcePath);
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Get all archived lessons
+ */
+export function getArchivedLessons(): Lesson[] {
+  ensureArchiveDir();
+
+  const files = fs.readdirSync(ARCHIVE_DIR).filter(f => f.endsWith(".json"));
+  const lessons: Lesson[] = [];
+
+  for (const file of files) {
+    try {
+      const filePath = path.join(ARCHIVE_DIR, file);
+      const rawData = fs.readFileSync(filePath, "utf-8");
+      const lesson = JSON.parse(rawData) as Lesson;
+      lessons.push(lesson);
+    } catch {
+      // Skip invalid files
+    }
+  }
+
+  return lessons;
 }

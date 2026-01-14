@@ -5,7 +5,7 @@
   "main": "index.js",
   "scripts": {
     "dev": "nodemon --exec ts-node src/cli/runAssignment.ts",
-    "dev:api": "nodemon --exec ts-node src/api/index.ts",
+    "dev:api": "nodemon --ignore data/ --ignore web/ --exec ts-node src/api/index.ts",
     "dev:web": "cd web && npm run dev",
     "dev:all": "concurrently \"npm run dev:api\" \"npm run dev:web\"",
     "build": "tsc",

@@ -1,0 +1,37 @@
+{
+  "id": "understanding-addition-and-subtraction",
+  "title": "Understanding Addition and Subtraction",
+  "description": "In this lesson, students will learn how to solve simple addition and subtraction problems. They will explain their thinking and understand how numbers work together.",
+  "difficulty": "beginner",
+  "gradeLevel": "1st grade",
+  "standards": [
+    "RL.1.1",
+    "RL.1.2"
+  ],
+  "prompts": [
+    {
+      "id": "q1",
+      "type": "explain",
+      "input": "If you have 3 apples and you get 2 more apples, how many apples do you have now? Explain how you found your answer.",
+      "hints": [
+        "Think about how many apples you started with.",
+        "What happens when you add more apples?"
+      ],
+      "standards": [
+        "RL.1.1"
+      ]
+    },
+    {
+      "id": "q2",
+      "type": "explain",
+      "input": "You have 5 balloons and 2 pop. How many balloons do you have left? Explain your thinking.",
+      "hints": [
+        "Consider how many balloons you had before some popped.",
+        "What does it mean to take away balloons?"
+      ],
+      "standards": [
+        "RL.1.2"
+      ]
+    }
+  ]
+}

@@ -1,6 +1,12 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import { checkVoiceStatus, transcribeAudio, textToSpeech } from "../services/api";
 
+export interface RecordingResult {
+  text: string;
+  audioBase64: string;
+  audioFormat: string;
+}
+
 export interface UseVoiceReturn {
   isRecording: boolean;
   isTranscribing: boolean;
@@ -9,7 +15,7 @@ export interface UseVoiceReturn {
   error: string | null;
   recordingDuration: number;
   startRecording: () => Promise<void>;
-  stopRecording: () => Promise<string | null>;
+  stopRecording: () => Promise<RecordingResult | null>;
   speak: (text: string) => Promise<boolean>;
   cancelRecording: () => void;
 }
@@ -23,16 +29,40 @@ export function useVoice(): UseVoiceReturn {
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
-  const recordingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const recordingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [recordingDuration, setRecordingDuration] = useState(0);
-  const durationIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const durationIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const isSpeakingRef = useRef(false); // Use ref to track speaking state for blocking check
+  const currentAudioRef = useRef<HTMLAudioElement | null>(null); // Track current audio element
 
   // Check if voice features are available on mount
   useEffect(() => {
     checkVoiceStatus()
       .then(({ available }) => setVoiceAvailable(available))
       .catch(() => setVoiceAvailable(false));
+
+    // Cleanup on unmount
+    return () => {
+      // Stop any ongoing recording
+      if (mediaRecorderRef.current) {
+        mediaRecorderRef.current.stream?.getTracks().forEach((track) => track.stop());
+        mediaRecorderRef.current = null;
+      }
+      // Stop any ongoing audio playback
+      if (currentAudioRef.current) {
+        currentAudioRef.current.pause();
+        currentAudioRef.current = null;
+      }
+      // Clear timers
+      if (recordingTimeoutRef.current) {
+        clearTimeout(recordingTimeoutRef.current);
+      }
+      if (durationIntervalRef.current) {
+        clearInterval(durationIntervalRef.current);
+      }
+      // Reset refs
+      isSpeakingRef.current = false;
+    };
   }, []);
 
   const startRecording = useCallback(async () => {
@@ -82,7 +112,7 @@ export function useVoice(): UseVoiceReturn {
     }
   }, []);
 
-  const stopRecording = useCallback(async (): Promise<string | null> => {
+  const stopRecording = useCallback(async (): Promise<RecordingResult | null> => {
     // Clear timers
     if (recordingTimeoutRef.current) {
       clearTimeout(recordingTimeoutRef.current);
@@ -144,7 +174,12 @@ export function useVoice(): UseVoiceReturn {
           try {
             const { text } = await transcribeAudio(base64, format);
             setIsTranscribing(false);
-            resolve(text);
+            // Return both the transcribed text and the original audio
+            resolve({
+              text,
+              audioBase64: base64,
+              audioFormat: format,
+            });
           } catch (err: any) {
             console.error("Transcription error:", err);
             setError(err.message || "Failed to transcribe audio. Please try again.");
@@ -193,26 +228,53 @@ export function useVoice(): UseVoiceReturn {
       return false;
     }
 
+    // Validate text
+    if (!text || typeof text !== "string" || text.trim().length === 0) {
+      console.log("Speak SKIPPED: invalid text", { text, type: typeof text });
+      return false;
+    }
+
     isSpeakingRef.current = true;
     setIsSpeaking(true);
     setError(null);
 
-    return new Promise(async (resolve) => {
+    try {
+      console.log("Speaking:", text.substring(0, 50) + "...");
+      console.log("Full text length:", text.length);
+
+      // Step 1: Get audio from TTS API
+      let audio: string;
+      let format: string;
       try {
-        console.log("Speaking:", text.substring(0, 50) + "...");
-        const { audio, format } = await textToSpeech(text);
-        console.log("Got TTS response, format:", format, "audio length:", audio?.length);
+        const result = await textToSpeech(text);
+        audio = result.audio;
+        format = result.format;
+        console.log("TTS API response received, audio length:", audio?.length, "format:", format);
+      } catch (apiErr: any) {
+        console.error("TTS API error:", apiErr?.message, apiErr?.name);
+        throw new Error("TTS API failed: " + (apiErr?.message || "Unknown error"));
+      }
 
-        // Create audio from base64
-        const audioBlob = new Blob(
-          [Uint8Array.from(atob(audio), (c) => c.charCodeAt(0))],
-          { type: `audio/${format}` }
-        );
-        const audioUrl = URL.createObjectURL(audioBlob);
-        const audioElement = new Audio(audioUrl);
+      // Step 2: Create and play audio
+      // Clean up any previous audio element first
+      if (currentAudioRef.current) {
+        currentAudioRef.current.pause();
+        currentAudioRef.current = null;
+      }
 
+      const audioBlob = new Blob(
+        [Uint8Array.from(atob(audio), (c) => c.charCodeAt(0))],
+        { type: `audio/${format}` }
+      );
+      const audioUrl = URL.createObjectURL(audioBlob);
+      const audioElement = new Audio(audioUrl);
+      currentAudioRef.current = audioElement;
+
+      // Return a promise that resolves when audio finishes
+      return new Promise<boolean>((resolve) => {
         audioElement.onended = () => {
           console.log("Speech ended successfully");
+          currentAudioRef.current = null;
           isSpeakingRef.current = false;
           setIsSpeaking(false);
           URL.revokeObjectURL(audioUrl);
@@ -221,6 +283,7 @@ export function useVoice(): UseVoiceReturn {
 
         audioElement.onerror = (e) => {
           console.error("Audio playback error:", e);
+          currentAudioRef.current = null;
           isSpeakingRef.current = false;
           setIsSpeaking(false);
           URL.revokeObjectURL(audioUrl);
@@ -228,16 +291,30 @@ export function useVoice(): UseVoiceReturn {
           resolve(false);
         };
 
-        await audioElement.play();
-        console.log("Audio playback started");
-      } catch (err: any) {
-        console.error("Speak error:", err?.message || err);
-        setError("Failed to play audio: " + (err?.message || "Unknown error"));
-        isSpeakingRef.current = false;
-        setIsSpeaking(false);
-        resolve(false);
-      }
-    });
+        audioElement.play().catch((playErr) => {
+          console.error("Audio play() error:", playErr);
+          currentAudioRef.current = null;
+          isSpeakingRef.current = false;
+          setIsSpeaking(false);
+          URL.revokeObjectURL(audioUrl);
+          setError("Failed to start audio playback.");
+          resolve(false);
+        });
+
+        console.log("Audio playback initiated");
+      });
+    } catch (err: any) {
+      console.error("Speak error details:", {
+        message: err?.message,
+        name: err?.name,
+        stack: err?.stack,
+        text: text?.substring(0, 100),
+      });
+      setError("Failed to play audio: " + (err?.message || "Unknown error"));
+      isSpeakingRef.current = false;
+      setIsSpeaking(false);
+      return false;
+    }
   }, [voiceAvailable]);
 
   return {

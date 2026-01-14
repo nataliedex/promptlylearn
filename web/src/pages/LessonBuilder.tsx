@@ -5,11 +5,10 @@ import {
   generateQuestion,
   saveLesson,
   type Lesson,
-  type Prompt,
   type CreationMode,
 } from "../services/api";
 
-type Step = "mode" | "content" | "options" | "generating" | "review" | "saving";
+type Step = "mode" | "content" | "options" | "generating" | "review" | "saving" | "saved";
 
 const CREATION_MODES = [
   { value: "book-title" as CreationMode, label: "From a book (enter title)", description: "Generate questions about a specific book" },
@@ -95,7 +94,7 @@ export default function LessonBuilder() {
 
     try {
       await saveLesson(lesson);
-      navigate("/educator", { state: { message: "Lesson created successfully!" } });
+      setStep("saved");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to save lesson");
       setStep("review");
@@ -513,6 +512,45 @@ export default function LessonBuilder() {
         <div className="card" style={{ textAlign: "center", padding: "48px" }}>
           <div className="loading-spinner" style={{ borderTopColor: "#667eea", borderColor: "#e0e0e0" }}></div>
           <h2 style={{ marginTop: "16px" }}>Saving your lesson...</h2>
+        </div>
+      )}
+
+      {/* Step 7: Saved - Prompt to Assign */}
+      {step === "saved" && lesson && (
+        <div className="card" style={{ textAlign: "center", padding: "48px" }}>
+          <div style={{ fontSize: "3rem", marginBottom: "16px" }}>✓</div>
+          <h2 style={{ marginBottom: "8px", color: "#2e7d32" }}>Lesson Saved!</h2>
+          <p style={{ color: "#666", marginBottom: "32px" }}>
+            "{lesson.title}" has been created with {lesson.prompts.length} question{lesson.prompts.length !== 1 ? "s" : ""}.
+          </p>
+
+          <div style={{ marginBottom: "24px" }}>
+            <h3 style={{ marginBottom: "12px" }}>What would you like to do next?</h3>
+            <p style={{ color: "#666", fontSize: "0.9rem" }}>
+              Assign this lesson to a class so students can start working on it.
+            </p>
+          </div>
+
+          <div style={{ display: "flex", gap: "16px", justifyContent: "center", flexWrap: "wrap" }}>
+            <button
+              className="btn btn-primary"
+              onClick={() => navigate(`/educator/assign-lesson?lessonId=${lesson.id}`)}
+              style={{ padding: "16px 32px", fontSize: "1.1rem" }}
+            >
+              Assign to a Class
+            </button>
+            <button
+              className="btn btn-secondary"
+              onClick={() => navigate("/educator")}
+              style={{ padding: "16px 32px", fontSize: "1.1rem" }}
+            >
+              Go to Dashboard
+            </button>
+          </div>
+
+          <p style={{ marginTop: "24px", color: "#999", fontSize: "0.85rem" }}>
+            You can also assign this lesson later from the My Classes page.
+          </p>
         </div>
       )}
     </div>

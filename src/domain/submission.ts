@@ -19,6 +19,8 @@ export interface PromptResponse {
   hintUsed: boolean;
   inputSource?: "typed" | "voice"; // how the response was provided
   audioPath?: string; // path to saved audio recording (if voice input)
+  audioBase64?: string; // base64 encoded audio data (for web playback)
+  audioFormat?: string; // audio format (webm, mp4, etc.)
   reflectionAudioPath?: string; // path to reflection audio (if voice input)
   helpConversation?: CoachConversation; // conversation during question
   elaborationConversation?: CoachConversation; // coach helping elaborate after answering

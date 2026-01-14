@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
 import {
   getStudent,
-  getLessons,
+  getStudentLessons,
   getSessions,
   createSession,
   type Student,
@@ -24,13 +24,13 @@ export default function StudentDashboard() {
 
     async function loadData() {
       try {
-        const [studentData, lessonsData, sessionsData] = await Promise.all([
+        const [studentData, studentLessonsData, sessionsData] = await Promise.all([
           getStudent(studentId!),
-          getLessons(),
+          getStudentLessons(studentId!),
           getSessions(studentId, "completed"),
         ]);
         setStudent(studentData);
-        setLessons(lessonsData);
+        setLessons(studentLessonsData.lessons);
         setSessions(sessionsData);
       } catch (err) {
         console.error("Failed to load dashboard:", err);
@@ -96,7 +96,7 @@ export default function StudentDashboard() {
 
       <div className="header">
         <h1>Hi, {student.name}!</h1>
-        <p>Choose a lesson to start learning</p>
+        <p>{lessons.length > 0 ? "Ready to learn? Pick an assignment below!" : "Welcome back!"}</p>
       </div>
 
       {/* Stats */}
@@ -120,55 +120,68 @@ export default function StudentDashboard() {
       </div>
 
       {/* Lessons */}
-      <h2 style={{ color: "white", marginBottom: "16px" }}>Available Lessons</h2>
-      <div className="lesson-grid">
-        {lessons.map((lesson) => (
-          <div key={lesson.id} className="card lesson-card" style={{ cursor: "default" }}>
-            <h3>{lesson.title}</h3>
-            <p>{lesson.description}</p>
-            <div style={{ display: "flex", gap: "8px", alignItems: "center", marginBottom: "16px" }}>
-              <span className={`difficulty-badge difficulty-${lesson.difficulty}`}>
-                {lesson.difficulty}
-              </span>
-              <span style={{ color: "#666", fontSize: "0.9rem" }}>
-                {lesson.promptCount} questions
-              </span>
+      <h2 style={{ color: "white", marginBottom: "16px" }}>Your Assignments</h2>
+      {lessons.length === 0 ? (
+        <div className="card" style={{ textAlign: "center", padding: "48px" }}>
+          <div style={{ fontSize: "3rem", marginBottom: "16px" }}>📚</div>
+          <h3 style={{ margin: 0, marginBottom: "8px" }}>No assignments yet!</h3>
+          <p style={{ color: "#666", margin: 0 }}>
+            Your teacher will assign lessons for you to work on.
+          </p>
+          <p style={{ color: "#666", margin: 0, marginTop: "8px" }}>
+            Check back soon!
+          </p>
+        </div>
+      ) : (
+        <div className="lesson-grid">
+          {lessons.map((lesson) => (
+            <div key={lesson.id} className="card lesson-card" style={{ cursor: "default" }}>
+              <h3>{lesson.title}</h3>
+              <p>{lesson.description}</p>
+              <div style={{ display: "flex", gap: "8px", alignItems: "center", marginBottom: "16px" }}>
+                <span className={`difficulty-badge difficulty-${lesson.difficulty}`}>
+                  {lesson.difficulty}
+                </span>
+                <span style={{ color: "#666", fontSize: "0.9rem" }}>
+                  {lesson.promptCount} questions
+                </span>
+              </div>
+              <div style={{ display: "flex", gap: "12px" }}>
+                <button
+                  className="btn btn-primary"
+                  onClick={() => handleStartLesson(lesson, "voice")}
+                  style={{
+                    flex: 1,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    gap: "8px",
+                    padding: "12px 16px",
+                  }}
+                >
+                  <span style={{ fontSize: "1.2rem" }}>🎤</span>
+                  <span>Voice</span>
+                </button>
+                <button
+                  className="btn btn-secondary"
+                  onClick={() => handleStartLesson(lesson, "type")}
+                  style={{
+                    flex: 1,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    gap: "8px",
+                    padding: "12px 16px",
+                  }}
+                >
+                  <span style={{ fontSize: "1.2rem" }}>⌨️</span>
+                  <span>Type</span>
+                </button>
+              </div>
             </div>
-            <div style={{ display: "flex", gap: "12px" }}>
-              <button
-                className="btn btn-primary"
-                onClick={() => handleStartLesson(lesson, "voice")}
-                style={{
-                  flex: 1,
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  gap: "8px",
-                  padding: "12px 16px",
-                }}
-              >
-                <span style={{ fontSize: "1.2rem" }}>🎤</span>
-                <span>Voice</span>
-              </button>
-              <button
-                className="btn btn-secondary"
-                onClick={() => handleStartLesson(lesson, "type")}
-                style={{
-                  flex: 1,
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  gap: "8px",
-                  padding: "12px 16px",
-                }}
-              >
-                <span style={{ fontSize: "1.2rem" }}>⌨️</span>
-                <span>Type</span>
-              </button>
-            </div>
-          </div>
-        ))}
-      </div>
+          ))}
+        </div>
+      )}
 
       {/* Recent Sessions */}
       {sessions.length > 0 && (

@@ -1,10 +1,13 @@
 import { Router } from "express";
 import { randomUUID } from "crypto";
 import { StudentStore } from "../../stores/studentStore";
+import { StudentAssignmentStore } from "../../stores/studentAssignmentStore";
+import { getAllLessons } from "../../loaders/lessonLoader";
 import { Student } from "../../domain/student";
 
 const router = Router();
 const studentStore = new StudentStore();
+const studentAssignmentStore = new StudentAssignmentStore();
 
 // GET /api/students - List all students
 router.get("/", (req, res) => {
@@ -74,6 +77,51 @@ router.get("/lookup/:name", (req, res) => {
   } catch (error) {
     console.error("Error finding student:", error);
     res.status(500).json({ error: "Failed to find student" });
+  }
+});
+
+/**
+ * GET /api/students/:id/lessons
+ * Get lessons assigned to a specific student
+ * Returns lesson summaries (not full lesson content)
+ */
+router.get("/:id/lessons", (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // Verify student exists
+    const student = studentStore.load(id);
+    if (!student) {
+      return res.status(404).json({ error: "Student not found" });
+    }
+
+    // Get all assignments for this student
+    const assignments = studentAssignmentStore.getStudentAssignments(id);
+    const assignedLessonIds = [...new Set(assignments.map(a => a.lessonId))];
+
+    // Get full lesson data and filter to assigned ones
+    const allLessons = getAllLessons();
+    const assignedLessons = allLessons
+      .filter(lesson => assignedLessonIds.includes(lesson.id))
+      .map(lesson => ({
+        id: lesson.id,
+        title: lesson.title,
+        description: lesson.description,
+        difficulty: lesson.difficulty,
+        gradeLevel: lesson.gradeLevel,
+        promptCount: lesson.prompts.length,
+        standards: lesson.standards,
+      }));
+
+    res.json({
+      studentId: id,
+      studentName: student.name,
+      lessons: assignedLessons,
+      count: assignedLessons.length,
+    });
+  } catch (error) {
+    console.error("Error fetching student lessons:", error);
+    res.status(500).json({ error: "Failed to fetch student lessons" });
   }
 });
 

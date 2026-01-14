@@ -1,37 +1,124 @@
+/**
+ * Educator Dashboard - Lifecycle-Aware Triage Screen
+ *
+ * Design Philosophy:
+ * - Answer: "Who needs my help, why, and what should I do next?"
+ * - Teachers should not manage dashboards
+ * - System surfaces what needs attention
+ * - Everything else is quietly archived
+ *
+ * Lifecycle States:
+ * - Active: Needs teacher attention or has incomplete work
+ * - Resolved: All work complete, teacher has reviewed
+ * - Archived: Auto-archived after resolution period (separate view)
+ */
+
 import { useState, useEffect } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { getStudents, getSessions, getClassAnalytics, getLessons, type Student, type Session, type LessonSummary } from "../services/api";
+import {
+  getStudents,
+  getAssignmentDashboard,
+  triggerAutoArchive,
+  archiveAssignment,
+  resolveAssignment,
+  getClasses,
+  getLessonAssignments,
+  type ComputedAssignmentState,
+  type AssignmentDashboardData,
+  type ActiveReason,
+  type Student,
+  type ClassSummary,
+} from "../services/api";
+
+// Type for assignments grouped by class
+interface ClassAssignmentGroup {
+  classId: string;
+  className: string;
+  assignments: ComputedAssignmentState[];
+}
 
 export default function EducatorDashboard() {
   const navigate = useNavigate();
+  const [dashboardData, setDashboardData] = useState<AssignmentDashboardData | null>(null);
   const [students, setStudents] = useState<Student[]>([]);
-  const [sessions, setSessions] = useState<Session[]>([]);
-  const [lessons, setLessons] = useState<LessonSummary[]>([]);
-  const [classAnalytics, setClassAnalytics] = useState<any>(null);
+  const [classes, setClasses] = useState<ClassSummary[]>([]);
+  const [assignmentClassMap, setAssignmentClassMap] = useState<Map<string, string[]>>(new Map());
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const loadData = async () => {
+    try {
+      setError(null);
+
+      // Trigger auto-archive check on dashboard load
+      await triggerAutoArchive().catch(() => {
+        // Silently fail - not critical
+        console.log("Auto-archive check skipped");
+      });
+
+      const [studentsData, dashData, classesData] = await Promise.all([
+        getStudents(),
+        getAssignmentDashboard(),
+        getClasses(),
+      ]);
+
+      setStudents(studentsData);
+      setDashboardData(dashData);
+      setClasses(classesData);
+
+      // Load class associations for each assignment
+      const allAssignments = [...dashData.active, ...dashData.resolved];
+      const classMap = new Map<string, string[]>();
+
+      await Promise.all(
+        allAssignments.map(async (assignment) => {
+          try {
+            const summary = await getLessonAssignments(assignment.assignmentId);
+            const classIds = summary.assignmentsByClass.map(c => c.classId);
+            classMap.set(assignment.assignmentId, classIds);
+          } catch {
+            // Assignment may not have class associations
+            classMap.set(assignment.assignmentId, []);
+          }
+        })
+      );
+
+      setAssignmentClassMap(classMap);
+    } catch (err) {
+      console.error("Failed to load educator dashboard:", err);
+      setError("Failed to load dashboard data. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
-    async function loadData() {
-      try {
-        const [studentsData, sessionsData, analyticsData, lessonsData] = await Promise.all([
-          getStudents(),
-          getSessions(undefined, "completed"),
-          getClassAnalytics(),
-          getLessons(),
-        ]);
-        setStudents(studentsData);
-        setSessions(sessionsData);
-        setClassAnalytics(analyticsData);
-        setLessons(lessonsData);
-      } catch (err) {
-        console.error("Failed to load educator dashboard:", err);
-      } finally {
-        setLoading(false);
-      }
-    }
-
     loadData();
   }, []);
+
+  const handleArchiveAssignment = async (assignmentId: string, title: string) => {
+    if (!confirm(`Archive "${title}"? A summary will be generated and you can restore it later.`)) {
+      return;
+    }
+
+    try {
+      await archiveAssignment(assignmentId);
+      await loadData();
+    } catch (err) {
+      console.error("Failed to archive assignment:", err);
+      alert("Failed to archive assignment. Please try again.");
+    }
+  };
+
+  const handleResolveAssignment = async (assignmentId: string) => {
+    try {
+      await resolveAssignment(assignmentId);
+      await loadData();
+    } catch (err) {
+      console.error("Failed to resolve assignment:", err);
+      alert("Failed to resolve assignment. Please try again.");
+    }
+  };
 
   if (loading) {
     return (
@@ -42,17 +129,84 @@ export default function EducatorDashboard() {
     );
   }
 
-  const getStudentSessions = (studentId: string) =>
-    sessions.filter((s) => s.studentId === studentId);
-
-  const getStudentAvgScore = (studentId: string) => {
-    const studentSessions = getStudentSessions(studentId);
-    if (studentSessions.length === 0) return 0;
-    return Math.round(
-      studentSessions.reduce((sum, s) => sum + (s.evaluation?.totalScore ?? 0), 0) /
-        studentSessions.length
+  if (error || !dashboardData) {
+    return (
+      <div className="container">
+        <div className="card">
+          <p style={{ color: "#d32f2f" }}>{error || "Failed to load dashboard data."}</p>
+          <button className="btn btn-primary" onClick={loadData} style={{ marginTop: "16px" }}>
+            Try Again
+          </button>
+        </div>
+      </div>
     );
+  }
+
+  const { active, resolved, archivedCount } = dashboardData;
+  const totalStudents = students.length;
+
+  // Extract students needing attention from active assignments
+  const studentsNeedingAttention = active.flatMap(assignment =>
+    assignment.studentStatuses
+      .filter(s => s.needsSupport && !s.hasTeacherNote)
+      .map(s => ({
+        studentId: s.studentId,
+        studentName: s.studentName,
+        assignmentId: assignment.assignmentId,
+        assignmentTitle: assignment.title,
+        reason: getReasonDescription(s, assignment),
+        hasTeacherNote: s.hasTeacherNote,
+      }))
+  );
+
+  // Group assignments by class
+  const groupAssignmentsByClass = (assignments: ComputedAssignmentState[]): ClassAssignmentGroup[] => {
+    const classGroups = new Map<string, ComputedAssignmentState[]>();
+    const unassigned: ComputedAssignmentState[] = [];
+
+    for (const assignment of assignments) {
+      const classIds = assignmentClassMap.get(assignment.assignmentId) || [];
+      if (classIds.length === 0) {
+        unassigned.push(assignment);
+      } else {
+        // Add to each class it's assigned to
+        for (const classId of classIds) {
+          if (!classGroups.has(classId)) {
+            classGroups.set(classId, []);
+          }
+          classGroups.get(classId)!.push(assignment);
+        }
+      }
+    }
+
+    // Build result with class names
+    const result: ClassAssignmentGroup[] = [];
+
+    for (const cls of classes) {
+      const clsAssignments = classGroups.get(cls.id);
+      if (clsAssignments && clsAssignments.length > 0) {
+        result.push({
+          classId: cls.id,
+          className: cls.name,
+          assignments: clsAssignments,
+        });
+      }
+    }
+
+    // Add unassigned at the end if any
+    if (unassigned.length > 0) {
+      result.push({
+        classId: "unassigned",
+        className: "Unassigned Lessons",
+        assignments: unassigned,
+      });
+    }
+
+    return result;
   };
+
+  const activeByClass = groupAssignmentsByClass(active);
+  const resolvedByClass = groupAssignmentsByClass(resolved);
 
   return (
     <div className="container">
@@ -61,281 +215,646 @@ export default function EducatorDashboard() {
       </Link>
 
       <div className="header">
-        <h1>Educator Dashboard</h1>
-        <p>Monitor student progress and performance</p>
-        <button
-          className="btn btn-primary"
-          onClick={() => navigate("/educator/create-lesson")}
-          style={{ marginTop: "16px" }}
-        >
-          + Create New Lesson
-        </button>
-      </div>
-
-      {/* Class Stats */}
-      <div className="stats-grid">
-        <div className="card stat-card">
-          <div className="value">{students.length}</div>
-          <div className="label">Total Students</div>
-        </div>
-        <div className="card stat-card">
-          <div className="value">{sessions.length}</div>
-          <div className="label">Sessions Completed</div>
-        </div>
-        <div className="card stat-card">
-          <div className="value">
-            {sessions.length > 0
-              ? Math.round(
-                  sessions.reduce(
-                    (sum, s) => sum + (s.evaluation?.totalScore ?? 0),
-                    0
-                  ) / sessions.length
-                )
-              : 0}
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: "16px" }}>
+          <div>
+            <h1>Educator Dashboard</h1>
+            <p>Your class at a glance</p>
           </div>
-          <div className="label">Class Average</div>
+          <div style={{ display: "flex", gap: "12px" }}>
+            <button
+              className="btn btn-secondary"
+              onClick={() => navigate("/educator/classes")}
+            >
+              My Classes
+            </button>
+            <button
+              className="btn btn-primary"
+              onClick={() => navigate("/educator/create-lesson")}
+            >
+              + Create Lesson
+            </button>
+          </div>
         </div>
       </div>
 
-      {/* Coach & Hint Usage */}
-      {classAnalytics && (
-        <div className="card">
-          <h3 style={{ marginBottom: "16px" }}>📊 Class Analytics</h3>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: "16px" }}>
+      {/* Primary: Students Needing Attention */}
+      {studentsNeedingAttention.length > 0 ? (
+        <NeedsAttentionSection
+          students={studentsNeedingAttention}
+          onNavigate={(studentId, assignmentId) =>
+            navigate(`/educator/assignment/${assignmentId}/student/${studentId}`)
+          }
+        />
+      ) : (
+        <div
+          className="card"
+          style={{
+            background: "#e8f5e9",
+            borderLeft: "4px solid #4caf50",
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+            <span style={{ fontSize: "1.5rem" }}>✓</span>
             <div>
-              <p style={{ color: "#666", fontSize: "0.9rem" }}>Students Using Coach</p>
-              <p style={{ fontSize: "1.2rem", fontWeight: 600 }}>
-                {classAnalytics.coachUsage?.studentsUsingCoach ?? 0} /{" "}
-                {students.length} ({classAnalytics.coachUsage?.percentageUsingCoach ?? 0}%)
-              </p>
-            </div>
-            <div>
-              <p style={{ color: "#666", fontSize: "0.9rem" }}>Hint Usage Rate</p>
-              <p style={{ fontSize: "1.2rem", fontWeight: 600 }}>
-                {classAnalytics.hintUsage?.hintUsageRate ?? 0}%
-              </p>
-            </div>
-            <div>
-              <p style={{ color: "#666", fontSize: "0.9rem" }}>Help Requests</p>
-              <p style={{ fontSize: "1.2rem", fontWeight: 600 }}>
-                {classAnalytics.coachUsage?.helpRequestCount ?? 0}
-              </p>
-            </div>
-            <div>
-              <p style={{ color: "#666", fontSize: "0.9rem" }}>Avg Session Time</p>
-              <p style={{ fontSize: "1.2rem", fontWeight: 600 }}>
-                {classAnalytics.sessionDuration?.averageMinutes ?? "-"} min
+              <h3 style={{ margin: 0, color: "#2e7d32" }}>All students on track</h3>
+              <p style={{ margin: 0, color: "#666", marginTop: "4px" }}>
+                No students are flagged for review right now.
               </p>
             </div>
           </div>
         </div>
       )}
 
-      {/* Standards Coverage */}
-      {(() => {
-        const allStandards = lessons.flatMap(l => l.standards || []);
-        const uniqueStandards = [...new Set(allStandards)].sort();
-        const standardsByStrand: Record<string, string[]> = {};
-
-        uniqueStandards.forEach(code => {
-          const strand = code.split('.')[0]; // e.g., "RL" from "RL.2.1"
-          if (!standardsByStrand[strand]) {
-            standardsByStrand[strand] = [];
-          }
-          standardsByStrand[strand].push(code);
-        });
-
-        const strandNames: Record<string, string> = {
-          RL: "Reading Literature",
-          RI: "Reading Informational",
-          RF: "Reading Foundational",
-          W: "Writing",
-          SL: "Speaking & Listening",
-          L: "Language",
-        };
-
-        if (uniqueStandards.length === 0) return null;
-
-        return (
-          <div className="card">
-            <h3 style={{ marginBottom: "16px" }}>📋 Ohio Learning Standards Coverage</h3>
-            <p style={{ color: "#666", marginBottom: "16px", fontSize: "0.9rem" }}>
-              {uniqueStandards.length} standards covered across {lessons.filter(l => l.standards && l.standards.length > 0).length} lessons
-            </p>
-            <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
-              {Object.entries(standardsByStrand).map(([strand, codes]) => (
-                <div key={strand}>
-                  <p style={{ fontWeight: 600, marginBottom: "8px", color: "#1565c0" }}>
-                    {strandNames[strand] || strand} ({codes.length})
-                  </p>
-                  <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
-                    {codes.map(code => (
-                      <span
-                        key={code}
-                        style={{
-                          background: "#e3f2fd",
-                          color: "#1565c0",
-                          padding: "4px 8px",
-                          borderRadius: "4px",
-                          fontSize: "0.8rem",
-                          fontWeight: 500,
-                        }}
-                      >
-                        {code}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        );
-      })()}
-
-      {/* Two-column layout for performers/support on desktop */}
-      <div className="two-column">
-        {/* Top Performers */}
-        {classAnalytics?.topPerformers?.length > 0 && (
-          <div className="card">
-            <h3 style={{ marginBottom: "16px" }}>⭐ Top Performers</h3>
-            {classAnalytics.topPerformers.map((student: any) => (
+      {/* Active Assignments by Class */}
+      {activeByClass.length > 0 && (
+        <>
+          <h2 style={{ color: "white", marginTop: "32px", marginBottom: "16px" }}>
+            Active Assignments
+          </h2>
+          {activeByClass.map((group) => (
+            <div key={group.classId} style={{ marginBottom: "24px" }}>
               <div
-                key={student.name}
                 style={{
                   display: "flex",
-                  justifyContent: "space-between",
-                  padding: "8px 0",
-                  borderBottom: "1px solid #eee",
+                  alignItems: "center",
+                  gap: "12px",
+                  marginBottom: "12px",
+                  cursor: group.classId !== "unassigned" ? "pointer" : "default",
                 }}
+                onClick={() => group.classId !== "unassigned" && navigate(`/educator/class/${group.classId}`)}
               >
-                <span>{student.name}</span>
-                <span style={{ fontWeight: 600, color: "#667eea" }}>
-                  {student.avgScore}/100
+                <h3 style={{ margin: 0, color: "rgba(255,255,255,0.9)", fontSize: "1.1rem" }}>
+                  {group.className}
+                </h3>
+                <span style={{ color: "rgba(255,255,255,0.5)", fontSize: "0.9rem" }}>
+                  ({group.assignments.length} assignment{group.assignments.length !== 1 ? "s" : ""})
                 </span>
+                {group.classId !== "unassigned" && (
+                  <span style={{ color: "rgba(255,255,255,0.4)", fontSize: "0.85rem" }}>→</span>
+                )}
               </div>
-            ))}
-          </div>
-        )}
-
-        {/* Needs Support */}
-        {classAnalytics?.needsSupport?.length > 0 && (
-          <div className="card" style={{ borderLeft: "4px solid #ff9800" }}>
-            <h3 style={{ marginBottom: "16px" }}>⚠️ Needs Support</h3>
-            {classAnalytics.needsSupport.map((student: any) => (
               <div
-                key={student.name}
                 style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  padding: "8px 0",
-                  borderBottom: "1px solid #eee",
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))",
+                  gap: "16px",
                 }}
               >
-                <div>
-                  <span>{student.name}</span>
-                  <span
-                    style={{ marginLeft: "8px", color: "#666", fontSize: "0.9rem" }}
-                  >
-                    - {student.issue}
-                  </span>
-                </div>
-                <span style={{ fontWeight: 600, color: "#ff9800" }}>
-                  {student.avgScore}/100
-                </span>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-
-      {/* Student List */}
-      <div className="card">
-        <h3 style={{ marginBottom: "16px" }}>👥 All Students</h3>
-        {students.length === 0 ? (
-          <p style={{ color: "#666" }}>No students yet.</p>
-        ) : (
-          <div className="table-wrapper">
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <thead>
-              <tr style={{ borderBottom: "2px solid #eee" }}>
-                <th style={{ textAlign: "left", padding: "12px 0" }}>Name</th>
-                <th style={{ textAlign: "center", padding: "12px 0" }}>Sessions</th>
-                <th style={{ textAlign: "center", padding: "12px 0" }}>Avg Score</th>
-                <th style={{ textAlign: "right", padding: "12px 0" }}>Joined</th>
-              </tr>
-            </thead>
-            <tbody>
-              {students.map((student) => {
-                const sessionCount = getStudentSessions(student.id).length;
-                const avgScore = getStudentAvgScore(student.id);
-
-                return (
-                  <tr key={student.id} style={{ borderBottom: "1px solid #eee" }}>
-                    <td style={{ padding: "12px 0" }}>{student.name}</td>
-                    <td style={{ textAlign: "center", padding: "12px 0" }}>
-                      {sessionCount}
-                    </td>
-                    <td style={{ textAlign: "center", padding: "12px 0" }}>
-                      {sessionCount > 0 ? (
-                        <span
-                          style={{
-                            color: avgScore >= 70 ? "#4caf50" : avgScore >= 50 ? "#ff9800" : "#f44336",
-                            fontWeight: 600,
-                          }}
-                        >
-                          {avgScore}
-                        </span>
-                      ) : (
-                        "-"
-                      )}
-                    </td>
-                    <td style={{ textAlign: "right", padding: "12px 0", color: "#666" }}>
-                      {new Date(student.createdAt).toLocaleDateString()}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-          </div>
-        )}
-      </div>
-
-      {/* Lesson Difficulty */}
-      {classAnalytics?.lessonDifficulty?.length > 0 && (
-        <div className="card">
-          <h3 style={{ marginBottom: "16px" }}>📚 Lesson Difficulty</h3>
-          {classAnalytics.lessonDifficulty.slice(0, 5).map((lesson: any) => (
-            <div
-              key={lesson.title}
-              style={{
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "center",
-                padding: "8px 0",
-                borderBottom: "1px solid #eee",
-              }}
-            >
-              <div>
-                <span
-                  style={{
-                    marginRight: "8px",
-                  }}
-                >
-                  {lesson.avgScore < 50 ? "🔴" : lesson.avgScore < 70 ? "🟡" : "🟢"}
-                </span>
-                <span>{lesson.title}</span>
-              </div>
-              <div style={{ textAlign: "right" }}>
-                <span style={{ fontWeight: 600 }}>{lesson.avgScore}/100</span>
-                <span style={{ color: "#666", marginLeft: "8px" }}>
-                  ({lesson.attempts} attempts)
-                </span>
+                {group.assignments.map((assignment) => (
+                  <AssignmentCard
+                    key={`${group.classId}-${assignment.assignmentId}`}
+                    assignment={assignment}
+                    onNavigate={() => navigate(`/educator/assignment/${assignment.assignmentId}`)}
+                    onArchive={() => handleArchiveAssignment(assignment.assignmentId, assignment.title)}
+                    onResolve={() => handleResolveAssignment(assignment.assignmentId)}
+                  />
+                ))}
               </div>
             </div>
           ))}
+        </>
+      )}
+
+      {/* Resolved Assignments by Class (De-emphasized) */}
+      {resolvedByClass.length > 0 && (
+        <>
+          <h2 style={{ color: "rgba(255,255,255,0.6)", marginTop: "32px", marginBottom: "8px", fontSize: "1.1rem" }}>
+            Resolved ({resolved.length})
+          </h2>
+          <p style={{ color: "rgba(255,255,255,0.4)", margin: 0, marginBottom: "16px", fontSize: "0.9rem" }}>
+            These will auto-archive after 7 days of inactivity
+          </p>
+          {resolvedByClass.map((group) => (
+            <div key={group.classId} style={{ marginBottom: "16px" }}>
+              <h4 style={{ margin: "0 0 8px 0", color: "rgba(255,255,255,0.5)", fontSize: "0.95rem" }}>
+                {group.className}
+              </h4>
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))",
+                  gap: "12px",
+                }}
+              >
+                {group.assignments.map((assignment) => (
+                  <ResolvedAssignmentCard
+                    key={`${group.classId}-${assignment.assignmentId}`}
+                    assignment={assignment}
+                    onNavigate={() => navigate(`/educator/assignment/${assignment.assignmentId}`)}
+                    onArchive={() => handleArchiveAssignment(assignment.assignmentId, assignment.title)}
+                  />
+                ))}
+              </div>
+            </div>
+          ))}
+        </>
+      )}
+
+      {/* No Assignments State */}
+      {active.length === 0 && resolved.length === 0 && (
+        <div className="card" style={{ marginTop: "32px" }}>
+          <p style={{ color: "#666", textAlign: "center", padding: "24px" }}>
+            No assignments yet.{" "}
+            <button
+              onClick={() => navigate("/educator/create-lesson")}
+              style={{
+                background: "none",
+                border: "none",
+                color: "#667eea",
+                cursor: "pointer",
+                textDecoration: "underline",
+              }}
+            >
+              Create your first lesson
+            </button>
+          </p>
         </div>
       )}
+
+      {/* Footer: Quick Access */}
+      <div
+        style={{
+          marginTop: "48px",
+          paddingTop: "24px",
+          borderTop: "1px solid rgba(255,255,255,0.1)",
+          display: "flex",
+          gap: "16px",
+          flexWrap: "wrap",
+        }}
+      >
+        <button
+          className="btn btn-secondary"
+          onClick={() => navigate("/educator/students")}
+        >
+          All Students ({totalStudents})
+        </button>
+        <button
+          className="btn btn-secondary"
+          onClick={() => navigate("/educator/archived")}
+          style={{ marginLeft: "auto" }}
+        >
+          Archived ({archivedCount})
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ============================================
+// Helper Functions
+// ============================================
+
+function getReasonDescription(
+  student: { understanding: string; hintsUsed: number; score: number },
+  assignment: ComputedAssignmentState
+): string {
+  if (student.understanding === "needs-support") {
+    return "Needs support with understanding";
+  }
+  if (student.hintsUsed > assignment.totalStudents * 0.5) {
+    return "Used significant coach help";
+  }
+  if (student.score < 40) {
+    return "Low score on assignment";
+  }
+  return "May need follow-up";
+}
+
+function getActiveReasonLabel(reason: ActiveReason): string {
+  switch (reason) {
+    case "students-need-support": return "Students need support";
+    case "incomplete-work": return "Incomplete work";
+    case "not-reviewed": return "Not reviewed yet";
+    case "pending-feedback": return "Pending feedback";
+    case "recent-activity": return "Recent activity";
+    default: return reason;
+  }
+}
+
+// ============================================
+// Needs Attention Section
+// ============================================
+
+interface StudentAttentionItem {
+  studentId: string;
+  studentName: string;
+  assignmentId: string;
+  assignmentTitle: string;
+  reason: string;
+  hasTeacherNote: boolean;
+}
+
+interface NeedsAttentionSectionProps {
+  students: StudentAttentionItem[];
+  onNavigate: (studentId: string, assignmentId: string) => void;
+}
+
+function NeedsAttentionSection({ students, onNavigate }: NeedsAttentionSectionProps) {
+  // Group by student to avoid showing same student multiple times
+  const uniqueStudents = students.reduce((acc, student) => {
+    if (!acc.find((s) => s.studentId === student.studentId)) {
+      acc.push(student);
+    }
+    return acc;
+  }, [] as StudentAttentionItem[]);
+
+  // Show max 5 on dashboard
+  const displayStudents = uniqueStudents.slice(0, 5);
+  const hasMore = uniqueStudents.length > 5;
+
+  return (
+    <div
+      className="card"
+      style={{
+        background: "#fff3e0",
+        borderLeft: "4px solid #ff9800",
+      }}
+    >
+      <div style={{ marginBottom: "16px" }}>
+        <h3 style={{ margin: 0, color: "#e65100" }}>
+          {uniqueStudents.length} student{uniqueStudents.length !== 1 ? "s" : ""} may need your attention
+        </h3>
+        <p style={{ margin: 0, color: "#666", marginTop: "4px" }}>
+          Click on a student to review their work and add notes
+        </p>
+      </div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+        {displayStudents.map((student) => (
+          <div
+            key={`${student.studentId}-${student.assignmentId}`}
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              padding: "12px 16px",
+              background: "white",
+              borderRadius: "8px",
+              cursor: "pointer",
+              transition: "transform 0.1s, box-shadow 0.1s",
+            }}
+            onClick={() => onNavigate(student.studentId, student.assignmentId)}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.transform = "translateX(4px)";
+              e.currentTarget.style.boxShadow = "0 2px 8px rgba(0,0,0,0.1)";
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.transform = "translateX(0)";
+              e.currentTarget.style.boxShadow = "none";
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: "16px" }}>
+              <span style={{ fontWeight: 600, color: "#333" }}>{student.studentName}</span>
+              <span style={{ color: "#666", fontSize: "0.9rem" }}>{student.assignmentTitle}</span>
+              {student.hasTeacherNote && (
+                <span title="Has your notes" style={{ fontSize: "0.85rem" }}>📝</span>
+              )}
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+              <span
+                style={{
+                  fontSize: "0.85rem",
+                  color: "#e65100",
+                  maxWidth: "200px",
+                  whiteSpace: "nowrap",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                }}
+              >
+                {student.reason}
+              </span>
+              <span style={{ color: "#ff9800" }}>→</span>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {hasMore && (
+        <p style={{ margin: 0, marginTop: "12px", color: "#666", fontSize: "0.9rem", textAlign: "center" }}>
+          +{uniqueStudents.length - 5} more students across assignments
+        </p>
+      )}
+    </div>
+  );
+}
+
+// ============================================
+// Assignment Card (Active)
+// ============================================
+
+interface AssignmentCardProps {
+  assignment: ComputedAssignmentState;
+  onNavigate: () => void;
+  onArchive: () => void;
+  onResolve: () => void;
+}
+
+function AssignmentCard({ assignment, onNavigate, onArchive, onResolve }: AssignmentCardProps) {
+  const { title, totalStudents, completedCount, distribution, studentsNeedingSupport, activeReasons } = assignment;
+
+  const hasActivity = completedCount > 0;
+  const canResolve = studentsNeedingSupport === 0 && completedCount > 0;
+
+  return (
+    <div
+      className="card"
+      style={{
+        cursor: "pointer",
+        transition: "transform 0.2s, box-shadow 0.2s",
+        position: "relative",
+      }}
+      onClick={onNavigate}
+      onMouseEnter={(e) => {
+        e.currentTarget.style.transform = "translateY(-2px)";
+        e.currentTarget.style.boxShadow = "0 4px 12px rgba(0,0,0,0.15)";
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.transform = "translateY(0)";
+        e.currentTarget.style.boxShadow = "";
+      }}
+    >
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+        <h3 style={{ margin: 0, color: "#667eea", flex: 1 }}>{title}</h3>
+        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+          {canResolve && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onResolve();
+              }}
+              title="Mark as resolved"
+              style={{
+                background: "#e8f5e9",
+                border: "none",
+                cursor: "pointer",
+                padding: "4px 8px",
+                borderRadius: "4px",
+                color: "#2e7d32",
+                fontSize: "0.8rem",
+                transition: "background 0.2s",
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background = "#c8e6c9";
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = "#e8f5e9";
+              }}
+            >
+              ✓ Resolve
+            </button>
+          )}
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onArchive();
+            }}
+            title="Archive this assignment"
+            style={{
+              background: "transparent",
+              border: "none",
+              cursor: "pointer",
+              padding: "4px 8px",
+              borderRadius: "4px",
+              color: "#999",
+              fontSize: "0.85rem",
+              transition: "color 0.2s, background 0.2s",
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = "#f5f5f5";
+              e.currentTarget.style.color = "#666";
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = "transparent";
+              e.currentTarget.style.color = "#999";
+            }}
+          >
+            Archive
+          </button>
+          <span style={{ color: "#667eea", fontSize: "1.2rem" }}>→</span>
+        </div>
+      </div>
+
+      {/* Active Reasons */}
+      {activeReasons.length > 0 && (
+        <div style={{ display: "flex", gap: "6px", flexWrap: "wrap", marginTop: "8px" }}>
+          {activeReasons.slice(0, 2).map(reason => (
+            <span
+              key={reason}
+              style={{
+                fontSize: "0.75rem",
+                padding: "2px 8px",
+                borderRadius: "12px",
+                background: reason === "students-need-support" ? "#fff3e0" : "#e3f2fd",
+                color: reason === "students-need-support" ? "#e65100" : "#1976d2",
+              }}
+            >
+              {getActiveReasonLabel(reason)}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {/* Completion Status */}
+      <p style={{ margin: 0, marginTop: "12px", color: "#666" }}>
+        <span style={{ fontWeight: 600 }}>{completedCount}</span>/{totalStudents} completed
+      </p>
+
+      {/* Understanding Distribution (only if there's activity) */}
+      {hasActivity && (
+        <div style={{ marginTop: "16px" }}>
+          <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+            {distribution.strong > 0 && (
+              <span
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "4px",
+                  fontSize: "0.85rem",
+                  color: "#2e7d32",
+                }}
+              >
+                <span
+                  style={{
+                    width: "8px",
+                    height: "8px",
+                    borderRadius: "50%",
+                    background: "#4caf50",
+                  }}
+                />
+                {distribution.strong} Strong
+              </span>
+            )}
+            {distribution.developing > 0 && (
+              <span
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "4px",
+                  fontSize: "0.85rem",
+                  color: "#ed6c02",
+                }}
+              >
+                <span
+                  style={{
+                    width: "8px",
+                    height: "8px",
+                    borderRadius: "50%",
+                    background: "#ff9800",
+                  }}
+                />
+                {distribution.developing} Developing
+              </span>
+            )}
+            {distribution.needsSupport > 0 && (
+              <span
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "4px",
+                  fontSize: "0.85rem",
+                  color: "#d32f2f",
+                }}
+              >
+                <span
+                  style={{
+                    width: "8px",
+                    height: "8px",
+                    borderRadius: "50%",
+                    background: "#f44336",
+                  }}
+                />
+                {distribution.needsSupport} Need Support
+              </span>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Not Started indicator */}
+      {completedCount === 0 && (
+        <p style={{ margin: 0, marginTop: "12px", color: "#999", fontSize: "0.9rem" }}>
+          No students have completed yet
+        </p>
+      )}
+
+      {/* Needs Attention indicator */}
+      {studentsNeedingSupport > 0 && (
+        <div
+          style={{
+            marginTop: "12px",
+            padding: "8px 12px",
+            background: "#fff3e0",
+            borderRadius: "8px",
+            fontSize: "0.85rem",
+            color: "#e65100",
+          }}
+        >
+          {studentsNeedingSupport} student{studentsNeedingSupport !== 1 ? "s" : ""} may need attention
+        </div>
+      )}
+
+      {/* All good indicator */}
+      {hasActivity && studentsNeedingSupport === 0 && (
+        <div
+          style={{
+            marginTop: "12px",
+            fontSize: "0.85rem",
+            color: "#4caf50",
+          }}
+        >
+          ✓ No students flagged
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ============================================
+// Resolved Assignment Card (De-emphasized)
+// ============================================
+
+interface ResolvedAssignmentCardProps {
+  assignment: ComputedAssignmentState;
+  onNavigate: () => void;
+  onArchive: () => void;
+}
+
+function ResolvedAssignmentCard({ assignment, onNavigate, onArchive }: ResolvedAssignmentCardProps) {
+  const { title, totalStudents, completedCount, distribution } = assignment;
+
+  return (
+    <div
+      className="card"
+      style={{
+        cursor: "pointer",
+        transition: "transform 0.2s, box-shadow 0.2s",
+        background: "rgba(255,255,255,0.7)",
+        opacity: 0.8,
+      }}
+      onClick={onNavigate}
+      onMouseEnter={(e) => {
+        e.currentTarget.style.transform = "translateY(-2px)";
+        e.currentTarget.style.opacity = "1";
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.transform = "translateY(0)";
+        e.currentTarget.style.opacity = "0.8";
+      }}
+    >
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+        <div>
+          <h4 style={{ margin: 0, color: "#667eea" }}>{title}</h4>
+          <p style={{ margin: 0, marginTop: "4px", color: "#666", fontSize: "0.85rem" }}>
+            {completedCount}/{totalStudents} completed
+          </p>
+        </div>
+        <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onArchive();
+            }}
+            title="Archive now"
+            style={{
+              background: "transparent",
+              border: "none",
+              cursor: "pointer",
+              padding: "4px 8px",
+              borderRadius: "4px",
+              color: "#999",
+              fontSize: "0.8rem",
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.color = "#666";
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.color = "#999";
+            }}
+          >
+            Archive now
+          </button>
+          <span style={{ color: "#4caf50", fontSize: "0.85rem" }}>✓ Resolved</span>
+        </div>
+      </div>
+
+      {/* Compact distribution */}
+      <div style={{ display: "flex", gap: "8px", marginTop: "8px" }}>
+        {distribution.strong > 0 && (
+          <span style={{ fontSize: "0.8rem", color: "#2e7d32" }}>
+            {distribution.strong} Strong
+          </span>
+        )}
+        {distribution.developing > 0 && (
+          <span style={{ fontSize: "0.8rem", color: "#ed6c02" }}>
+            {distribution.developing} Developing
+          </span>
+        )}
+        {distribution.needsSupport > 0 && (
+          <span style={{ fontSize: "0.8rem", color: "#d32f2f" }}>
+            {distribution.needsSupport} Need Support
+          </span>
+        )}
+      </div>
     </div>
   );
 }

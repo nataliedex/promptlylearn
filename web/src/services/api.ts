@@ -53,6 +53,9 @@ export interface PromptResponse {
   response: string;
   reflection?: string;
   hintUsed: boolean;
+  audioBase64?: string;
+  audioFormat?: string;
+  educatorNote?: string;
 }
 
 export interface Session {
@@ -76,6 +79,7 @@ export interface Session {
   completedAt?: string;
   status: "in_progress" | "completed";
   currentPromptIndex?: number;
+  educatorNotes?: string;
 }
 
 export interface EvaluationResult {
@@ -110,20 +114,28 @@ export interface StudentAnalytics {
 // API Functions
 
 async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
-  const response = await fetch(url, {
-    ...options,
-    headers: {
-      "Content-Type": "application/json",
-      ...options?.headers,
-    },
-  });
+  console.log(`fetchJson: ${options?.method || "GET"} ${url}`);
+  try {
+    const response = await fetch(url, {
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+      },
+    });
 
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({ error: "Unknown error" }));
-    throw new Error(error.error || `HTTP error ${response.status}`);
+    console.log(`fetchJson response status: ${response.status}`);
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ error: "Unknown error" }));
+      throw new Error(error.error || `HTTP error ${response.status}`);
+    }
+
+    return response.json();
+  } catch (err: any) {
+    console.error(`fetchJson error for ${url}:`, err?.message, err?.name);
+    throw err;
   }
-
-  return response.json();
 }
 
 // Students
@@ -142,6 +154,20 @@ export async function createOrFindStudent(name: string): Promise<{ student: Stud
   });
 }
 
+export interface StudentLessonsResponse {
+  studentId: string;
+  studentName: string;
+  lessons: LessonSummary[];
+  count: number;
+}
+
+/**
+ * Get lessons assigned to a specific student.
+ */
+export async function getStudentLessons(studentId: string): Promise<StudentLessonsResponse> {
+  return fetchJson(`${API_BASE}/students/${studentId}/lessons`);
+}
+
 // Lessons
 export async function getLessons(): Promise<LessonSummary[]> {
   return fetchJson(`${API_BASE}/lessons`);
@@ -149,6 +175,26 @@ export async function getLessons(): Promise<LessonSummary[]> {
 
 export async function getLesson(id: string): Promise<Lesson> {
   return fetchJson(`${API_BASE}/lessons/${id}`);
+}
+
+export interface ArchivedLessonSummary extends LessonSummary {
+  archivedAt?: string;
+}
+
+export async function getArchivedLessons(): Promise<ArchivedLessonSummary[]> {
+  return fetchJson(`${API_BASE}/lessons/archived/list`);
+}
+
+export async function archiveLesson(id: string): Promise<{ success: boolean; message: string }> {
+  return fetchJson(`${API_BASE}/lessons/${id}/archive`, {
+    method: "POST",
+  });
+}
+
+export async function unarchiveLesson(id: string): Promise<{ success: boolean; message: string }> {
+  return fetchJson(`${API_BASE}/lessons/${id}/unarchive`, {
+    method: "POST",
+  });
 }
 
 // Sessions
@@ -253,10 +299,33 @@ export async function transcribeAudio(audioBase64: string, format: string = "web
 }
 
 export async function textToSpeech(text: string, voice: string = "nova"): Promise<{ audio: string; format: string }> {
-  return fetchJson(`${API_BASE}/voice/speak`, {
-    method: "POST",
-    body: JSON.stringify({ text, voice }),
-  });
+  console.log("TTS API call starting, text length:", text?.length);
+
+  // Retry logic for transient network failures
+  let lastError: any;
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      console.log(`TTS API attempt ${attempt}...`);
+      const result = await fetchJson<{ audio: string; format: string }>(`${API_BASE}/voice/speak`, {
+        method: "POST",
+        body: JSON.stringify({ text, voice }),
+      });
+      console.log("TTS API call succeeded");
+      return result;
+    } catch (err: any) {
+      console.error(`TTS API attempt ${attempt} failed:`, {
+        message: err?.message,
+        name: err?.name,
+        textLength: text?.length,
+      });
+      lastError = err;
+      if (attempt < 2) {
+        // Wait before retry
+        await new Promise((r) => setTimeout(r, 500));
+      }
+    }
+  }
+  throw lastError;
 }
 
 // Standards
@@ -322,4 +391,422 @@ export async function continueCoachConversation(
       gradeLevel,
     }),
   });
+}
+
+// ============================================
+// Assignment Lifecycle Types
+// ============================================
+
+export type AssignmentLifecycleState = "active" | "resolved" | "archived";
+
+export type ActiveReason =
+  | "students-need-support"
+  | "incomplete-work"
+  | "not-reviewed"
+  | "pending-feedback"
+  | "recent-activity";
+
+export interface StudentStatus {
+  studentId: string;
+  studentName: string;
+  isComplete: boolean;
+  understanding: "strong" | "developing" | "needs-support";
+  needsSupport: boolean;
+  hasTeacherNote: boolean;
+  hintsUsed: number;
+  score: number;
+  improvedAfterHelp: boolean;
+}
+
+export interface ComputedAssignmentState {
+  assignmentId: string;
+  title: string;
+  lifecycleState: AssignmentLifecycleState;
+  activeReasons: ActiveReason[];
+  totalStudents: number;
+  completedCount: number;
+  distribution: {
+    strong: number;
+    developing: number;
+    needsSupport: number;
+  };
+  studentStatuses: StudentStatus[];
+  studentsNeedingSupport: number;
+  allStudentsComplete: boolean;
+  allFlaggedReviewed: boolean;
+}
+
+export interface TeacherSummary {
+  generatedAt: string;
+  classPerformance: {
+    totalStudents: number;
+    strongCount: number;
+    developingCount: number;
+    needsSupportCount: number;
+    averageScore: number;
+    completionRate: number;
+  };
+  insights: {
+    commonStrengths: string[];
+    commonChallenges: string[];
+    skillsMastered: string[];
+    skillsNeedingReinforcement: string[];
+  };
+  coachUsage: {
+    averageHintsPerStudent: number;
+    studentsWhoUsedHints: number;
+    mostEffectiveHints: string[];
+    questionsNeedingMoreScaffolding: string[];
+  };
+  studentHighlights: {
+    improvedSignificantly: string[];
+    mayNeedFollowUp: string[];
+    exceededExpectations: string[];
+  };
+  teacherEngagement: {
+    totalNotesWritten: number;
+    studentsWithNotes: number;
+    reviewedAllFlagged: boolean;
+  };
+}
+
+export interface AssignmentDashboardData {
+  active: ComputedAssignmentState[];
+  resolved: ComputedAssignmentState[];
+  archivedCount: number;
+}
+
+export interface ArchivedAssignment {
+  assignmentId: string;
+  title: string;
+  archivedAt?: string;
+  teacherSummary?: TeacherSummary;
+  totalStudents: number;
+  averageScore: number;
+  completionRate: number;
+}
+
+export interface AssignmentStateRecord {
+  assignmentId: string;
+  lifecycleState: AssignmentLifecycleState;
+  activeReasons: ActiveReason[];
+  createdAt: string;
+  resolvedAt?: string;
+  archivedAt?: string;
+  lastActivityAt: string;
+  teacherViewedAt?: string;
+  teacherViewCount: number;
+  teacherSummary?: TeacherSummary;
+}
+
+// ============================================
+// Assignment Lifecycle API Functions
+// ============================================
+
+/**
+ * Get assignment dashboard data grouped by lifecycle state.
+ */
+export async function getAssignmentDashboard(): Promise<AssignmentDashboardData> {
+  return fetchJson(`${API_BASE}/assignments/dashboard`);
+}
+
+/**
+ * Get computed state for a single assignment.
+ */
+export async function getAssignmentState(assignmentId: string): Promise<ComputedAssignmentState & { stateRecord: AssignmentStateRecord }> {
+  return fetchJson(`${API_BASE}/assignments/${assignmentId}`);
+}
+
+/**
+ * Record that a teacher viewed an assignment.
+ * This is critical for lifecycle transitions.
+ */
+export async function recordAssignmentView(assignmentId: string): Promise<AssignmentStateRecord> {
+  return fetchJson(`${API_BASE}/assignments/${assignmentId}/view`, {
+    method: "POST",
+  });
+}
+
+/**
+ * Manually resolve an assignment.
+ */
+export async function resolveAssignment(assignmentId: string): Promise<AssignmentStateRecord> {
+  return fetchJson(`${API_BASE}/assignments/${assignmentId}/resolve`, {
+    method: "POST",
+  });
+}
+
+/**
+ * Archive an assignment with a generated summary.
+ */
+export async function archiveAssignment(assignmentId: string): Promise<AssignmentStateRecord> {
+  return fetchJson(`${API_BASE}/assignments/${assignmentId}/archive`, {
+    method: "POST",
+  });
+}
+
+/**
+ * Restore an archived assignment to active state.
+ */
+export async function restoreAssignment(assignmentId: string): Promise<AssignmentStateRecord> {
+  return fetchJson(`${API_BASE}/assignments/${assignmentId}/restore`, {
+    method: "POST",
+  });
+}
+
+/**
+ * Trigger auto-archive check.
+ * Called periodically (e.g., on dashboard load).
+ */
+export async function triggerAutoArchive(): Promise<{ checked: number; archived: string[] }> {
+  return fetchJson(`${API_BASE}/assignments/auto-archive`, {
+    method: "POST",
+  });
+}
+
+/**
+ * Get all archived assignments with summaries.
+ */
+export async function getArchivedAssignments(): Promise<ArchivedAssignment[]> {
+  return fetchJson(`${API_BASE}/assignments/archived/list`);
+}
+
+// ============================================
+// Class / Section Types
+// ============================================
+
+export interface Class {
+  id: string;
+  name: string;
+  description?: string;
+  gradeLevel?: string;
+  schoolYear?: string;
+  period?: string;
+  subject?: string;
+  studentIds: string[];
+  teacherId?: string;
+  createdAt: string;
+  updatedAt?: string;
+  archivedAt?: string;
+}
+
+export interface ClassSummary {
+  id: string;
+  name: string;
+  gradeLevel?: string;
+  schoolYear?: string;
+  period?: string;
+  subject?: string;
+  studentCount: number;
+  createdAt: string;
+  archivedAt?: string;
+}
+
+export interface ClassWithStudents extends Class {
+  students: Student[];
+}
+
+export interface CreateClassInput {
+  name: string;
+  description?: string;
+  gradeLevel?: string;
+  schoolYear?: string;
+  period?: string;
+  subject?: string;
+  studentIds?: string[];
+}
+
+export interface UpdateClassInput {
+  name?: string;
+  description?: string;
+  gradeLevel?: string;
+  schoolYear?: string;
+  period?: string;
+  subject?: string;
+}
+
+export interface StudentAssignment {
+  id: string;
+  lessonId: string;
+  classId: string;
+  studentId: string;
+  assignedAt: string;
+  assignedBy?: string;
+}
+
+export interface LessonAssignmentSummary {
+  lessonId: string;
+  totalAssigned: number;
+  assignmentsByClass: {
+    classId: string;
+    className: string;
+    studentCount: number;
+    assignedAt: string;
+  }[];
+}
+
+export interface AssignLessonResponse {
+  success: boolean;
+  lessonId: string;
+  classId: string;
+  className: string;
+  assignedCount: number;
+  totalInClass: number;
+  assignments: StudentAssignment[];
+}
+
+export interface BulkAddStudentsResponse {
+  class: Class;
+  created: number;
+  existing: number;
+  students: Student[];
+}
+
+// ============================================
+// Class / Section API Functions
+// ============================================
+
+/**
+ * Get all classes (excludes archived by default).
+ */
+export async function getClasses(includeArchived: boolean = false): Promise<ClassSummary[]> {
+  const params = includeArchived ? "?includeArchived=true" : "";
+  return fetchJson(`${API_BASE}/classes${params}`);
+}
+
+/**
+ * Get archived classes only.
+ */
+export async function getArchivedClasses(): Promise<Class[]> {
+  return fetchJson(`${API_BASE}/classes/archived`);
+}
+
+/**
+ * Get a class by ID with full student details.
+ */
+export async function getClass(classId: string): Promise<ClassWithStudents> {
+  return fetchJson(`${API_BASE}/classes/${classId}`);
+}
+
+/**
+ * Create a new class.
+ */
+export async function createClass(input: CreateClassInput): Promise<Class> {
+  return fetchJson(`${API_BASE}/classes`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+/**
+ * Update a class.
+ */
+export async function updateClass(classId: string, input: UpdateClassInput): Promise<Class> {
+  return fetchJson(`${API_BASE}/classes/${classId}`, {
+    method: "PUT",
+    body: JSON.stringify(input),
+  });
+}
+
+/**
+ * Archive a class (soft delete).
+ */
+export async function archiveClass(classId: string): Promise<Class> {
+  return fetchJson(`${API_BASE}/classes/${classId}/archive`, {
+    method: "POST",
+  });
+}
+
+/**
+ * Restore an archived class.
+ */
+export async function restoreClass(classId: string): Promise<Class> {
+  return fetchJson(`${API_BASE}/classes/${classId}/restore`, {
+    method: "POST",
+  });
+}
+
+/**
+ * Permanently delete a class.
+ */
+export async function deleteClass(classId: string): Promise<{ success: boolean }> {
+  return fetchJson(`${API_BASE}/classes/${classId}`, {
+    method: "DELETE",
+  });
+}
+
+/**
+ * Add students to a class by their IDs.
+ */
+export async function addStudentsToClass(classId: string, studentIds: string[]): Promise<Class> {
+  return fetchJson(`${API_BASE}/classes/${classId}/students`, {
+    method: "POST",
+    body: JSON.stringify({ studentIds }),
+  });
+}
+
+/**
+ * Bulk add students by name (creates students if they don't exist).
+ * Supports comma or newline separated names.
+ */
+export async function bulkAddStudentsToClass(classId: string, names: string): Promise<BulkAddStudentsResponse> {
+  return fetchJson(`${API_BASE}/classes/${classId}/students/bulk`, {
+    method: "POST",
+    body: JSON.stringify({ names }),
+  });
+}
+
+/**
+ * Remove a student from a class.
+ */
+export async function removeStudentFromClass(classId: string, studentId: string): Promise<Class> {
+  return fetchJson(`${API_BASE}/classes/${classId}/students/${studentId}`, {
+    method: "DELETE",
+  });
+}
+
+// ============================================
+// Lesson Assignment API Functions
+// ============================================
+
+/**
+ * Get assignment summary for a lesson.
+ */
+export async function getLessonAssignments(lessonId: string): Promise<LessonAssignmentSummary> {
+  return fetchJson(`${API_BASE}/lessons/${lessonId}/assignments`);
+}
+
+/**
+ * Assign a lesson to a class (all students or specific students).
+ */
+export async function assignLessonToClass(
+  lessonId: string,
+  classId: string,
+  studentIds?: string[]
+): Promise<AssignLessonResponse> {
+  return fetchJson(`${API_BASE}/lessons/${lessonId}/assign`, {
+    method: "POST",
+    body: JSON.stringify({ classId, studentIds }),
+  });
+}
+
+/**
+ * Remove all assignments for a lesson from a specific class.
+ */
+export async function unassignLessonFromClass(
+  lessonId: string,
+  classId: string
+): Promise<{ success: boolean; lessonId: string; classId: string; removedCount: number }> {
+  return fetchJson(`${API_BASE}/lessons/${lessonId}/assign/${classId}`, {
+    method: "DELETE",
+  });
+}
+
+/**
+ * Get assigned student IDs for a lesson.
+ */
+export async function getAssignedStudents(
+  lessonId: string
+): Promise<{ lessonId: string; hasAssignments: boolean; studentIds: string[]; count: number }> {
+  return fetchJson(`${API_BASE}/lessons/${lessonId}/assigned-students`);
 }

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useParams, useNavigate, useSearchParams, Link } from "react-router-dom";
 import {
   getLesson,
@@ -53,7 +53,6 @@ export default function Lesson() {
     startRecording,
     stopRecording,
     speak,
-    cancelRecording,
   } = useVoice();
 
   // Update voice state based on hook states
@@ -131,6 +130,19 @@ export default function Lesson() {
 
   // Speak coach feedback and optionally start recording for follow-up
   const speakFeedbackAndContinue = async (coachFeedback: string, followUpQuestion?: string, shouldContinue?: boolean) => {
+    console.log("=== SPEAK FEEDBACK START ===");
+    console.log("coachFeedback:", coachFeedback);
+    console.log("followUpQuestion:", followUpQuestion);
+    console.log("shouldContinue:", shouldContinue);
+
+    // Validate inputs
+    if (!coachFeedback || typeof coachFeedback !== "string") {
+      console.error("Invalid coachFeedback:", coachFeedback);
+      setVoiceState("idle");
+      isProcessingRef.current = false;
+      return;
+    }
+
     setVoiceState("speaking");
 
     // Speak feedback and follow-up question
@@ -138,8 +150,9 @@ export default function Lesson() {
       ? `${coachFeedback} ${followUpQuestion}`
       : coachFeedback;
 
-    console.log("=== SPEAK FEEDBACK ===");
-    console.log("Speaking FEEDBACK:", message.substring(0, 50) + "...");
+    console.log("Speaking FEEDBACK message:", message.substring(0, 100) + "...");
+    console.log("Message length:", message.length);
+
     const speechSuccess = await speak(message);
     console.log("FEEDBACK speech completed, success:", speechSuccess);
 
@@ -162,17 +175,17 @@ export default function Lesson() {
       setVoiceState("processing");
       isProcessingRef.current = true;
 
-      const text = await stopRecording();
+      const result = await stopRecording();
 
-      if (text) {
+      if (result) {
         if (!feedback) {
           // This is the main answer
-          setAnswer(text);
-          await submitAnswer(text);
+          setAnswer(result.text);
+          await submitAnswer(result.text, result.audioBase64, result.audioFormat);
         } else {
-          // This is a follow-up response
-          setFollowUpAnswer(text);
-          await submitFollowUp(text);
+          // This is a follow-up response (don't save audio for follow-ups)
+          setFollowUpAnswer(result.text);
+          await submitFollowUp(result.text);
         }
       } else {
         // No text transcribed, restart recording
@@ -184,7 +197,7 @@ export default function Lesson() {
     }
   };
 
-  const submitAnswer = async (answerText: string) => {
+  const submitAnswer = async (answerText: string, audioBase64?: string, audioFormat?: string) => {
     if (!answerText.trim() || !currentPrompt || !session || !lessonId) {
       isProcessingRef.current = false;
       return;
@@ -213,11 +226,13 @@ export default function Lesson() {
         ]);
       }
 
-      // Update session
+      // Update session - include audio data if available (voice mode)
       const response: PromptResponse = {
         promptId: currentPrompt.id,
         response: answerText.trim(),
         hintUsed: showHint,
+        ...(audioBase64 && { audioBase64 }),
+        ...(audioFormat && { audioFormat }),
       };
 
       const updatedResponses = [...session.submission.responses, response];
@@ -240,6 +255,8 @@ export default function Lesson() {
 
       // In voice mode, speak the feedback and continue the conversation
       if (mode === "voice") {
+        // Add a small delay to ensure all state has settled
+        await new Promise((r) => setTimeout(r, 300));
         await speakFeedbackAndContinue(
           coachResponse.feedback,
           coachResponse.followUpQuestion,
@@ -332,24 +349,6 @@ export default function Lesson() {
 
   const handleFollowUpSubmit = async () => {
     await submitFollowUp(followUpAnswer);
-  };
-
-  const handleVoiceInput = async () => {
-    if (isRecording) {
-      const text = await stopRecording();
-      if (text) setAnswer(text);
-    } else {
-      await startRecording();
-    }
-  };
-
-  const handleFollowUpVoiceInput = async () => {
-    if (isRecording) {
-      const text = await stopRecording();
-      if (text) setFollowUpAnswer(text);
-    } else {
-      await startRecording();
-    }
   };
 
   const handleNext = async () => {
@@ -530,53 +529,23 @@ export default function Lesson() {
           </div>
           )}
 
-          {/* Feedback display in voice mode */}
-          {lessonStarted && feedback && (
+          {/* Feedback display in voice mode - just the encouragement bubble, no transcript */}
+          {lessonStarted && feedback && voiceState === "idle" && (
             <div style={{ marginBottom: "24px" }}>
-              {/* Score */}
               <div
                 style={{
                   display: "inline-flex",
                   alignItems: "center",
                   gap: "12px",
-                  padding: "12px 24px",
+                  padding: "16px 32px",
                   background: feedback.isCorrect ? "#e8f5e9" : "#fff3e0",
                   borderRadius: "24px",
-                  marginBottom: "16px",
                 }}
               >
-                <span style={{ fontSize: "1.5rem" }}>{feedback.isCorrect ? "✨" : "💭"}</span>
-                <span style={{ fontWeight: 600, color: feedback.isCorrect ? "#2e7d32" : "#ef6c00" }}>
+                <span style={{ fontSize: "2rem" }}>{feedback.isCorrect ? "✨" : "💭"}</span>
+                <span style={{ fontWeight: 600, fontSize: "1.2rem", color: feedback.isCorrect ? "#2e7d32" : "#ef6c00" }}>
                   {feedback.encouragement}
                 </span>
-              </div>
-
-              {/* Conversation bubbles */}
-              <div style={{ maxHeight: "200px", overflowY: "auto", marginTop: "16px" }}>
-                {conversationHistory.map((msg, i) => (
-                  <div
-                    key={i}
-                    style={{
-                      display: "flex",
-                      justifyContent: msg.role === "student" ? "flex-end" : "flex-start",
-                      marginBottom: "8px",
-                    }}
-                  >
-                    <div
-                      style={{
-                        maxWidth: "85%",
-                        padding: "10px 14px",
-                        borderRadius: msg.role === "student" ? "16px 16px 4px 16px" : "16px 16px 16px 4px",
-                        background: msg.role === "student" ? "#667eea" : "#f0f0f0",
-                        color: msg.role === "student" ? "white" : "#333",
-                        fontSize: "0.95rem",
-                        textAlign: "left",
-                      }}
-                    >
-                      {msg.message}
-                    </div>
-                  </div>
-                ))}
               </div>
             </div>
           )}

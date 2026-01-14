@@ -1,0 +1,37 @@
+{
+  "id": "fun-with-addition-and-subtraction",
+  "title": "Fun with Addition and Subtraction",
+  "description": "In this lesson, students will learn how to solve basic addition and subtraction problems using objects and drawings. They will explain their thinking and understand how to find the answers.",
+  "difficulty": "beginner",
+  "gradeLevel": "1st grade",
+  "standards": [
+    "RL.1.1",
+    "RL.1.2"
+  ],
+  "prompts": [
+    {
+      "id": "q1",
+      "type": "explain",
+      "input": "If you have 3 apples and you add 2 more apples, how many apples do you have now? Explain how you got your answer.",
+      "hints": [
+        "Think about how you can count the apples you started with and the ones you added.",
+        "You can use your fingers or draw a picture to help you see the total."
+      ],
+      "standards": [
+        "RL.1.1"
+      ]
+    },
+    {
+      "id": "q2",
+      "type": "explain",
+      "input": "You have 5 cookies, and you eat 1 cookie. How many cookies are left? Explain how you figured that out.",
+      "hints": [
+        "Try to think about what happens to the total when you take one away.",
+        "You can draw the cookies or use your fingers to help you count how many are left."
+      ],
+      "standards": [
+        "RL.1.2"
+      ]
+    }
+  ]
+}

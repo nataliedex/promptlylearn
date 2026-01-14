@@ -65,8 +65,11 @@ router.post("/transcribe", async (req, res) => {
 
 // POST /api/voice/speak - Convert text to speech using OpenAI TTS
 router.post("/speak", async (req, res) => {
+  console.log("[TTS] Request received, text length:", req.body?.text?.length);
+
   const client = getClient();
   if (!client) {
+    console.log("[TTS] OPENAI_API_KEY not configured");
     return res.status(503).json({ error: "Voice features require OPENAI_API_KEY" });
   }
 
@@ -74,8 +77,11 @@ router.post("/speak", async (req, res) => {
     const { text, voice = "nova" } = req.body;
 
     if (!text) {
+      console.log("[TTS] No text provided");
       return res.status(400).json({ error: "Text is required" });
     }
+
+    console.log("[TTS] Calling OpenAI TTS API...");
 
     const response = await client.audio.speech.create({
       model: "tts-1",
@@ -84,6 +90,7 @@ router.post("/speak", async (req, res) => {
     });
 
     const buffer = Buffer.from(await response.arrayBuffer());
+    console.log("[TTS] OpenAI TTS completed, audio size:", buffer.length, "bytes");
 
     // Return audio as base64
     res.json({
@@ -91,7 +98,7 @@ router.post("/speak", async (req, res) => {
       format: "mp3",
     });
   } catch (error) {
-    console.error("TTS error:", error);
+    console.error("[TTS] Error:", error);
     res.status(500).json({ error: "Failed to generate speech" });
   }
 });
