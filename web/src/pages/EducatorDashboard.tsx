@@ -20,12 +20,16 @@ import {
   triggerAutoArchive,
   archiveAssignment,
   getClasses,
+  getClass,
   getLessonAssignments,
   getStudents,
   getStudentCoachingInsights,
+  getAssignedStudents,
+  assignLessonToClass,
   type ComputedAssignmentState,
   type AssignmentDashboardData,
   type ClassSummary,
+  type ClassWithStudents,
   type Student,
   type CoachingInsight,
 } from "../services/api";
@@ -48,10 +52,18 @@ export default function EducatorDashboard() {
   const navigate = useNavigate();
   const [dashboardData, setDashboardData] = useState<AssignmentDashboardData | null>(null);
   const [classes, setClasses] = useState<ClassSummary[]>([]);
+  const [allStudents, setAllStudents] = useState<Student[]>([]);
   const [assignmentClassMap, setAssignmentClassMap] = useState<Map<string, string[]>>(new Map());
   const [coachingActivity, setCoachingActivity] = useState<StudentCoachingActivity[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // Add Student Modal state
+  const [addStudentModal, setAddStudentModal] = useState<{
+    isOpen: boolean;
+    assignmentId: string;
+    assignmentTitle: string;
+  } | null>(null);
 
   const loadData = async () => {
     try {
@@ -71,6 +83,7 @@ export default function EducatorDashboard() {
 
       setDashboardData(dashData);
       setClasses(classesData);
+      setAllStudents(studentsData);
 
       // Load class associations for each assignment
       const allAssignments = [...dashData.active, ...dashData.resolved];
@@ -341,6 +354,11 @@ export default function EducatorDashboard() {
                     assignment={assignment}
                     onNavigate={() => navigate(`/educator/assignment/${assignment.assignmentId}`)}
                     onArchive={() => handleArchiveAssignment(assignment.assignmentId, assignment.title)}
+                    onAddStudent={() => setAddStudentModal({
+                      isOpen: true,
+                      assignmentId: assignment.assignmentId,
+                      assignmentTitle: assignment.title,
+                    })}
                   />
                 ))}
               </div>
@@ -424,6 +442,21 @@ export default function EducatorDashboard() {
           Archived ({archivedCount})
         </button>
       </div>
+
+      {/* Add Student Modal */}
+      {addStudentModal && (
+        <AddStudentModal
+          assignmentId={addStudentModal.assignmentId}
+          assignmentTitle={addStudentModal.assignmentTitle}
+          classes={classes}
+          allStudents={allStudents}
+          onClose={() => setAddStudentModal(null)}
+          onSuccess={() => {
+            setAddStudentModal(null);
+            loadData();
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -563,9 +596,10 @@ interface AssignmentCardProps {
   assignment: ComputedAssignmentState;
   onNavigate: () => void;
   onArchive: () => void;
+  onAddStudent: () => void;
 }
 
-function AssignmentCard({ assignment, onNavigate, onArchive }: AssignmentCardProps) {
+function AssignmentCard({ assignment, onNavigate, onArchive, onAddStudent }: AssignmentCardProps) {
   const { title, totalStudents, completedCount, distribution, studentsNeedingSupport, studentStatuses } = assignment;
 
   const hasActivity = completedCount > 0;
@@ -595,10 +629,37 @@ function AssignmentCard({ assignment, onNavigate, onArchive }: AssignmentCardPro
         e.currentTarget.style.boxShadow = "";
       }}
     >
-      {/* Header: Title and Archive Button */}
+      {/* Header: Title and Action Buttons */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
         <h3 style={{ margin: 0, color: "#667eea", flex: 1 }}>{title}</h3>
         <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onAddStudent();
+            }}
+            title="Add student to this assignment"
+            style={{
+              background: "transparent",
+              border: "none",
+              cursor: "pointer",
+              padding: "4px 8px",
+              borderRadius: "4px",
+              color: "#667eea",
+              fontSize: "0.85rem",
+              transition: "color 0.2s, background 0.2s",
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = "#f0f0ff";
+              e.currentTarget.style.color = "#5563d6";
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = "transparent";
+              e.currentTarget.style.color = "#667eea";
+            }}
+          >
+            + Add Student
+          </button>
           <button
             onClick={(e) => {
               e.stopPropagation();
@@ -936,6 +997,211 @@ function CoachingActivitySection({ activities, onNavigate }: CoachingActivitySec
           Recent topics: {[...new Set(displayActivities.flatMap((a) => a.insight.recentTopics))].slice(0, 5).join(", ")}
         </div>
       )}
+    </div>
+  );
+}
+
+// ============================================
+// Add Student Modal
+// ============================================
+
+interface AddStudentModalProps {
+  assignmentId: string;
+  assignmentTitle: string;
+  classes: ClassSummary[];
+  allStudents: Student[];
+  onClose: () => void;
+  onSuccess: () => void;
+}
+
+function AddStudentModal({
+  assignmentId,
+  assignmentTitle,
+  classes,
+  onClose,
+  onSuccess,
+}: AddStudentModalProps) {
+  const [selectedStudents, setSelectedStudents] = useState<Set<string>>(new Set());
+  const [assignedStudentIds, setAssignedStudentIds] = useState<Set<string>>(new Set());
+  const [classesWithStudents, setClassesWithStudents] = useState<ClassWithStudents[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+
+  // Load already assigned students and full class data
+  useEffect(() => {
+    async function loadData() {
+      try {
+        const [assignedData, ...classDataList] = await Promise.all([
+          getAssignedStudents(assignmentId),
+          ...classes.map((c) => getClass(c.id)),
+        ]);
+        setAssignedStudentIds(new Set(assignedData.studentIds));
+        setClassesWithStudents(classDataList);
+      } catch (err) {
+        console.error("Failed to load data:", err);
+      } finally {
+        setLoading(false);
+      }
+    }
+    loadData();
+  }, [assignmentId, classes]);
+
+  const handleToggleStudent = (studentId: string) => {
+    setSelectedStudents((prev) => {
+      const next = new Set(prev);
+      if (next.has(studentId)) {
+        next.delete(studentId);
+      } else {
+        next.add(studentId);
+      }
+      return next;
+    });
+  };
+
+  const handleSave = async () => {
+    if (selectedStudents.size === 0) return;
+
+    setSaving(true);
+    try {
+      // Group selected students by class
+      const studentsByClass = new Map<string, string[]>();
+
+      for (const studentId of selectedStudents) {
+        // Find which class this student belongs to
+        for (const cls of classesWithStudents) {
+          if (cls.students.some((s) => s.id === studentId)) {
+            if (!studentsByClass.has(cls.id)) {
+              studentsByClass.set(cls.id, []);
+            }
+            studentsByClass.get(cls.id)!.push(studentId);
+            break;
+          }
+        }
+      }
+
+      // Assign students to the lesson by class
+      for (const [classId, studentIds] of studentsByClass) {
+        await assignLessonToClass(assignmentId, classId, studentIds);
+      }
+
+      onSuccess();
+    } catch (err) {
+      console.error("Failed to add students:", err);
+      alert("Failed to add students. Please try again.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // Get unassigned students grouped by class
+  const unassignedByClass = classesWithStudents.map((cls) => ({
+    ...cls,
+    unassignedStudents: cls.students.filter((s) => !assignedStudentIds.has(s.id)),
+  })).filter((cls) => cls.unassignedStudents.length > 0);
+
+  return (
+    <div
+      style={{
+        position: "fixed",
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        background: "rgba(0,0,0,0.5)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        zIndex: 1000,
+      }}
+      onClick={onClose}
+    >
+      <div
+        style={{
+          background: "white",
+          borderRadius: "12px",
+          padding: "24px",
+          maxWidth: "500px",
+          width: "90%",
+          maxHeight: "80vh",
+          overflow: "auto",
+        }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px" }}>
+          <h2 style={{ margin: 0, color: "#333" }}>Add Students</h2>
+          <button
+            onClick={onClose}
+            style={{
+              background: "none",
+              border: "none",
+              fontSize: "1.5rem",
+              cursor: "pointer",
+              color: "#999",
+            }}
+          >
+            ×
+          </button>
+        </div>
+
+        <p style={{ color: "#666", marginBottom: "16px" }}>
+          Add students to <strong>{assignmentTitle}</strong>
+        </p>
+
+        {loading ? (
+          <p style={{ color: "#666" }}>Loading...</p>
+        ) : unassignedByClass.length === 0 ? (
+          <p style={{ color: "#666" }}>All students are already assigned to this lesson.</p>
+        ) : (
+          <>
+            {unassignedByClass.map((cls) => (
+              <div key={cls.id} style={{ marginBottom: "16px" }}>
+                <h4 style={{ margin: "0 0 8px 0", color: "#667eea" }}>{cls.name}</h4>
+                <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                  {cls.unassignedStudents.map((student) => (
+                    <label
+                      key={student.id}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "8px",
+                        padding: "8px 12px",
+                        background: selectedStudents.has(student.id) ? "#f0f0ff" : "#f5f5f5",
+                        borderRadius: "8px",
+                        cursor: "pointer",
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={selectedStudents.has(student.id)}
+                        onChange={() => handleToggleStudent(student.id)}
+                      />
+                      <span>{student.name}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </>
+        )}
+
+        <div style={{ display: "flex", gap: "12px", marginTop: "24px" }}>
+          <button
+            onClick={onClose}
+            className="btn btn-secondary"
+            style={{ flex: 1 }}
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleSave}
+            className="btn btn-primary"
+            style={{ flex: 1 }}
+            disabled={selectedStudents.size === 0 || saving}
+          >
+            {saving ? "Adding..." : `Add ${selectedStudents.size} Student${selectedStudents.size !== 1 ? "s" : ""}`}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
