@@ -16,18 +16,18 @@
 import { useState, useEffect } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import {
-  getStudents,
   getAssignmentDashboard,
   triggerAutoArchive,
   archiveAssignment,
-  resolveAssignment,
   getClasses,
   getLessonAssignments,
+  getStudents,
+  getStudentCoachingInsights,
   type ComputedAssignmentState,
   type AssignmentDashboardData,
-  type ActiveReason,
-  type Student,
   type ClassSummary,
+  type Student,
+  type CoachingInsight,
 } from "../services/api";
 
 // Type for assignments grouped by class
@@ -37,12 +37,19 @@ interface ClassAssignmentGroup {
   assignments: ComputedAssignmentState[];
 }
 
+// Type for student coaching activity
+interface StudentCoachingActivity {
+  studentId: string;
+  studentName: string;
+  insight: CoachingInsight;
+}
+
 export default function EducatorDashboard() {
   const navigate = useNavigate();
   const [dashboardData, setDashboardData] = useState<AssignmentDashboardData | null>(null);
-  const [students, setStudents] = useState<Student[]>([]);
   const [classes, setClasses] = useState<ClassSummary[]>([]);
   const [assignmentClassMap, setAssignmentClassMap] = useState<Map<string, string[]>>(new Map());
+  const [coachingActivity, setCoachingActivity] = useState<StudentCoachingActivity[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -56,13 +63,12 @@ export default function EducatorDashboard() {
         console.log("Auto-archive check skipped");
       });
 
-      const [studentsData, dashData, classesData] = await Promise.all([
-        getStudents(),
+      const [dashData, classesData, studentsData] = await Promise.all([
         getAssignmentDashboard(),
         getClasses(),
+        getStudents(),
       ]);
 
-      setStudents(studentsData);
       setDashboardData(dashData);
       setClasses(classesData);
 
@@ -84,6 +90,38 @@ export default function EducatorDashboard() {
       );
 
       setAssignmentClassMap(classMap);
+
+      // Load coaching insights for all students
+      const coachingActivities: StudentCoachingActivity[] = [];
+      await Promise.all(
+        studentsData.map(async (student: Student) => {
+          try {
+            const insight = await getStudentCoachingInsights(student.id);
+            if (insight.totalCoachRequests > 0) {
+              coachingActivities.push({
+                studentId: student.id,
+                studentName: student.name,
+                insight,
+              });
+            }
+          } catch {
+            // No coaching data for this student
+          }
+        })
+      );
+
+      // Sort by recency and support-seeking first
+      coachingActivities.sort((a, b) => {
+        // Support-seeking students first
+        if (a.insight.intentLabel === "support-seeking" && b.insight.intentLabel !== "support-seeking") return -1;
+        if (b.insight.intentLabel === "support-seeking" && a.insight.intentLabel !== "support-seeking") return 1;
+        // Then by recency
+        const aTime = a.insight.lastCoachSessionAt ? new Date(a.insight.lastCoachSessionAt).getTime() : 0;
+        const bTime = b.insight.lastCoachSessionAt ? new Date(b.insight.lastCoachSessionAt).getTime() : 0;
+        return bTime - aTime;
+      });
+
+      setCoachingActivity(coachingActivities);
     } catch (err) {
       console.error("Failed to load educator dashboard:", err);
       setError("Failed to load dashboard data. Please try again.");
@@ -110,16 +148,6 @@ export default function EducatorDashboard() {
     }
   };
 
-  const handleResolveAssignment = async (assignmentId: string) => {
-    try {
-      await resolveAssignment(assignmentId);
-      await loadData();
-    } catch (err) {
-      console.error("Failed to resolve assignment:", err);
-      alert("Failed to resolve assignment. Please try again.");
-    }
-  };
-
   if (loading) {
     return (
       <div className="loading">
@@ -143,7 +171,6 @@ export default function EducatorDashboard() {
   }
 
   const { active, resolved, archivedCount } = dashboardData;
-  const totalStudents = students.length;
 
   // Extract students needing attention from active assignments
   const studentsNeedingAttention = active.flatMap(assignment =>
@@ -265,6 +292,14 @@ export default function EducatorDashboard() {
         </div>
       )}
 
+      {/* Coaching Activity - Students using Ask Coach */}
+      {coachingActivity.length > 0 && (
+        <CoachingActivitySection
+          activities={coachingActivity}
+          onNavigate={(studentId) => navigate(`/educator/student/${studentId}`)}
+        />
+      )}
+
       {/* Active Assignments by Class */}
       {activeByClass.length > 0 && (
         <>
@@ -306,7 +341,6 @@ export default function EducatorDashboard() {
                     assignment={assignment}
                     onNavigate={() => navigate(`/educator/assignment/${assignment.assignmentId}`)}
                     onArchive={() => handleArchiveAssignment(assignment.assignmentId, assignment.title)}
-                    onResolve={() => handleResolveAssignment(assignment.assignmentId)}
                   />
                 ))}
               </div>
@@ -384,12 +418,6 @@ export default function EducatorDashboard() {
       >
         <button
           className="btn btn-secondary"
-          onClick={() => navigate("/educator/students")}
-        >
-          All Students ({totalStudents})
-        </button>
-        <button
-          className="btn btn-secondary"
           onClick={() => navigate("/educator/archived")}
           style={{ marginLeft: "auto" }}
         >
@@ -418,17 +446,6 @@ function getReasonDescription(
     return "Low score on assignment";
   }
   return "May need follow-up";
-}
-
-function getActiveReasonLabel(reason: ActiveReason): string {
-  switch (reason) {
-    case "students-need-support": return "Students need support";
-    case "incomplete-work": return "Incomplete work";
-    case "not-reviewed": return "Not reviewed yet";
-    case "pending-feedback": return "Pending feedback";
-    case "recent-activity": return "Recent activity";
-    default: return reason;
-  }
 }
 
 // ============================================
@@ -546,14 +563,19 @@ interface AssignmentCardProps {
   assignment: ComputedAssignmentState;
   onNavigate: () => void;
   onArchive: () => void;
-  onResolve: () => void;
 }
 
-function AssignmentCard({ assignment, onNavigate, onArchive, onResolve }: AssignmentCardProps) {
-  const { title, totalStudents, completedCount, distribution, studentsNeedingSupport, activeReasons } = assignment;
+function AssignmentCard({ assignment, onNavigate, onArchive }: AssignmentCardProps) {
+  const { title, totalStudents, completedCount, distribution, studentsNeedingSupport, studentStatuses } = assignment;
 
   const hasActivity = completedCount > 0;
-  const canResolve = studentsNeedingSupport === 0 && completedCount > 0;
+
+  // Check if all students needing support have been reviewed (have teacher notes)
+  const needsSupportStudents = studentStatuses.filter((s) => s.needsSupport);
+  const allNeedsSupportReviewed =
+    needsSupportStudents.length > 0 &&
+    needsSupportStudents.every((s) => s.hasTeacherNote);
+  const isFullyReviewed = hasActivity && (studentsNeedingSupport === 0 || allNeedsSupportReviewed);
 
   return (
     <div
@@ -573,36 +595,10 @@ function AssignmentCard({ assignment, onNavigate, onArchive, onResolve }: Assign
         e.currentTarget.style.boxShadow = "";
       }}
     >
+      {/* Header: Title and Archive Button */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
         <h3 style={{ margin: 0, color: "#667eea", flex: 1 }}>{title}</h3>
         <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-          {canResolve && (
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                onResolve();
-              }}
-              title="Mark as resolved"
-              style={{
-                background: "#e8f5e9",
-                border: "none",
-                cursor: "pointer",
-                padding: "4px 8px",
-                borderRadius: "4px",
-                color: "#2e7d32",
-                fontSize: "0.8rem",
-                transition: "background 0.2s",
-              }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.background = "#c8e6c9";
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.background = "#e8f5e9";
-              }}
-            >
-              ✓ Resolve
-            </button>
-          )}
           <button
             onClick={(e) => {
               e.stopPropagation();
@@ -634,98 +630,57 @@ function AssignmentCard({ assignment, onNavigate, onArchive, onResolve }: Assign
         </div>
       </div>
 
-      {/* Active Reasons */}
-      {activeReasons.length > 0 && (
-        <div style={{ display: "flex", gap: "6px", flexWrap: "wrap", marginTop: "8px" }}>
-          {activeReasons.slice(0, 2).map(reason => (
-            <span
-              key={reason}
-              style={{
-                fontSize: "0.75rem",
-                padding: "2px 8px",
-                borderRadius: "12px",
-                background: reason === "students-need-support" ? "#fff3e0" : "#e3f2fd",
-                color: reason === "students-need-support" ? "#e65100" : "#1976d2",
-              }}
-            >
-              {getActiveReasonLabel(reason)}
-            </span>
-          ))}
-        </div>
-      )}
-
       {/* Completion Status */}
       <p style={{ margin: 0, marginTop: "12px", color: "#666" }}>
         <span style={{ fontWeight: 600 }}>{completedCount}</span>/{totalStudents} completed
       </p>
 
-      {/* Understanding Distribution (only if there's activity) */}
+      {/* Understanding Distribution Table (only if there's activity) */}
       {hasActivity && (
-        <div style={{ marginTop: "16px" }}>
-          <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
-            {distribution.strong > 0 && (
-              <span
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "4px",
-                  fontSize: "0.85rem",
-                  color: "#2e7d32",
-                }}
-              >
-                <span
-                  style={{
-                    width: "8px",
-                    height: "8px",
-                    borderRadius: "50%",
-                    background: "#4caf50",
-                  }}
-                />
-                {distribution.strong} Strong
-              </span>
-            )}
-            {distribution.developing > 0 && (
-              <span
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "4px",
-                  fontSize: "0.85rem",
-                  color: "#ed6c02",
-                }}
-              >
-                <span
-                  style={{
-                    width: "8px",
-                    height: "8px",
-                    borderRadius: "50%",
-                    background: "#ff9800",
-                  }}
-                />
-                {distribution.developing} Developing
-              </span>
-            )}
-            {distribution.needsSupport > 0 && (
-              <span
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "4px",
-                  fontSize: "0.85rem",
-                  color: "#d32f2f",
-                }}
-              >
-                <span
-                  style={{
-                    width: "8px",
-                    height: "8px",
-                    borderRadius: "50%",
-                    background: "#f44336",
-                  }}
-                />
-                {distribution.needsSupport} Need Support
-              </span>
-            )}
+        <div
+          style={{
+            marginTop: "16px",
+            display: "grid",
+            gridTemplateColumns: "repeat(3, 1fr)",
+            gap: "8px",
+            textAlign: "center",
+          }}
+        >
+          <div
+            style={{
+              padding: "8px",
+              background: "#e8f5e9",
+              borderRadius: "8px",
+            }}
+          >
+            <div style={{ fontSize: "1.25rem", fontWeight: 600, color: "#2e7d32" }}>
+              {distribution.strong}
+            </div>
+            <div style={{ fontSize: "0.75rem", color: "#2e7d32" }}>Strong</div>
+          </div>
+          <div
+            style={{
+              padding: "8px",
+              background: "#fff3e0",
+              borderRadius: "8px",
+            }}
+          >
+            <div style={{ fontSize: "1.25rem", fontWeight: 600, color: "#ed6c02" }}>
+              {distribution.developing}
+            </div>
+            <div style={{ fontSize: "0.75rem", color: "#ed6c02" }}>Developing</div>
+          </div>
+          <div
+            style={{
+              padding: "8px",
+              background: "#ffebee",
+              borderRadius: "8px",
+            }}
+          >
+            <div style={{ fontSize: "1.25rem", fontWeight: 600, color: "#d32f2f" }}>
+              {distribution.needsSupport}
+            </div>
+            <div style={{ fontSize: "0.75rem", color: "#d32f2f" }}>Need Support</div>
           </div>
         </div>
       )}
@@ -737,12 +692,29 @@ function AssignmentCard({ assignment, onNavigate, onArchive, onResolve }: Assign
         </p>
       )}
 
-      {/* Needs Attention indicator */}
-      {studentsNeedingSupport > 0 && (
+      {/* Reviewed Status */}
+      {isFullyReviewed && (
         <div
           style={{
             marginTop: "12px",
-            padding: "8px 12px",
+            padding: "6px 12px",
+            background: "#e8f5e9",
+            borderRadius: "8px",
+            fontSize: "0.85rem",
+            color: "#2e7d32",
+            fontWeight: 500,
+          }}
+        >
+          ✓ Reviewed
+        </div>
+      )}
+
+      {/* Needs Attention indicator - only show if not reviewed */}
+      {studentsNeedingSupport > 0 && !isFullyReviewed && (
+        <div
+          style={{
+            marginTop: "12px",
+            padding: "6px 12px",
             background: "#fff3e0",
             borderRadius: "8px",
             fontSize: "0.85rem",
@@ -750,19 +722,6 @@ function AssignmentCard({ assignment, onNavigate, onArchive, onResolve }: Assign
           }}
         >
           {studentsNeedingSupport} student{studentsNeedingSupport !== 1 ? "s" : ""} may need attention
-        </div>
-      )}
-
-      {/* All good indicator */}
-      {hasActivity && studentsNeedingSupport === 0 && (
-        <div
-          style={{
-            marginTop: "12px",
-            fontSize: "0.85rem",
-            color: "#4caf50",
-          }}
-        >
-          ✓ No students flagged
         </div>
       )}
     </div>
@@ -855,6 +814,131 @@ function ResolvedAssignmentCard({ assignment, onNavigate, onArchive }: ResolvedA
           </span>
         )}
       </div>
+    </div>
+  );
+}
+
+// ============================================
+// Coaching Activity Section
+// ============================================
+
+interface CoachingActivitySectionProps {
+  activities: StudentCoachingActivity[];
+  onNavigate: (studentId: string) => void;
+}
+
+function CoachingActivitySection({ activities, onNavigate }: CoachingActivitySectionProps) {
+  // Show support-seeking students prominently
+  const supportSeeking = activities.filter((a) => a.insight.intentLabel === "support-seeking");
+  const others = activities.filter((a) => a.insight.intentLabel !== "support-seeking");
+
+  // Show max 5 total
+  const displaySupport = supportSeeking.slice(0, 3);
+  const displayOthers = others.slice(0, Math.max(0, 5 - displaySupport.length));
+  const displayActivities = [...displaySupport, ...displayOthers];
+  const hasMore = activities.length > 5;
+
+  return (
+    <div
+      className="card"
+      style={{
+        marginTop: "16px",
+        background: "#f3e5f5",
+        borderLeft: "4px solid #9c27b0",
+      }}
+    >
+      <div style={{ marginBottom: "16px" }}>
+        <h3 style={{ margin: 0, color: "#7b1fa2" }}>
+          Coach Activity
+        </h3>
+        <p style={{ margin: 0, color: "#666", marginTop: "4px" }}>
+          Students who have been using Ask Coach
+        </p>
+      </div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+        {displayActivities.map((activity) => (
+          <div
+            key={activity.studentId}
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              padding: "12px 16px",
+              background: "white",
+              borderRadius: "8px",
+              cursor: "pointer",
+              transition: "transform 0.1s, box-shadow 0.1s",
+            }}
+            onClick={() => onNavigate(activity.studentId)}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.transform = "translateX(4px)";
+              e.currentTarget.style.boxShadow = "0 2px 8px rgba(0,0,0,0.1)";
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.transform = "translateX(0)";
+              e.currentTarget.style.boxShadow = "none";
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+              <span style={{ fontSize: "1.2rem" }}>
+                {activity.insight.intentLabel === "support-seeking"
+                  ? "🆘"
+                  : activity.insight.intentLabel === "enrichment-seeking"
+                  ? "🚀"
+                  : "💬"}
+              </span>
+              <div>
+                <span style={{ fontWeight: 600, color: "#333" }}>{activity.studentName}</span>
+                <span style={{ color: "#666", fontSize: "0.85rem", marginLeft: "8px" }}>
+                  {activity.insight.totalCoachRequests} session{activity.insight.totalCoachRequests !== 1 ? "s" : ""}
+                </span>
+              </div>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+              <span
+                style={{
+                  fontSize: "0.85rem",
+                  fontWeight: 500,
+                  padding: "2px 8px",
+                  borderRadius: "4px",
+                  background:
+                    activity.insight.intentLabel === "support-seeking"
+                      ? "#fff3e0"
+                      : activity.insight.intentLabel === "enrichment-seeking"
+                      ? "#e8f5e9"
+                      : "#f5f5f5",
+                  color:
+                    activity.insight.intentLabel === "support-seeking"
+                      ? "#e65100"
+                      : activity.insight.intentLabel === "enrichment-seeking"
+                      ? "#2e7d32"
+                      : "#666",
+                }}
+              >
+                {activity.insight.intentLabel === "support-seeking"
+                  ? "Support-Seeking"
+                  : activity.insight.intentLabel === "enrichment-seeking"
+                  ? "Enrichment-Seeking"
+                  : "Mixed"}
+              </span>
+              <span style={{ color: "#9c27b0" }}>→</span>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {hasMore && (
+        <p style={{ margin: 0, marginTop: "12px", color: "#666", fontSize: "0.9rem", textAlign: "center" }}>
+          +{activities.length - 5} more students with coach activity
+        </p>
+      )}
+
+      {displayActivities.length > 0 && displayActivities.some((a) => a.insight.recentTopics.length > 0) && (
+        <div style={{ marginTop: "12px", fontSize: "0.85rem", color: "#666" }}>
+          Recent topics: {[...new Set(displayActivities.flatMap((a) => a.insight.recentTopics))].slice(0, 5).join(", ")}
+        </div>
+      )}
     </div>
   );
 }

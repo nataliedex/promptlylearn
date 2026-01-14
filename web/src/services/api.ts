@@ -4,6 +4,7 @@ const API_BASE = "http://localhost:3001/api";
 export interface Student {
   id: string;
   name: string;
+  notes?: string;
   createdAt: string;
 }
 
@@ -154,10 +155,14 @@ export async function createOrFindStudent(name: string): Promise<{ student: Stud
   });
 }
 
+export interface StudentLessonSummary extends LessonSummary {
+  attempts: number;
+}
+
 export interface StudentLessonsResponse {
   studentId: string;
   studentName: string;
-  lessons: LessonSummary[];
+  lessons: StudentLessonSummary[];
   count: number;
 }
 
@@ -387,6 +392,31 @@ export async function continueCoachConversation(
       promptId,
       studentAnswer,
       studentResponse,
+      conversationHistory,
+      gradeLevel,
+    }),
+  });
+}
+
+// Coach Chat (Freeform conversation)
+export interface CoachChatResponse {
+  response: string;
+  shouldContinue: boolean;
+}
+
+export async function sendCoachChat(
+  studentName: string,
+  topics: string[],
+  message: string,
+  conversationHistory: ConversationMessage[],
+  gradeLevel?: string
+): Promise<CoachChatResponse> {
+  return fetchJson(`${API_BASE}/coach/chat`, {
+    method: "POST",
+    body: JSON.stringify({
+      studentName,
+      topics,
+      message,
       conversationHistory,
       gradeLevel,
     }),
@@ -632,6 +662,12 @@ export interface StudentAssignment {
   studentId: string;
   assignedAt: string;
   assignedBy?: string;
+  // Completion tracking
+  completedAt?: string;
+  attempts: number;
+  // Review tracking
+  reviewedAt?: string;
+  reviewedBy?: string;
 }
 
 export interface LessonAssignmentSummary {
@@ -802,11 +838,166 @@ export async function unassignLessonFromClass(
   });
 }
 
+export interface AssignedStudentsResponse {
+  lessonId: string;
+  hasAssignments: boolean;
+  studentIds: string[];
+  assignments: Record<string, { attempts: number; completedAt?: string; reviewedAt?: string }>;
+  count: number;
+}
+
 /**
- * Get assigned student IDs for a lesson.
+ * Get assigned student IDs for a lesson with assignment details.
  */
 export async function getAssignedStudents(
   lessonId: string
-): Promise<{ lessonId: string; hasAssignments: boolean; studentIds: string[]; count: number }> {
+): Promise<AssignedStudentsResponse> {
   return fetchJson(`${API_BASE}/lessons/${lessonId}/assigned-students`);
+}
+
+/**
+ * Get assignment details for a specific student on a lesson.
+ */
+export async function getStudentAssignment(
+  lessonId: string,
+  studentId: string
+): Promise<StudentAssignment> {
+  return fetchJson(`${API_BASE}/lessons/${lessonId}/students/${studentId}/assignment`);
+}
+
+/**
+ * Mark a student's assignment as reviewed by teacher.
+ * This removes the student from "needs attention" summaries.
+ */
+export async function markStudentReviewed(
+  lessonId: string,
+  studentId: string
+): Promise<{ success: boolean; lessonId: string; studentId: string; reviewedAt: string }> {
+  return fetchJson(`${API_BASE}/lessons/${lessonId}/students/${studentId}/review`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
+/**
+ * Push an assignment back to a student for another attempt.
+ * Clears completion/review status and increments attempts counter.
+ */
+export async function pushAssignmentToStudent(
+  lessonId: string,
+  studentId: string
+): Promise<{ success: boolean; lessonId: string; studentId: string; attempts: number; message: string }> {
+  return fetchJson(`${API_BASE}/lessons/${lessonId}/students/${studentId}/push`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
+/**
+ * Mark a student's assignment as completed.
+ * Called when a student finishes their session.
+ */
+export async function markAssignmentCompleted(
+  lessonId: string,
+  studentId: string
+): Promise<{ success: boolean; lessonId: string; studentId: string; completedAt: string }> {
+  return fetchJson(`${API_BASE}/lessons/${lessonId}/students/${studentId}/complete`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
+// ============================================
+// Coach Session Types (Ask Coach persistence)
+// ============================================
+
+export interface CoachMessage {
+  role: "student" | "coach";
+  message: string;
+  timestamp: string;
+}
+
+export type IntentLabel = "support-seeking" | "enrichment-seeking" | "mixed";
+
+export interface CoachSessionRecord {
+  id: string;
+  studentId: string;
+  studentName: string;
+  topics: string[];
+  messages: CoachMessage[];
+  mode: "voice" | "type";
+  startedAt: string;
+  endedAt?: string;
+  supportScore: number;
+  enrichmentScore: number;
+  intentLabel: IntentLabel;
+}
+
+export interface CoachingInsight {
+  totalCoachRequests: number;
+  recentTopics: string[];
+  intentLabel: IntentLabel;
+  lastCoachSessionAt?: string;
+}
+
+// ============================================
+// Coach Session API Functions
+// ============================================
+
+/**
+ * Get all coach sessions for a student.
+ */
+export async function getStudentCoachSessions(
+  studentId: string,
+  limit?: number
+): Promise<CoachSessionRecord[]> {
+  const params = new URLSearchParams();
+  params.set("studentId", studentId);
+  if (limit) params.set("limit", limit.toString());
+  return fetchJson(`${API_BASE}/coach-sessions?${params.toString()}`);
+}
+
+/**
+ * Get a coach session by ID.
+ */
+export async function getCoachSession(sessionId: string): Promise<CoachSessionRecord> {
+  return fetchJson(`${API_BASE}/coach-sessions/${sessionId}`);
+}
+
+/**
+ * Save a new coach session.
+ */
+export async function saveCoachSession(data: {
+  studentId: string;
+  studentName: string;
+  topics: string[];
+  messages: CoachMessage[];
+  mode: "voice" | "type";
+  startedAt: string;
+  endedAt?: string;
+}): Promise<CoachSessionRecord> {
+  return fetchJson(`${API_BASE}/coach-sessions`, {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+}
+
+/**
+ * Update an existing coach session (e.g., add messages, end session).
+ */
+export async function updateCoachSession(
+  sessionId: string,
+  data: Partial<CoachSessionRecord>
+): Promise<CoachSessionRecord> {
+  return fetchJson(`${API_BASE}/coach-sessions/${sessionId}`, {
+    method: "PUT",
+    body: JSON.stringify(data),
+  });
+}
+
+/**
+ * Get coaching insights for a student (aggregated from all coach sessions).
+ */
+export async function getStudentCoachingInsights(studentId: string): Promise<CoachingInsight> {
+  return fetchJson(`${API_BASE}/coach-sessions/insights/${studentId}`);
 }

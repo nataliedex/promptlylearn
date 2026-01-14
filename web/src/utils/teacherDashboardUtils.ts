@@ -27,16 +27,17 @@ import type {
 
 /**
  * Derive understanding level from score.
- * Uses generous thresholds focused on growth, not perfection.
+ * Thresholds: Strong (80%+), Developing (50-79%), Struggling (<50%)
  */
 export function deriveUnderstanding(score: number): UnderstandingLevel {
-  if (score >= 70) return "strong";
-  if (score >= 40) return "developing";
+  if (score >= 80) return "strong";
+  if (score >= 50) return "developing";
   return "needs-support";
 }
 
 /**
  * Derive understanding from question outcomes (more nuanced).
+ * Uses same thresholds as deriveUnderstanding: Strong 80%+, Developing 50-79%
  */
 export function deriveUnderstandingFromQuestions(
   questions: QuestionSummary[]
@@ -53,7 +54,7 @@ export function deriveUnderstandingFromQuestions(
   const demonstratedRatio = demonstrated / questions.length;
   const developingRatio = developing / questions.length;
 
-  if (demonstratedRatio >= 0.7) return "strong";
+  if (demonstratedRatio >= 0.8) return "strong";
   if (developingRatio > 0.5) return "needs-support";
   return "developing";
 }
@@ -95,10 +96,10 @@ export function calculateQuestionOutcome(
   }
 
   // Use score if available, otherwise estimate
-  const effectiveScore = score ?? (response.hintUsed ? 60 : 75);
+  const effectiveScore = score ?? (response.hintUsed ? 60 : 80);
 
   // Strong response without much help
-  if (effectiveScore >= 70 && !response.hintUsed) {
+  if (effectiveScore >= 80 && !response.hintUsed) {
     return "demonstrated";
   }
 
@@ -382,6 +383,8 @@ export function buildStudentRow(
     attentionReasons: reasons,
     hasTeacherNote: !!session.educatorNotes,
     sessionId: session.id,
+    attempts: 1, // Default, will be overridden by buildAssignmentReview if assignment data available
+    isReviewed: false, // Default, will be overridden by buildAssignmentReview if assignment data available
   };
 }
 
@@ -454,6 +457,7 @@ export function buildStudentDrilldown(
 
 /**
  * Build assignment review data from sessions.
+ * @param assignmentDetails - Optional map of studentId to assignment details (attempts, etc.)
  */
 export function buildAssignmentReview(
   lessonId: string,
@@ -461,13 +465,41 @@ export function buildAssignmentReview(
   sessions: Session[],
   lesson: Lesson,
   allStudentIds: string[],
-  allStudentNames: Record<string, string>
+  allStudentNames: Record<string, string>,
+  assignmentDetails?: Record<string, { attempts: number; completedAt?: string; reviewedAt?: string }>
 ): AssignmentReviewData {
-  // Build rows for students who have sessions
-  const studentRows = sessions.map((session) => buildStudentRow(session, lesson));
+  // Group sessions by student and pick the most recent one for each
+  const sessionsByStudent = new Map<string, Session[]>();
+  sessions.forEach((session) => {
+    const existing = sessionsByStudent.get(session.studentId) || [];
+    existing.push(session);
+    sessionsByStudent.set(session.studentId, existing);
+  });
+
+  // Get the most recent session for each student (sort by completedAt or startedAt)
+  const latestSessions: Session[] = [];
+  sessionsByStudent.forEach((studentSessions) => {
+    const sorted = studentSessions.sort((a, b) => {
+      const dateA = new Date(a.completedAt || a.startedAt).getTime();
+      const dateB = new Date(b.completedAt || b.startedAt).getTime();
+      return dateB - dateA; // Most recent first
+    });
+    latestSessions.push(sorted[0]);
+  });
+
+  // Build rows for students who have sessions (using latest session)
+  const studentRows = latestSessions.map((session) => {
+    const row = buildStudentRow(session, lesson);
+    // Override attempts and isReviewed from assignment details if available
+    if (assignmentDetails && assignmentDetails[session.studentId]) {
+      row.attempts = assignmentDetails[session.studentId].attempts;
+      row.isReviewed = !!assignmentDetails[session.studentId].reviewedAt;
+    }
+    return row;
+  });
 
   // Add "not started" entries for students without sessions
-  const sessionStudentIds = new Set(sessions.map((s) => s.studentId));
+  const sessionStudentIds = new Set(latestSessions.map((s) => s.studentId));
   const notStartedRows: StudentAssignmentRow[] = allStudentIds
     .filter((id) => !sessionStudentIds.has(id))
     .map((id) => ({
@@ -481,6 +513,8 @@ export function buildAssignmentReview(
       needsReview: false,
       attentionReasons: [],
       hasTeacherNote: false,
+      attempts: assignmentDetails?.[id]?.attempts || 1,
+      isReviewed: !!assignmentDetails?.[id]?.reviewedAt,
     }));
 
   const allRows = [...studentRows, ...notStartedRows];
@@ -599,7 +633,7 @@ export function buildDashboardData(
  */
 function buildSimplifiedStudentRow(
   session: Session,
-  promptCount: number
+  _promptCount: number
 ): { understanding: UnderstandingLevel; coachSupport: CoachSupportLevel; needsReview: boolean; reasons: AttentionReason[] } {
   const questionsAnswered = session.submission.responses.length;
   const isComplete = session.status === "completed";

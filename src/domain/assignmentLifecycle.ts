@@ -153,13 +153,32 @@ export function computeAssignmentState(
   let developing = 0;
   let needsSupport = 0;
 
-  // Process students who have sessions
+  // Filter sessions for this lesson and group by student (take most recent)
+  const lessonSessions = sessions.filter((s) => s.lessonId === lesson.id);
+  const sessionsByStudent = new Map<string, Session[]>();
+
+  for (const session of lessonSessions) {
+    const existing = sessionsByStudent.get(session.studentId) || [];
+    existing.push(session);
+    sessionsByStudent.set(session.studentId, existing);
+  }
+
+  // Get the most recent session for each student
+  const latestSessionByStudent = new Map<string, Session>();
+  sessionsByStudent.forEach((studentSessions, studentId) => {
+    const sorted = studentSessions.sort((a, b) => {
+      const dateA = new Date(a.completedAt || a.startedAt).getTime();
+      const dateB = new Date(b.completedAt || b.startedAt).getTime();
+      return dateB - dateA; // Most recent first
+    });
+    latestSessionByStudent.set(studentId, sorted[0]);
+  });
+
+  // Process each student's most recent session
   const sessionStudentIds = new Set<string>();
 
-  for (const session of sessions) {
-    if (session.lessonId !== lesson.id) continue;
-
-    sessionStudentIds.add(session.studentId);
+  for (const [studentId, session] of latestSessionByStudent) {
+    sessionStudentIds.add(studentId);
 
     const score = session.evaluation?.totalScore ?? 0;
     const understanding = deriveUnderstanding(score);

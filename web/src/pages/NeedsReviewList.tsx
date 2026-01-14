@@ -71,7 +71,8 @@ export default function NeedsReviewList() {
           lessonSessions,
           lesson as Lesson,
           assignedStudentIds,
-          studentNames
+          studentNames,
+          assignedData.assignments // Pass assignment details with attempts
         );
 
         setAssignmentTitle(reviewData.title);

@@ -18,6 +18,14 @@ export interface StudentAssignment {
   studentId: string;
   assignedAt: string;
   assignedBy?: string; // For future: teacherId who assigned
+
+  // Completion tracking
+  completedAt?: string; // When student completed the assignment
+  attempts: number; // Number of times assigned (increments on push)
+
+  // Review tracking
+  reviewedAt?: string; // When teacher reviewed this student's work
+  reviewedBy?: string; // For future: teacherId who reviewed
 }
 
 /**

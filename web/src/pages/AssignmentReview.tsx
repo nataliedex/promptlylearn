@@ -25,7 +25,6 @@ import {
   getUnderstandingColor,
   getUnderstandingBgColor,
   getCoachSupportLabel,
-  getAttentionReasonDisplay,
 } from "../utils/teacherDashboardUtils";
 import type {
   AssignmentReviewData,
@@ -80,7 +79,8 @@ export default function AssignmentReview() {
           lessonSessions,
           lesson as Lesson,
           assignedStudentIds,
-          studentNames
+          studentNames,
+          assignedData.assignments // Pass assignment details with attempts
         );
 
         setReviewData(data);
@@ -273,6 +273,7 @@ export default function AssignmentReview() {
                   <th style={{ textAlign: "center", padding: "12px 8px" }}>Progress</th>
                   <th style={{ textAlign: "center", padding: "12px 8px" }}>Understanding</th>
                   <th style={{ textAlign: "center", padding: "12px 8px" }}>Coach Support</th>
+                  <th style={{ textAlign: "center", padding: "12px 8px" }}>Attempts</th>
                   <th style={{ textAlign: "center", padding: "12px 8px" }}>Review</th>
                   <th style={{ textAlign: "right", padding: "12px 8px" }}></th>
                 </tr>
@@ -421,21 +422,41 @@ function StudentRow({ student, onNavigate }: StudentRowProps) {
         )}
       </td>
 
-      {/* Needs Review */}
+      {/* Attempts */}
       <td style={{ textAlign: "center", padding: "12px 8px" }}>
-        {student.needsReview ? (
+        {student.attempts > 1 ? (
+          <span
+            style={{
+              display: "inline-block",
+              padding: "4px 10px",
+              borderRadius: "12px",
+              fontSize: "0.85rem",
+              fontWeight: 500,
+              background: "#e3f2fd",
+              color: "#1565c0",
+            }}
+          >
+            {student.attempts}
+          </span>
+        ) : (
+          <span style={{ color: "#666" }}>{student.attempts}</span>
+        )}
+      </td>
+
+      {/* Review Status */}
+      <td style={{ textAlign: "center", padding: "12px 8px" }}>
+        {student.isReviewed ? (
           <span
             style={{
               display: "inline-block",
               padding: "4px 8px",
               borderRadius: "8px",
               fontSize: "0.8rem",
-              background: "#fff3e0",
-              color: "#e65100",
+              background: "#e8f5e9",
+              color: "#2e7d32",
             }}
-            title={student.attentionReasons.map((r) => getAttentionReasonDisplay(r).label).join(", ")}
           >
-            Review
+            Reviewed
           </span>
         ) : (
           <span style={{ color: "#999" }}>—</span>

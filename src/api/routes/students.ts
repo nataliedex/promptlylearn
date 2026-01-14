@@ -83,6 +83,7 @@ router.get("/lookup/:name", (req, res) => {
 /**
  * GET /api/students/:id/lessons
  * Get lessons assigned to a specific student
+ * Only returns active (non-completed) assignments
  * Returns lesson summaries (not full lesson content)
  */
 router.get("/:id/lessons", (req, res) => {
@@ -95,9 +96,15 @@ router.get("/:id/lessons", (req, res) => {
       return res.status(404).json({ error: "Student not found" });
     }
 
-    // Get all assignments for this student
-    const assignments = studentAssignmentStore.getStudentAssignments(id);
-    const assignedLessonIds = [...new Set(assignments.map(a => a.lessonId))];
+    // Get only active (non-completed) assignments for this student
+    const activeAssignments = studentAssignmentStore.getActiveStudentAssignments(id);
+    const assignedLessonIds = [...new Set(activeAssignments.map(a => a.lessonId))];
+
+    // Build a map of attempts per lesson
+    const attemptsMap: Record<string, number> = {};
+    activeAssignments.forEach(a => {
+      attemptsMap[a.lessonId] = a.attempts || 1;
+    });
 
     // Get full lesson data and filter to assigned ones
     const allLessons = getAllLessons();
@@ -111,6 +118,7 @@ router.get("/:id/lessons", (req, res) => {
         gradeLevel: lesson.gradeLevel,
         promptCount: lesson.prompts.length,
         standards: lesson.standards,
+        attempts: attemptsMap[lesson.id] || 1,
       }));
 
     res.json({

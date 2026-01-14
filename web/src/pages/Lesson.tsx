@@ -6,6 +6,7 @@ import {
   updateSession,
   getCoachFeedback,
   continueCoachConversation,
+  markAssignmentCompleted,
   type Lesson as LessonType,
   type Session,
   type PromptResponse,
@@ -352,7 +353,7 @@ export default function Lesson() {
   };
 
   const handleNext = async () => {
-    if (!lesson || !session) return;
+    if (!lesson || !session || !studentId || !lessonId) return;
 
     const isComplete = currentIndex >= lesson.prompts.length - 1;
 
@@ -373,6 +374,15 @@ export default function Lesson() {
           })),
         },
       });
+
+      // Mark the assignment as completed (removes from student's active assignments)
+      try {
+        await markAssignmentCompleted(lessonId, studentId);
+      } catch (err) {
+        // Non-critical - log but don't block navigation
+        console.log("Failed to mark assignment completed:", err);
+      }
+
       navigate(`/student/${studentId}/progress`);
     } else {
       await updateSession(session.id, {

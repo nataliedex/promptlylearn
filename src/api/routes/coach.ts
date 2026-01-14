@@ -281,4 +281,145 @@ Respond in JSON format:
   }
 }
 
+// ============================================
+// Freeform Coach Chat (Ask Coach feature)
+// ============================================
+
+interface ChatRequest {
+  studentName: string;
+  topics: string[]; // Lesson titles selected by student
+  message: string;
+  conversationHistory?: ConversationMessage[];
+  gradeLevel?: string;
+}
+
+interface ChatResponse {
+  response: string;
+  shouldContinue: boolean;
+}
+
+// POST /api/coach/chat - Freeform coach conversation
+router.post("/chat", async (req, res) => {
+  try {
+    const {
+      studentName,
+      topics,
+      message,
+      conversationHistory = [],
+      gradeLevel = "2nd grade",
+    } = req.body as ChatRequest;
+
+    if (!studentName || !message) {
+      return res.status(400).json({
+        error: "studentName and message are required",
+      });
+    }
+
+    const client = getClient();
+    if (!client) {
+      return res.json({
+        response: "That's a great question! Keep thinking about it and exploring your ideas.",
+        shouldContinue: true,
+      });
+    }
+
+    // Get context from selected topics (lessons)
+    let topicsContext = "";
+    if (topics && topics.length > 0) {
+      const lessons = getAllLessons();
+      const selectedLessons = lessons.filter((l) => topics.includes(l.title));
+      if (selectedLessons.length > 0) {
+        topicsContext = selectedLessons
+          .map((l) => {
+            const questions = l.prompts.map((p) => p.input).join("\n  - ");
+            return `Lesson: "${l.title}"\n  Questions covered:\n  - ${questions}`;
+          })
+          .join("\n\n");
+      }
+    }
+
+    const response = await generateChatResponse(
+      client,
+      studentName,
+      message,
+      conversationHistory,
+      topicsContext,
+      gradeLevel
+    );
+
+    res.json(response);
+  } catch (error) {
+    console.error("Error in coach chat:", error);
+    res.status(500).json({ error: "Failed to get coach response" });
+  }
+});
+
+async function generateChatResponse(
+  client: OpenAI,
+  studentName: string,
+  message: string,
+  history: ConversationMessage[],
+  topicsContext: string,
+  gradeLevel: string
+): Promise<ChatResponse> {
+  const turnCount = history.filter((h) => h.role === "student").length;
+  const shouldWrapUp = turnCount >= 5; // Allow more turns for freeform chat
+
+  const historyText = history
+    .map((h) => `${h.role === "coach" ? "Coach" : "Student"}: ${h.message}`)
+    .join("\n");
+
+  const systemPrompt = `You are a warm, encouraging learning coach having a conversation with ${studentName}, a ${gradeLevel} student.
+
+${topicsContext ? `The student wants to discuss topics from these lessons:\n${topicsContext}\n` : "The student wants to have a general learning conversation."}
+
+${historyText ? `Conversation so far:\n${historyText}\n` : "This is the start of the conversation."}
+
+Your role:
+- Be warm, friendly, and encouraging
+- Help the student explore their questions and ideas
+- Use the Socratic method - ask guiding questions rather than giving direct answers
+- Keep responses conversational and age-appropriate for ${gradeLevel}
+- Keep responses to 2-3 sentences maximum
+- ${shouldWrapUp ? "This conversation is getting long - wrap up positively soon." : "Continue engaging with the student's curiosity."}
+
+Rules:
+- Never be discouraging or negative
+- Celebrate curiosity and effort
+- If they ask something off-topic, gently redirect to learning topics
+- Make learning feel fun and exciting
+
+Respond in JSON format:
+{
+  "response": "<your conversational response>",
+  "shouldContinue": ${!shouldWrapUp}
+}`;
+
+  try {
+    const completion = await client.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: `${studentName} says: "${message}"` },
+      ],
+      temperature: 0.8,
+      max_tokens: 250,
+      response_format: { type: "json_object" },
+    });
+
+    const content = completion.choices[0]?.message?.content;
+    if (!content) {
+      throw new Error("No response from AI");
+    }
+
+    return JSON.parse(content);
+  } catch (error) {
+    console.error("AI chat error:", error);
+    return {
+      response: "That's really interesting! Tell me more about what you're thinking.",
+      shouldContinue: true,
+    };
+  }
+}
+
 export default router;

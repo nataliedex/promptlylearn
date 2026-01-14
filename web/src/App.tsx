@@ -15,6 +15,7 @@ import NeedsReviewList from "./pages/NeedsReviewList";
 import ClassManagement from "./pages/ClassManagement";
 import ClassDetails from "./pages/ClassDetails";
 import AssignLesson from "./pages/AssignLesson";
+import CoachSession from "./pages/CoachSession";
 import "./App.css";
 
 function App() {
@@ -25,6 +26,7 @@ function App() {
           <Route path="/" element={<Home />} />
           <Route path="/student/:studentId" element={<StudentDashboard />} />
           <Route path="/student/:studentId/lesson/:lessonId" element={<Lesson />} />
+          <Route path="/student/:studentId/coach" element={<CoachSession />} />
           <Route path="/student/:studentId/progress" element={<Progress />} />
           <Route path="/educator" element={<EducatorDashboard />} />
           <Route path="/educator/create-lesson" element={<LessonBuilder />} />

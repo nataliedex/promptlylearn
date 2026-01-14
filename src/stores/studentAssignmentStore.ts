@@ -85,6 +85,7 @@ export class StudentAssignmentStore {
           studentId,
           assignedAt: now,
           assignedBy,
+          attempts: 1,
         };
         data.assignments.push(assignment);
         newAssignments.push(assignment);
@@ -246,5 +247,102 @@ export class StudentAssignmentStore {
 
     saveData(data);
     return before - data.assignments.length;
+  }
+
+  /**
+   * Mark an assignment as completed by a student
+   */
+  markCompleted(lessonId: string, studentId: string): boolean {
+    const data = loadData();
+    const assignment = data.assignments.find(
+      (a) => a.lessonId === lessonId && a.studentId === studentId
+    );
+
+    if (!assignment) return false;
+
+    assignment.completedAt = new Date().toISOString();
+    saveData(data);
+    return true;
+  }
+
+  /**
+   * Mark an assignment as reviewed by teacher
+   */
+  markReviewed(
+    lessonId: string,
+    studentId: string,
+    reviewedBy?: string
+  ): boolean {
+    const data = loadData();
+    const assignment = data.assignments.find(
+      (a) => a.lessonId === lessonId && a.studentId === studentId
+    );
+
+    if (!assignment) return false;
+
+    assignment.reviewedAt = new Date().toISOString();
+    assignment.reviewedBy = reviewedBy;
+    saveData(data);
+    return true;
+  }
+
+  /**
+   * Push an assignment back to a student (reassign).
+   * Clears completion/review status and increments attempts.
+   */
+  pushToStudent(
+    lessonId: string,
+    studentId: string,
+    pushedBy?: string
+  ): StudentAssignment | null {
+    const data = loadData();
+    const assignment = data.assignments.find(
+      (a) => a.lessonId === lessonId && a.studentId === studentId
+    );
+
+    if (!assignment) return null;
+
+    // Clear completion and review status
+    assignment.completedAt = undefined;
+    assignment.reviewedAt = undefined;
+    assignment.reviewedBy = undefined;
+    // Increment attempts
+    assignment.attempts = (assignment.attempts || 1) + 1;
+    assignment.assignedBy = pushedBy;
+
+    saveData(data);
+    return assignment;
+  }
+
+  /**
+   * Get assignment for a specific student and lesson
+   */
+  getAssignment(lessonId: string, studentId: string): StudentAssignment | null {
+    const data = loadData();
+    return (
+      data.assignments.find(
+        (a) => a.lessonId === lessonId && a.studentId === studentId
+      ) || null
+    );
+  }
+
+  /**
+   * Get active (not completed) assignments for a student
+   */
+  getActiveStudentAssignments(studentId: string): StudentAssignment[] {
+    const data = loadData();
+    return data.assignments.filter(
+      (a) => a.studentId === studentId && !a.completedAt
+    );
+  }
+
+  /**
+   * Get unreviewed assignments for a lesson (students who need teacher attention)
+   */
+  getUnreviewedAssignments(lessonId: string): StudentAssignment[] {
+    const data = loadData();
+    return data.assignments.filter(
+      (a) => a.lessonId === lessonId && a.completedAt && !a.reviewedAt
+    );
   }
 }

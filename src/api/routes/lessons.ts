@@ -306,7 +306,7 @@ router.delete("/:id/assign/:classId", (req, res) => {
 
 /**
  * GET /api/lessons/:id/assigned-students
- * Get list of student IDs assigned to this lesson
+ * Get list of student IDs assigned to this lesson with assignment details
  * (Used by assignment lifecycle for dashboard computation)
  */
 router.get("/:id/assigned-students", (req, res) => {
@@ -316,15 +316,130 @@ router.get("/:id/assigned-students", (req, res) => {
     const studentIds = studentAssignmentStore.getAssignedStudentIds(id);
     const hasAssignments = studentIds.length > 0;
 
+    // Get full assignment details for each student (including attempts)
+    const assignments: Record<string, { attempts: number; completedAt?: string; reviewedAt?: string }> = {};
+    studentIds.forEach((studentId) => {
+      const assignment = studentAssignmentStore.getAssignment(id, studentId);
+      if (assignment) {
+        assignments[studentId] = {
+          attempts: assignment.attempts || 1,
+          completedAt: assignment.completedAt,
+          reviewedAt: assignment.reviewedAt,
+        };
+      }
+    });
+
     res.json({
       lessonId: id,
       hasAssignments,
       studentIds,
+      assignments,
       count: studentIds.length,
     });
   } catch (error) {
     console.error("Error fetching assigned students:", error);
     res.status(500).json({ error: "Failed to fetch assigned students" });
+  }
+});
+
+/**
+ * GET /api/lessons/:id/students/:studentId/assignment
+ * Get assignment details for a specific student including completion and review status
+ */
+router.get("/:id/students/:studentId/assignment", (req, res) => {
+  try {
+    const { id, studentId } = req.params;
+
+    const assignment = studentAssignmentStore.getAssignment(id, studentId);
+    if (!assignment) {
+      return res.status(404).json({ error: "Assignment not found" });
+    }
+
+    res.json(assignment);
+  } catch (error) {
+    console.error("Error fetching assignment:", error);
+    res.status(500).json({ error: "Failed to fetch assignment" });
+  }
+});
+
+/**
+ * POST /api/lessons/:id/students/:studentId/review
+ * Mark a student's assignment as reviewed by teacher
+ * This removes the student from the "needs attention" summaries
+ */
+router.post("/:id/students/:studentId/review", (req, res) => {
+  try {
+    const { id, studentId } = req.params;
+    const { reviewedBy } = req.body;
+
+    const success = studentAssignmentStore.markReviewed(id, studentId, reviewedBy);
+    if (!success) {
+      return res.status(404).json({ error: "Assignment not found" });
+    }
+
+    res.json({
+      success: true,
+      lessonId: id,
+      studentId,
+      reviewedAt: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error("Error marking assignment as reviewed:", error);
+    res.status(500).json({ error: "Failed to mark as reviewed" });
+  }
+});
+
+/**
+ * POST /api/lessons/:id/students/:studentId/push
+ * Push an assignment back to a student for another attempt
+ * This clears completion/review status and increments attempts counter
+ */
+router.post("/:id/students/:studentId/push", (req, res) => {
+  try {
+    const { id, studentId } = req.params;
+    const { pushedBy } = req.body;
+
+    const assignment = studentAssignmentStore.pushToStudent(id, studentId, pushedBy);
+    if (!assignment) {
+      return res.status(404).json({ error: "Assignment not found" });
+    }
+
+    res.json({
+      success: true,
+      lessonId: id,
+      studentId,
+      attempts: assignment.attempts,
+      message: `Assignment pushed back to student (attempt #${assignment.attempts})`,
+    });
+  } catch (error) {
+    console.error("Error pushing assignment:", error);
+    res.status(500).json({ error: "Failed to push assignment" });
+  }
+});
+
+/**
+ * POST /api/lessons/:id/students/:studentId/complete
+ * Mark a student's assignment as completed
+ * Called when a student finishes their session
+ */
+router.post("/:id/students/:studentId/complete", (req, res) => {
+  try {
+    const { id, studentId } = req.params;
+
+    const success = studentAssignmentStore.markCompleted(id, studentId);
+    if (!success) {
+      return res.status(404).json({ error: "Assignment not found" });
+    }
+
+    res.json({
+      success: true,
+      lessonId: id,
+      studentId,
+      completedAt: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error("Error marking assignment as completed:", error);
+    res.status(500).json({ error: "Failed to mark as completed" });
   }
 });
 

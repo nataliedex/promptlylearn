@@ -131,6 +131,12 @@ export interface StudentAssignmentRow {
 
   // Session reference
   sessionId?: string;
+
+  // Attempts tracking
+  attempts: number;
+
+  // Review status
+  isReviewed: boolean;
 }
 
 /**
