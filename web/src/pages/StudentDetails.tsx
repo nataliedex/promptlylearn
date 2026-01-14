@@ -150,7 +150,6 @@ export default function StudentDetails() {
   const strongCount = assignments.filter((a) => a.questionsAnswered > 0 && a.understanding === "strong").length;
   const developingCount = assignments.filter((a) => a.questionsAnswered > 0 && a.understanding === "developing").length;
   const needsHelpCount = assignments.filter((a) => a.questionsAnswered > 0 && a.understanding === "needs-support").length;
-  const coachRequestCount = coachingInsights?.totalCoachRequests || 0;
 
   return (
     <div className="container">
@@ -165,7 +164,7 @@ export default function StudentDetails() {
       </div>
 
       {/* Summary Tiles */}
-      <div className="stats-grid" style={{ gridTemplateColumns: "repeat(4, 1fr)" }}>
+      <div className="stats-grid" style={{ gridTemplateColumns: "repeat(3, 1fr)" }}>
         <div className="card stat-card" style={{ borderLeft: "4px solid #4caf50" }}>
           <div className="value" style={{ color: "#4caf50" }}>{strongCount}</div>
           <div className="label">Strong</div>
@@ -177,10 +176,6 @@ export default function StudentDetails() {
         <div className="card stat-card" style={{ borderLeft: "4px solid #f44336" }}>
           <div className="value" style={{ color: "#f44336" }}>{needsHelpCount}</div>
           <div className="label">Needs Help</div>
-        </div>
-        <div className="card stat-card" style={{ borderLeft: "4px solid #9c27b0" }}>
-          <div className="value" style={{ color: "#9c27b0" }}>{coachRequestCount}</div>
-          <div className="label">Coach Requests</div>
         </div>
       </div>
 
@@ -212,8 +207,6 @@ export default function StudentDetails() {
             <div>
               <h3 style={{ margin: 0, color: "#333" }}>Coaching Insights</h3>
               <p style={{ margin: 0, fontSize: "0.9rem", color: "#666" }}>
-                {coachingInsights.totalCoachRequests} coach request{coachingInsights.totalCoachRequests !== 1 ? "s" : ""}
-                {" · "}
                 <span style={{
                   fontWeight: 500,
                   color: coachingInsights.intentLabel === "support-seeking"

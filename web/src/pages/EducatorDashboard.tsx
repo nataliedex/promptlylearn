@@ -890,9 +890,6 @@ function CoachingActivitySection({ activities, onNavigate }: CoachingActivitySec
               </span>
               <div>
                 <span style={{ fontWeight: 600, color: "#333" }}>{activity.studentName}</span>
-                <span style={{ color: "#666", fontSize: "0.85rem", marginLeft: "8px" }}>
-                  {activity.insight.totalCoachRequests} session{activity.insight.totalCoachRequests !== 1 ? "s" : ""}
-                </span>
               </div>
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
