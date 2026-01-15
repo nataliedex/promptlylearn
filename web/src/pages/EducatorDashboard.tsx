@@ -26,13 +26,21 @@ import {
   getStudentCoachingInsights,
   getAssignedStudents,
   assignLessonToClass,
+  getRecommendations,
+  refreshRecommendations,
+  markRecommendationReviewed,
+  dismissRecommendation,
+  submitRecommendationFeedback,
   type ComputedAssignmentState,
   type AssignmentDashboardData,
   type ClassSummary,
   type ClassWithStudents,
   type Student,
   type CoachingInsight,
+  type Recommendation,
+  type FeedbackType,
 } from "../services/api";
+import RecommendationPanel from "../components/RecommendationPanel";
 
 // Type for assignments grouped by class
 interface ClassAssignmentGroup {
@@ -55,6 +63,8 @@ export default function EducatorDashboard() {
   const [allStudents, setAllStudents] = useState<Student[]>([]);
   const [assignmentClassMap, setAssignmentClassMap] = useState<Map<string, string[]>>(new Map());
   const [coachingActivity, setCoachingActivity] = useState<StudentCoachingActivity[]>([]);
+  const [recommendations, setRecommendations] = useState<Recommendation[]>([]);
+  const [recommendationsLoading, setRecommendationsLoading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -135,6 +145,16 @@ export default function EducatorDashboard() {
       });
 
       setCoachingActivity(coachingActivities);
+
+      // Load recommendations (refresh to get latest)
+      try {
+        await refreshRecommendations();
+        const recsData = await getRecommendations({ includeReviewed: true, limit: 10 });
+        setRecommendations(recsData.recommendations);
+      } catch (recErr) {
+        console.log("Recommendations not available:", recErr);
+        // Not critical - dashboard still works without recommendations
+      }
     } catch (err) {
       console.error("Failed to load educator dashboard:", err);
       setError("Failed to load dashboard data. Please try again.");
@@ -158,6 +178,51 @@ export default function EducatorDashboard() {
     } catch (err) {
       console.error("Failed to archive assignment:", err);
       alert("Failed to archive assignment. Please try again.");
+    }
+  };
+
+  // Recommendation handlers
+  const handleReviewRecommendation = async (id: string) => {
+    try {
+      await markRecommendationReviewed(id);
+      setRecommendations((prev) =>
+        prev.map((r) => (r.id === id ? { ...r, status: "reviewed" as const, reviewedAt: new Date().toISOString() } : r))
+      );
+    } catch (err) {
+      console.error("Failed to mark recommendation reviewed:", err);
+    }
+  };
+
+  const handleDismissRecommendation = async (id: string) => {
+    try {
+      await dismissRecommendation(id);
+      setRecommendations((prev) => prev.filter((r) => r.id !== id));
+    } catch (err) {
+      console.error("Failed to dismiss recommendation:", err);
+    }
+  };
+
+  const handleRecommendationFeedback = async (id: string, feedback: FeedbackType) => {
+    try {
+      await submitRecommendationFeedback(id, feedback);
+      setRecommendations((prev) =>
+        prev.map((r) => (r.id === id ? { ...r, feedback } : r))
+      );
+    } catch (err) {
+      console.error("Failed to submit recommendation feedback:", err);
+    }
+  };
+
+  const handleRefreshRecommendations = async () => {
+    setRecommendationsLoading(true);
+    try {
+      await refreshRecommendations();
+      const recsData = await getRecommendations({ includeReviewed: true, limit: 10 });
+      setRecommendations(recsData.recommendations);
+    } catch (err) {
+      console.error("Failed to refresh recommendations:", err);
+    } finally {
+      setRecommendationsLoading(false);
     }
   };
 
@@ -276,6 +341,16 @@ export default function EducatorDashboard() {
           </div>
         </div>
       </div>
+
+      {/* What Should I Do Next? - Recommendations */}
+      <RecommendationPanel
+        recommendations={recommendations}
+        onReview={handleReviewRecommendation}
+        onDismiss={handleDismissRecommendation}
+        onFeedback={handleRecommendationFeedback}
+        onRefresh={handleRefreshRecommendations}
+        loading={recommendationsLoading}
+      />
 
       {/* Primary: Students Needing Attention */}
       {studentsNeedingAttention.length > 0 ? (

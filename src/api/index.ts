@@ -13,6 +13,7 @@ import voiceRouter from "./routes/voice";
 import standardsRouter from "./routes/standards";
 import coachRouter from "./routes/coach";
 import coachSessionsRouter from "./routes/coachSessions";
+import recommendationsRouter from "./routes/recommendations";
 
 dotenv.config();
 
@@ -38,6 +39,7 @@ app.use("/api/voice", voiceRouter);
 app.use("/api/standards", standardsRouter);
 app.use("/api/coach", coachRouter);
 app.use("/api/coach-sessions", coachSessionsRouter);
+app.use("/api/recommendations", recommendationsRouter);
 
 // Health check
 app.get("/api/health", (req, res) => {

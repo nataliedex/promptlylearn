@@ -1001,3 +1001,127 @@ export async function updateCoachSession(
 export async function getStudentCoachingInsights(studentId: string): Promise<CoachingInsight> {
   return fetchJson(`${API_BASE}/coach-sessions/insights/${studentId}`);
 }
+
+// ============================================
+// Recommendations API ("What Should I Do Next?")
+// ============================================
+
+export type RecommendationType =
+  | "individual-checkin"
+  | "small-group"
+  | "assignment-adjustment"
+  | "enrichment"
+  | "celebrate";
+
+export type ConfidenceLevel = "low" | "medium" | "high";
+export type RecommendationStatus = "active" | "reviewed" | "dismissed";
+export type FeedbackType = "helpful" | "not-helpful";
+
+export interface Recommendation {
+  id: string;
+  type: RecommendationType;
+  title: string;
+  reason: string;
+  suggestedAction: string;
+  confidence: ConfidenceLevel;
+  priority: number;
+  studentIds: string[];
+  assignmentId?: string;
+  triggerData: {
+    ruleName: string;
+    signals: Record<string, any>;
+    generatedAt: string;
+  };
+  status: RecommendationStatus;
+  createdAt: string;
+  reviewedAt?: string;
+  reviewedBy?: string;
+  feedback?: FeedbackType;
+  feedbackNote?: string;
+}
+
+export interface RecommendationStats {
+  totalActive: number;
+  reviewedToday: number;
+  feedbackRate: number;
+}
+
+export interface RecommendationsResponse {
+  recommendations: Recommendation[];
+  stats: RecommendationStats;
+}
+
+export interface RefreshRecommendationsResponse {
+  generated: number;
+  pruned: number;
+  studentDataPoints: number;
+  aggregateDataPoints: number;
+}
+
+/**
+ * Get active recommendations for the educator dashboard.
+ */
+export async function getRecommendations(options?: {
+  limit?: number;
+  assignmentId?: string;
+  includeReviewed?: boolean;
+}): Promise<RecommendationsResponse> {
+  const params = new URLSearchParams();
+  if (options?.limit) params.set("limit", options.limit.toString());
+  if (options?.assignmentId) params.set("assignmentId", options.assignmentId);
+  if (options?.includeReviewed) params.set("includeReviewed", "true");
+
+  const queryString = params.toString();
+  const url = queryString
+    ? `${API_BASE}/recommendations?${queryString}`
+    : `${API_BASE}/recommendations`;
+
+  return fetchJson(url);
+}
+
+/**
+ * Refresh recommendations by regenerating from current data.
+ */
+export async function refreshRecommendations(): Promise<RefreshRecommendationsResponse> {
+  return fetchJson(`${API_BASE}/recommendations/refresh`, {
+    method: "POST",
+  });
+}
+
+/**
+ * Mark a recommendation as reviewed.
+ */
+export async function markRecommendationReviewed(
+  id: string,
+  reviewedBy?: string
+): Promise<{ success: boolean; recommendation: Recommendation }> {
+  return fetchJson(`${API_BASE}/recommendations/${id}/review`, {
+    method: "POST",
+    body: JSON.stringify({ reviewedBy }),
+  });
+}
+
+/**
+ * Dismiss a recommendation.
+ */
+export async function dismissRecommendation(
+  id: string
+): Promise<{ success: boolean; recommendation: Recommendation }> {
+  return fetchJson(`${API_BASE}/recommendations/${id}/dismiss`, {
+    method: "POST",
+  });
+}
+
+/**
+ * Submit feedback on a recommendation.
+ */
+export async function submitRecommendationFeedback(
+  id: string,
+  feedback: FeedbackType,
+  note?: string
+): Promise<{ success: boolean; recommendation: Recommendation }> {
+  return fetchJson(`${API_BASE}/recommendations/${id}/feedback`, {
+    method: "POST",
+    body: JSON.stringify({ feedback, note }),
+  });
+}
