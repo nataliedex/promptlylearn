@@ -938,6 +938,21 @@ export async function pushAssignmentToStudent(
 }
 
 /**
+ * Undo a reassignment by restoring previous state.
+ */
+export async function undoReassignment(
+  lessonId: string,
+  studentId: string,
+  previousCompletedAt?: string,
+  previousReviewedAt?: string
+): Promise<{ success: boolean; lessonId: string; studentId: string; attempts: number; completedAt?: string; reviewedAt?: string; message: string }> {
+  return fetchJson(`${API_BASE}/lessons/${lessonId}/students/${studentId}/undo-reassignment`, {
+    method: "POST",
+    body: JSON.stringify({ previousCompletedAt, previousReviewedAt }),
+  });
+}
+
+/**
  * Mark a student's assignment as completed.
  * Called when a student finishes their session.
  */

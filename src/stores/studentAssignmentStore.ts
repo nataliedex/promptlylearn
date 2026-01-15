@@ -377,6 +377,36 @@ export class StudentAssignmentStore {
   }
 
   /**
+   * Undo a reassignment by restoring previous state.
+   * Decrements attempts and restores completed/reviewed status.
+   */
+  undoReassignment(
+    lessonId: string,
+    studentId: string,
+    previousCompletedAt?: string,
+    previousReviewedAt?: string
+  ): StudentAssignment | null {
+    const data = loadData();
+    const assignment = data.assignments.find(
+      (a) => a.lessonId === lessonId && a.studentId === studentId
+    );
+
+    if (!assignment) return null;
+
+    // Restore previous state
+    assignment.completedAt = previousCompletedAt;
+    assignment.reviewedAt = previousReviewedAt;
+    // Decrement attempts (minimum 1)
+    assignment.attempts = Math.max(1, (assignment.attempts || 1) - 1);
+    // Clear action status
+    assignment.actionStatus = undefined;
+    assignment.actionAt = undefined;
+
+    saveData(data);
+    return assignment;
+  }
+
+  /**
    * Get assignment for a specific student and lesson
    */
   getAssignment(lessonId: string, studentId: string): StudentAssignment | null {

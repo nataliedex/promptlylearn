@@ -418,6 +418,40 @@ router.post("/:id/students/:studentId/push", (req, res) => {
 });
 
 /**
+ * POST /api/lessons/:id/students/:studentId/undo-reassignment
+ * Undo a reassignment by restoring previous state
+ */
+router.post("/:id/students/:studentId/undo-reassignment", (req, res) => {
+  try {
+    const { id, studentId } = req.params;
+    const { previousCompletedAt, previousReviewedAt } = req.body;
+
+    const assignment = studentAssignmentStore.undoReassignment(
+      id,
+      studentId,
+      previousCompletedAt,
+      previousReviewedAt
+    );
+    if (!assignment) {
+      return res.status(404).json({ error: "Assignment not found" });
+    }
+
+    res.json({
+      success: true,
+      lessonId: id,
+      studentId,
+      attempts: assignment.attempts,
+      completedAt: assignment.completedAt,
+      reviewedAt: assignment.reviewedAt,
+      message: "Reassignment undone successfully",
+    });
+  } catch (error) {
+    console.error("Error undoing reassignment:", error);
+    res.status(500).json({ error: "Failed to undo reassignment" });
+  }
+});
+
+/**
  * POST /api/lessons/:id/students/:studentId/complete
  * Mark a student's assignment as completed
  * Called when a student finishes their session

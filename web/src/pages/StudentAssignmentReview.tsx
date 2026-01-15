@@ -18,6 +18,7 @@ import {
   getStudentAssignment,
   markStudentReviewed,
   pushAssignmentToStudent,
+  undoReassignment,
   type Session,
   type Lesson,
   type Student,
@@ -82,6 +83,14 @@ export default function StudentAssignmentReview() {
   // Action states
   const [isPushing, setIsPushing] = useState(false);
   const [isMarkingReviewed, setIsMarkingReviewed] = useState(false);
+  const [isUndoing, setIsUndoing] = useState(false);
+
+  // Track if we just reassigned (for showing undo button)
+  const [justReassigned, setJustReassigned] = useState(false);
+  const [previousState, setPreviousState] = useState<{
+    completedAt?: string;
+    reviewedAt?: string;
+  } | null>(null);
 
   // Expanded questions
   const [expandedQuestions, setExpandedQuestions] = useState<Set<string>>(new Set());
@@ -251,9 +260,15 @@ export default function StudentAssignmentReview() {
     }, 1000);
   }, [saveNotes]);
 
-  // Push assignment back to student
-  const handlePushToStudent = async () => {
-    if (!lessonId || !studentId) return;
+  // Reassign assignment to student
+  const handleReassignToStudent = async () => {
+    if (!lessonId || !studentId || !assignment) return;
+
+    // Save previous state for undo
+    setPreviousState({
+      completedAt: assignment.completedAt,
+      reviewedAt: assignment.reviewedAt,
+    });
 
     setIsPushing(true);
     try {
@@ -264,12 +279,43 @@ export default function StudentAssignmentReview() {
         reviewedAt: undefined,
         attempts: result.attempts,
       } : null);
-      showSuccess(`Assignment pushed back to student (Attempt #${result.attempts})`);
+      setJustReassigned(true);
+      showSuccess(`Reassigned to student (Attempt #${result.attempts})`);
     } catch (err) {
-      console.error("Failed to push assignment:", err);
-      showError("Failed to push assignment");
+      console.error("Failed to reassign:", err);
+      showError("Failed to reassign to student");
+      setPreviousState(null);
     } finally {
       setIsPushing(false);
+    }
+  };
+
+  // Undo reassignment
+  const handleUndoReassignment = async () => {
+    if (!lessonId || !studentId || !previousState) return;
+
+    setIsUndoing(true);
+    try {
+      const result = await undoReassignment(
+        lessonId,
+        studentId,
+        previousState.completedAt,
+        previousState.reviewedAt
+      );
+      setAssignment((prev) => prev ? {
+        ...prev,
+        completedAt: result.completedAt,
+        reviewedAt: result.reviewedAt,
+        attempts: result.attempts,
+      } : null);
+      setJustReassigned(false);
+      setPreviousState(null);
+      showSuccess("Reassignment undone");
+    } catch (err) {
+      console.error("Failed to undo reassignment:", err);
+      showError("Failed to undo reassignment");
+    } finally {
+      setIsUndoing(false);
     }
   };
 
@@ -424,22 +470,42 @@ export default function StudentAssignmentReview() {
             </p>
           </div>
           <div style={{ display: "flex", gap: "12px", flexShrink: 0 }}>
-            {/* Push to Student Button */}
+            {/* Reassign to Student / Undo Reassignment Button */}
             {assignment && (
-              <button
-                onClick={handlePushToStudent}
-                disabled={isPushing}
-                className="btn btn-secondary"
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "6px",
-                  padding: "10px 16px",
-                }}
-                title="Push assignment back to student for another attempt"
-              >
-                {isPushing ? "Pushing..." : "Push to Student"}
-              </button>
+              justReassigned ? (
+                <button
+                  onClick={handleUndoReassignment}
+                  disabled={isUndoing}
+                  className="btn btn-secondary"
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "6px",
+                    padding: "10px 16px",
+                    background: "#fff3e0",
+                    color: "#e65100",
+                    border: "1px solid #ffcc80",
+                  }}
+                  title="Undo the reassignment"
+                >
+                  {isUndoing ? "Undoing..." : "Undo Reassignment"}
+                </button>
+              ) : (
+                <button
+                  onClick={handleReassignToStudent}
+                  disabled={isPushing}
+                  className="btn btn-secondary"
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "6px",
+                    padding: "10px 16px",
+                  }}
+                  title="Reassign to student for another attempt"
+                >
+                  {isPushing ? "Reassigning..." : "Reassign to Student"}
+                </button>
+              )
             )}
             {/* Mark as Reviewed Button */}
             {assignment && !assignment.reviewedAt && (
