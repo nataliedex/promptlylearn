@@ -16,6 +16,74 @@ import {
 } from "../services/api";
 
 // ============================================
+// Helper: Format Signals as Plain Text
+// ============================================
+
+function formatSignals(signals: Record<string, unknown>): string[] {
+  const lines: string[] = [];
+
+  for (const [key, value] of Object.entries(signals)) {
+    if (value === undefined || value === null) continue;
+
+    switch (key) {
+      case "score":
+        lines.push(`Score: ${value}%`);
+        break;
+      case "previousScore":
+        lines.push(`Previous score: ${value}%`);
+        break;
+      case "currentScore":
+        lines.push(`Current score: ${value}%`);
+        break;
+      case "improvement":
+        lines.push(`Improvement: +${value}%`);
+        break;
+      case "averageScore":
+        lines.push(`Class average: ${Math.round(value as number)}%`);
+        break;
+      case "hintUsageRate":
+        lines.push(`Hint usage: ${Math.round((value as number) * 100)}%`);
+        break;
+      case "coachIntent":
+        if (value === "support-seeking") {
+          lines.push("Coach pattern: Seeking support");
+        } else if (value === "enrichment-seeking") {
+          lines.push("Coach pattern: Seeking enrichment");
+        } else if (value) {
+          lines.push(`Coach pattern: ${value}`);
+        }
+        break;
+      case "hasTeacherNote":
+        lines.push(value ? "Has teacher note: Yes" : "Has teacher note: No");
+        break;
+      case "studentCount":
+        lines.push(`Students in group: ${value}`);
+        break;
+      case "studentNames":
+        lines.push(`Students: ${value}`);
+        break;
+      case "className":
+        lines.push(`Class: ${value}`);
+        break;
+      case "completionRate":
+        lines.push(`Completion rate: ${value}%`);
+        break;
+      case "completedCount":
+        lines.push(`Completed: ${value} students`);
+        break;
+      case "daysSinceAssigned":
+        lines.push(`Days since assigned: ${value}`);
+        break;
+      default:
+        // Fallback for any other signals
+        lines.push(`${key}: ${value}`);
+    }
+  }
+
+  return lines;
+}
+
+// ============================================
 // Color and Icon Mapping
 // ============================================
 
@@ -284,29 +352,33 @@ function RecommendationCard({
           }}
         >
           <div style={{ marginBottom: "8px" }}>
-            <strong>Rule:</strong> {recommendation.triggerData.ruleName}
+            <strong>Detection rule:</strong>{" "}
+            {recommendation.triggerData.ruleName
+              .split("-")
+              .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+              .join(" ")}
           </div>
           <div style={{ marginBottom: "8px" }}>
-            <strong>Confidence:</strong> {recommendation.confidence}
+            <strong>Confidence:</strong>{" "}
+            {recommendation.confidence.charAt(0).toUpperCase() + recommendation.confidence.slice(1)}
           </div>
           <div style={{ marginBottom: "8px" }}>
             <strong>Generated:</strong>{" "}
             {new Date(recommendation.triggerData.generatedAt).toLocaleString()}
           </div>
           <div>
-            <strong>Signals:</strong>
-            <pre
+            <strong>What triggered this:</strong>
+            <ul
               style={{
-                margin: "4px 0 0 0",
-                background: "#eee",
-                padding: "8px",
-                borderRadius: "4px",
-                overflow: "auto",
-                fontSize: "0.8rem",
+                margin: "8px 0 0 0",
+                paddingLeft: "20px",
+                listStyle: "disc",
               }}
             >
-              {JSON.stringify(recommendation.triggerData.signals, null, 2)}
-            </pre>
+              {formatSignals(recommendation.triggerData.signals).map((line, i) => (
+                <li key={i} style={{ marginBottom: "4px" }}>{line}</li>
+              ))}
+            </ul>
           </div>
         </div>
       )}
