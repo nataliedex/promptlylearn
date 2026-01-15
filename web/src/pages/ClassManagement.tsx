@@ -14,9 +14,11 @@ import {
   type ClassSummary,
   type CreateClassInput,
 } from "../services/api";
+import { useToast } from "../components/Toast";
 
 export default function ClassManagement() {
   const navigate = useNavigate();
+  const { showError } = useToast();
   const [classes, setClasses] = useState<ClassSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -81,7 +83,7 @@ export default function ClassManagement() {
       await loadClasses();
     } catch (err) {
       console.error("Failed to archive class:", err);
-      alert("Failed to archive class. Please try again.");
+      showError("Failed to archive class. Please try again.");
     }
   };
 

@@ -41,6 +41,7 @@ import {
   type FeedbackType,
 } from "../services/api";
 import RecommendationPanel from "../components/RecommendationPanel";
+import { useToast } from "../components/Toast";
 
 // Type for assignments grouped by class
 interface ClassAssignmentGroup {
@@ -58,6 +59,7 @@ interface StudentCoachingActivity {
 
 export default function EducatorDashboard() {
   const navigate = useNavigate();
+  const { showError } = useToast();
   const [dashboardData, setDashboardData] = useState<AssignmentDashboardData | null>(null);
   const [classes, setClasses] = useState<ClassSummary[]>([]);
   const [allStudents, setAllStudents] = useState<Student[]>([]);
@@ -177,7 +179,7 @@ export default function EducatorDashboard() {
       await loadData();
     } catch (err) {
       console.error("Failed to archive assignment:", err);
-      alert("Failed to archive assignment. Please try again.");
+      showError("Failed to archive assignment. Please try again.");
     }
   };
 
@@ -1096,6 +1098,7 @@ function AddStudentModal({
   onClose,
   onSuccess,
 }: AddStudentModalProps) {
+  const { showError } = useToast();
   const [selectedStudents, setSelectedStudents] = useState<Set<string>>(new Set());
   const [assignedStudentIds, setAssignedStudentIds] = useState<Set<string>>(new Set());
   const [classesWithStudents, setClassesWithStudents] = useState<ClassWithStudents[]>([]);
@@ -1162,7 +1165,7 @@ function AddStudentModal({
       onSuccess();
     } catch (err) {
       console.error("Failed to add students:", err);
-      alert("Failed to add students. Please try again.");
+      showError("Failed to add students. Please try again.");
     } finally {
       setSaving(false);
     }

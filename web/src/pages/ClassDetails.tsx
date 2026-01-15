@@ -15,10 +15,12 @@ import {
   type ClassWithStudents,
   type UpdateClassInput,
 } from "../services/api";
+import { useToast } from "../components/Toast";
 
 export default function ClassDetails() {
   const { classId } = useParams<{ classId: string }>();
   const navigate = useNavigate();
+  const { showError } = useToast();
   const [classData, setClassData] = useState<ClassWithStudents | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -67,7 +69,7 @@ export default function ClassDetails() {
       setIsEditing(false);
     } catch (err) {
       console.error("Failed to update class:", err);
-      alert("Failed to update class. Please try again.");
+      showError("Failed to update class. Please try again.");
     }
   };
 
@@ -84,7 +86,7 @@ export default function ClassDetails() {
       await loadClass();
     } catch (err) {
       console.error("Failed to add students:", err);
-      alert("Failed to add students. Please try again.");
+      showError("Failed to add students. Please try again.");
     } finally {
       setAddingStudents(false);
     }
@@ -99,7 +101,7 @@ export default function ClassDetails() {
       await loadClass();
     } catch (err) {
       console.error("Failed to remove student:", err);
-      alert("Failed to remove student. Please try again.");
+      showError("Failed to remove student. Please try again.");
     }
   };
 

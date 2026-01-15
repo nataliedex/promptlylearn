@@ -14,8 +14,10 @@ import {
   type ArchivedAssignment,
   type TeacherSummary,
 } from "../services/api";
+import { useToast } from "../components/Toast";
 
 export default function ArchivedLessons() {
+  const { showError } = useToast();
   const [assignments, setAssignments] = useState<ArchivedAssignment[]>([]);
   const [loading, setLoading] = useState(true);
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -45,7 +47,7 @@ export default function ArchivedLessons() {
       await loadData();
     } catch (err) {
       console.error("Failed to restore assignment:", err);
-      alert("Failed to restore assignment. Please try again.");
+      showError("Failed to restore assignment. Please try again.");
     }
   };
 

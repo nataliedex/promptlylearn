@@ -21,12 +21,14 @@ import {
   type ClassWithStudents,
   type LessonAssignmentSummary,
 } from "../services/api";
+import { useToast } from "../components/Toast";
 
 export default function AssignLesson() {
   const { classId } = useParams<{ classId: string }>();
   const [searchParams] = useSearchParams();
   const lessonIdParam = searchParams.get("lessonId");
   const navigate = useNavigate();
+  const { showSuccess, showError } = useToast();
 
   const [lessons, setLessons] = useState<LessonSummary[]>([]);
   const [classes, setClasses] = useState<ClassSummary[]>([]);
@@ -120,7 +122,7 @@ export default function AssignLesson() {
       const result = await assignLessonToClass(selectedLessonId, selectedClassId, studentIds);
 
       // Show success and navigate
-      alert(`Successfully assigned lesson to ${result.assignedCount} student${result.assignedCount !== 1 ? "s" : ""} in ${result.className}`);
+      showSuccess(`Successfully assigned lesson to ${result.assignedCount} student${result.assignedCount !== 1 ? "s" : ""} in ${result.className}`);
 
       // Navigate based on context
       if (classId) {
@@ -132,7 +134,7 @@ export default function AssignLesson() {
       }
     } catch (err) {
       console.error("Failed to assign lesson:", err);
-      alert("Failed to assign lesson. Please try again.");
+      showError("Failed to assign lesson. Please try again.");
     } finally {
       setAssigning(false);
     }

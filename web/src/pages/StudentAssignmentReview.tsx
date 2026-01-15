@@ -23,6 +23,7 @@ import {
   type Student,
   type StudentAssignment,
 } from "../services/api";
+import { useToast } from "../components/Toast";
 import {
   buildStudentDrilldown,
   getUnderstandingLabel,
@@ -61,6 +62,7 @@ interface QuestionWithAttempts {
 
 export default function StudentAssignmentReview() {
   const { lessonId, studentId } = useParams<{ lessonId: string; studentId: string }>();
+  const { showSuccess, showError } = useToast();
 
   const [drilldown, setDrilldown] = useState<StudentDrilldownData | null>(null);
   const [session, setSession] = useState<Session | null>(null);
@@ -262,10 +264,10 @@ export default function StudentAssignmentReview() {
         reviewedAt: undefined,
         attempts: result.attempts,
       } : null);
-      alert(`Assignment pushed back to student (Attempt #${result.attempts})`);
+      showSuccess(`Assignment pushed back to student (Attempt #${result.attempts})`);
     } catch (err) {
       console.error("Failed to push assignment:", err);
-      alert("Failed to push assignment");
+      showError("Failed to push assignment");
     } finally {
       setIsPushing(false);
     }

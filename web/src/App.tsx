@@ -16,13 +16,15 @@ import ClassManagement from "./pages/ClassManagement";
 import ClassDetails from "./pages/ClassDetails";
 import AssignLesson from "./pages/AssignLesson";
 import CoachSession from "./pages/CoachSession";
+import { ToastProvider } from "./components/Toast";
 import "./App.css";
 
 function App() {
   return (
-    <BrowserRouter>
-      <div className="app">
-        <Routes>
+    <ToastProvider>
+      <BrowserRouter>
+        <div className="app">
+          <Routes>
           <Route path="/" element={<Home />} />
           <Route path="/student/:studentId" element={<StudentDashboard />} />
           <Route path="/student/:studentId/lesson/:lessonId" element={<Lesson />} />
@@ -41,9 +43,10 @@ function App() {
           <Route path="/educator/class/:classId" element={<ClassDetails />} />
           <Route path="/educator/class/:classId/assign-lesson" element={<AssignLesson />} />
           <Route path="/educator/assign-lesson" element={<AssignLesson />} />
-        </Routes>
-      </div>
-    </BrowserRouter>
+          </Routes>
+        </div>
+      </BrowserRouter>
+    </ToastProvider>
   );
 }
 
