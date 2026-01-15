@@ -84,7 +84,10 @@ export default function StudentDashboard() {
 
   const handleStartCoachSession = (mode: SessionMode) => {
     const topicsParam = encodeURIComponent(JSON.stringify(selectedTopics));
-    navigate(`/student/${studentId}/coach?mode=${mode}&topics=${topicsParam}`);
+    // Get gradeLevel from selected lessons (use first selected topic's grade level)
+    const selectedLesson = lessons.find((l) => selectedTopics.includes(l.title));
+    const gradeLevel = selectedLesson?.gradeLevel || "";
+    navigate(`/student/${studentId}/coach?mode=${mode}&topics=${topicsParam}&gradeLevel=${encodeURIComponent(gradeLevel)}`);
     setShowCoachModal(false);
     setSelectedTopics([]);
   };

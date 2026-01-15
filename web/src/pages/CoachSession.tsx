@@ -26,6 +26,7 @@ export default function CoachSession() {
   const mode = (searchParams.get("mode") as SessionMode) || "type";
   const topicsParam = searchParams.get("topics");
   const topics = topicsParam ? JSON.parse(decodeURIComponent(topicsParam)) : [];
+  const gradeLevel = searchParams.get("gradeLevel") ? decodeURIComponent(searchParams.get("gradeLevel")!) : undefined;
 
   const [student, setStudent] = useState<Student | null>(null);
   const [loading, setLoading] = useState(true);
@@ -190,7 +191,8 @@ export default function CoachSession() {
         student.name,
         topics,
         msgToSend,
-        updatedHistory
+        updatedHistory,
+        gradeLevel
       );
 
       const coachTimestamp = new Date().toISOString();
