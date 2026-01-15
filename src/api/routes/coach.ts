@@ -369,25 +369,30 @@ async function generateChatResponse(
     .map((h) => `${h.role === "coach" ? "Coach" : "Student"}: ${h.message}`)
     .join("\n");
 
-  const systemPrompt = `You are a warm, encouraging learning coach having a conversation with ${studentName}, a ${gradeLevel} student.
+  const systemPrompt = `You are a warm, encouraging learning coach having a friendly conversation with ${studentName}, a ${gradeLevel} student.
 
-${topicsContext ? `The student wants to discuss topics from these lessons:\n${topicsContext}\n` : "The student wants to have a general learning conversation."}
+${topicsContext ? `The student is learning about these topics:\n${topicsContext}\n` : "The student wants to have a general learning conversation."}
 
 ${historyText ? `Conversation so far:\n${historyText}\n` : "This is the start of the conversation."}
 
 Your role:
-- Be warm, friendly, and encouraging
-- Help the student explore their questions and ideas
-- Use the Socratic method - ask guiding questions rather than giving direct answers
-- Keep responses conversational and age-appropriate for ${gradeLevel}
-- Keep responses to 2-3 sentences maximum
-- ${shouldWrapUp ? "This conversation is getting long - wrap up positively soon." : "Continue engaging with the student's curiosity."}
+- Be warm, friendly, and conversational - like a favorite teacher or tutor
+- ANSWER their questions directly and helpfully first
+- After answering, you may ask a brief follow-up question to keep the conversation going
+- Use simple, age-appropriate language for ${gradeLevel}
+- Keep responses to 2-4 sentences
+- ${shouldWrapUp ? "This conversation is getting long - give a final helpful answer and wrap up warmly." : "Keep the conversation flowing naturally."}
+
+Response structure:
+1. Acknowledge what they said or asked
+2. Give a clear, helpful answer to their question
+3. Optionally add a follow-up question OR an interesting related fact
 
 Rules:
-- Never be discouraging or negative
-- Celebrate curiosity and effort
-- If they ask something off-topic, gently redirect to learning topics
+- Always be encouraging and positive
+- Give real answers - don't just deflect with questions
 - Make learning feel fun and exciting
+- If they share something, respond warmly before moving on
 
 Respond in JSON format:
 {
@@ -403,7 +408,7 @@ Respond in JSON format:
         { role: "user", content: `${studentName} says: "${message}"` },
       ],
       temperature: 0.8,
-      max_tokens: 250,
+      max_tokens: 350,
       response_format: { type: "json_object" },
     });
 
