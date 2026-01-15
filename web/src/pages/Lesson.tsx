@@ -389,7 +389,7 @@ export default function Lesson() {
         console.log("Failed to mark assignment completed:", err);
       }
 
-      navigate(`/student/${studentId}/progress`);
+      navigate(`/student/${studentId}`);
     } else {
       await updateSession(session.id, {
         currentPromptIndex: currentIndex + 1,
