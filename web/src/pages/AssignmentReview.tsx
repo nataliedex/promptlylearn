@@ -45,7 +45,7 @@ export default function AssignmentReview() {
   const [reviewData, setReviewData] = useState<AssignmentReviewData | null>(null);
   const [reviewStatus, setReviewStatus] = useState<AssignmentReviewStatus | null>(null);
   const [loading, setLoading] = useState(true);
-  const [filter, setFilter] = useState<"all" | "needs-review" | "addressed" | UnderstandingLevel>("all");
+  const [filter, setFilter] = useState<"all" | "needs-review" | UnderstandingLevel>("all");
 
   const loadData = async () => {
     if (!lessonId) return;
@@ -208,7 +208,6 @@ export default function AssignmentReview() {
   const filteredStudents = reviewData.students.filter((student) => {
     if (filter === "all") return true;
     if (filter === "needs-review") return student.needsReview && !student.actionStatus;
-    if (filter === "addressed") return !!student.actionStatus;
     return student.understanding === filter;
   });
 
@@ -369,14 +368,6 @@ export default function AssignmentReview() {
             active={filter === "needs-review"}
             onClick={() => setFilter("needs-review")}
             variant="warning"
-          />
-        )}
-        {reviewStatus && reviewStatus.addressed > 0 && (
-          <FilterButton
-            label={`Addressed (${reviewStatus.addressed})`}
-            active={filter === "addressed"}
-            onClick={() => setFilter("addressed")}
-            variant="success"
           />
         )}
       </div>
