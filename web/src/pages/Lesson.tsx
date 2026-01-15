@@ -43,6 +43,7 @@ export default function Lesson() {
   const [voiceStarted, setVoiceStarted] = useState(false);
   const [lessonStarted, setLessonStarted] = useState(false); // User must click to start (browser autoplay policy)
   const isProcessingRef = useRef(false);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const {
     isRecording,
@@ -63,6 +64,11 @@ export default function Lesson() {
     else if (isTranscribing) setVoiceState("processing");
     else if (!isProcessingRef.current) setVoiceState("idle");
   }, [isSpeaking, isRecording, isTranscribing]);
+
+  // Auto-scroll conversation to bottom when new messages appear
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [conversationHistory]);
 
   // Load lesson data
   useEffect(() => {
@@ -705,6 +711,7 @@ export default function Lesson() {
                     </div>
                   </div>
                 ))}
+                <div ref={messagesEndRef} />
               </div>
 
               {/* Follow-up input */}
