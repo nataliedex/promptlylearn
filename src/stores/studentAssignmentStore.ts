@@ -14,6 +14,7 @@ import path from "path";
 import { randomUUID } from "crypto";
 import {
   StudentAssignment,
+  StudentActionStatus,
   LessonClassAssignment,
   AssignLessonInput,
   LessonAssignmentSummary,
@@ -289,6 +290,7 @@ export class StudentAssignmentStore {
   /**
    * Push an assignment back to a student (reassign).
    * Clears completion/review status and increments attempts.
+   * Also sets actionStatus to "reassigned".
    */
   pushToStudent(
     lessonId: string,
@@ -309,9 +311,69 @@ export class StudentAssignmentStore {
     // Increment attempts
     assignment.attempts = (assignment.attempts || 1) + 1;
     assignment.assignedBy = pushedBy;
+    // Set action status
+    assignment.actionStatus = "reassigned";
+    assignment.actionAt = new Date().toISOString();
 
     saveData(data);
     return assignment;
+  }
+
+  /**
+   * Mark an action taken on a student's assignment.
+   * Used for teacher workflow to track what was done.
+   */
+  markAction(
+    lessonId: string,
+    studentId: string,
+    action: StudentActionStatus
+  ): StudentAssignment | null {
+    const data = loadData();
+    const assignment = data.assignments.find(
+      (a) => a.lessonId === lessonId && a.studentId === studentId
+    );
+
+    if (!assignment) return null;
+
+    assignment.actionStatus = action;
+    assignment.actionAt = new Date().toISOString();
+
+    // If marking as reviewed, also set reviewedAt
+    if (action === "reviewed") {
+      assignment.reviewedAt = assignment.actionAt;
+    }
+
+    saveData(data);
+    return assignment;
+  }
+
+  /**
+   * Get students who need attention but haven't been addressed.
+   * A student is "addressed" if they have an actionStatus set.
+   */
+  getUnaddressedAssignments(lessonId: string): StudentAssignment[] {
+    const data = loadData();
+    return data.assignments.filter(
+      (a) => a.lessonId === lessonId && a.completedAt && !a.actionStatus
+    );
+  }
+
+  /**
+   * Clear action status (for re-evaluation after student resubmits)
+   */
+  clearActionStatus(lessonId: string, studentId: string): boolean {
+    const data = loadData();
+    const assignment = data.assignments.find(
+      (a) => a.lessonId === lessonId && a.studentId === studentId
+    );
+
+    if (!assignment) return false;
+
+    assignment.actionStatus = undefined;
+    assignment.actionAt = undefined;
+
+    saveData(data);
+    return true;
   }
 
   /**

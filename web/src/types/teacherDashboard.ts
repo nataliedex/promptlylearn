@@ -36,6 +36,12 @@ export type AttentionReason =
   | "improved-with-support";     // Positive signal worth noting
 
 /**
+ * Action status for teacher workflow.
+ * Tracks what action the teacher took on a flagged student.
+ */
+export type StudentActionStatus = "reviewed" | "reassigned" | "no-action-needed";
+
+/**
  * Question-level outcome focused on learning journey.
  */
 export type QuestionOutcome =
@@ -135,8 +141,12 @@ export interface StudentAssignmentRow {
   // Attempts tracking
   attempts: number;
 
-  // Review status
+  // Review status (legacy)
   isReviewed: boolean;
+
+  // Action status for teacher workflow
+  actionStatus?: StudentActionStatus;
+  actionAt?: string;
 }
 
 /**

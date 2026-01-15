@@ -11,6 +11,12 @@
  * A StudentAssignment is created when a teacher ASSIGNS the lesson.
  */
 
+/**
+ * Action status for teacher workflow.
+ * Tracks what action the teacher took on a flagged student.
+ */
+export type StudentActionStatus = "reviewed" | "reassigned" | "no-action-needed";
+
 export interface StudentAssignment {
   id: string;
   lessonId: string;
@@ -26,6 +32,10 @@ export interface StudentAssignment {
   // Review tracking
   reviewedAt?: string; // When teacher reviewed this student's work
   reviewedBy?: string; // For future: teacherId who reviewed
+
+  // Action tracking for teacher workflow
+  actionStatus?: StudentActionStatus; // What action teacher took
+  actionAt?: string; // When action was taken
 }
 
 /**

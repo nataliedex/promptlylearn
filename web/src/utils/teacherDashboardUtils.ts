@@ -19,6 +19,7 @@ import type {
   StudentAssignmentRow,
   AssignmentReviewData,
   StudentDrilldownData,
+  StudentActionStatus,
 } from "../types/teacherDashboard";
 
 // ============================================
@@ -457,7 +458,7 @@ export function buildStudentDrilldown(
 
 /**
  * Build assignment review data from sessions.
- * @param assignmentDetails - Optional map of studentId to assignment details (attempts, etc.)
+ * @param assignmentDetails - Optional map of studentId to assignment details (attempts, action status, etc.)
  */
 export function buildAssignmentReview(
   lessonId: string,
@@ -466,7 +467,13 @@ export function buildAssignmentReview(
   lesson: Lesson,
   allStudentIds: string[],
   allStudentNames: Record<string, string>,
-  assignmentDetails?: Record<string, { attempts: number; completedAt?: string; reviewedAt?: string }>
+  assignmentDetails?: Record<string, {
+    attempts: number;
+    completedAt?: string;
+    reviewedAt?: string;
+    actionStatus?: StudentActionStatus;
+    actionAt?: string;
+  }>
 ): AssignmentReviewData {
   // Group sessions by student and pick the most recent one for each
   const sessionsByStudent = new Map<string, Session[]>();
@@ -490,10 +497,13 @@ export function buildAssignmentReview(
   // Build rows for students who have sessions (using latest session)
   const studentRows = latestSessions.map((session) => {
     const row = buildStudentRow(session, lesson);
-    // Override attempts and isReviewed from assignment details if available
+    // Override attempts, isReviewed, and actionStatus from assignment details if available
     if (assignmentDetails && assignmentDetails[session.studentId]) {
-      row.attempts = assignmentDetails[session.studentId].attempts;
-      row.isReviewed = !!assignmentDetails[session.studentId].reviewedAt;
+      const details = assignmentDetails[session.studentId];
+      row.attempts = details.attempts;
+      row.isReviewed = !!details.reviewedAt;
+      row.actionStatus = details.actionStatus;
+      row.actionAt = details.actionAt;
     }
     return row;
   });
@@ -515,6 +525,8 @@ export function buildAssignmentReview(
       hasTeacherNote: false,
       attempts: assignmentDetails?.[id]?.attempts || 1,
       isReviewed: !!assignmentDetails?.[id]?.reviewedAt,
+      actionStatus: assignmentDetails?.[id]?.actionStatus,
+      actionAt: assignmentDetails?.[id]?.actionAt,
     }));
 
   const allRows = [...studentRows, ...notStartedRows];

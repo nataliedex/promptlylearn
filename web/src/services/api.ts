@@ -585,6 +585,50 @@ export async function restoreAssignment(assignmentId: string): Promise<Assignmen
 }
 
 /**
+ * Action status for teacher workflow on student assignments.
+ */
+export type StudentActionStatus = "reviewed" | "reassigned" | "no-action-needed";
+
+/**
+ * Assignment review status summary.
+ */
+export interface AssignmentReviewStatus {
+  totalAssigned: number;
+  completed: number;
+  addressed: number;
+  unaddressed: number;
+  actionBreakdown: {
+    reviewed: number;
+    reassigned: number;
+    noActionNeeded: number;
+  };
+  isFullyReviewed: boolean;
+}
+
+/**
+ * Mark an action taken on a student's assignment.
+ * Used for teacher workflow (reviewed, reassigned, no-action-needed).
+ */
+export async function markStudentAction(
+  assignmentId: string,
+  studentId: string,
+  action: StudentActionStatus
+): Promise<{ success: boolean }> {
+  return fetchJson(`${API_BASE}/assignments/${assignmentId}/students/${studentId}/action`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action }),
+  });
+}
+
+/**
+ * Get the review status for an assignment (how many students addressed).
+ */
+export async function getAssignmentReviewStatus(assignmentId: string): Promise<AssignmentReviewStatus> {
+  return fetchJson(`${API_BASE}/assignments/${assignmentId}/status`);
+}
+
+/**
  * Trigger auto-archive check.
  * Called periodically (e.g., on dashboard load).
  */

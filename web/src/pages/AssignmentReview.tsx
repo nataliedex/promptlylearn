@@ -4,8 +4,9 @@
  * Design Philosophy:
  * - This is where teachers spend most of their time
  * - Show understanding levels, not raw scores
- * - Make "needs attention" prominent but not alarming
- * - Teacher notes visible at a glance
+ * - Make "needs attention" prominent and actionable
+ * - Teacher can take action directly from this page
+ * - Assignment feels "done" when all flagged students are addressed
  */
 
 import { useState, useEffect } from "react";
@@ -16,8 +17,12 @@ import {
   getStudents,
   getAssignedStudents,
   recordAssignmentView,
+  markStudentAction,
+  getAssignmentReviewStatus,
   type Lesson,
   type Student,
+  type StudentActionStatus,
+  type AssignmentReviewStatus,
 } from "../services/api";
 import {
   buildAssignmentReview,
@@ -25,6 +30,7 @@ import {
   getUnderstandingColor,
   getUnderstandingBgColor,
   getCoachSupportLabel,
+  getAttentionReasonDisplay,
 } from "../utils/teacherDashboardUtils";
 import type {
   AssignmentReviewData,
@@ -37,62 +43,98 @@ export default function AssignmentReview() {
   const navigate = useNavigate();
 
   const [reviewData, setReviewData] = useState<AssignmentReviewData | null>(null);
+  const [reviewStatus, setReviewStatus] = useState<AssignmentReviewStatus | null>(null);
   const [loading, setLoading] = useState(true);
-  const [filter, setFilter] = useState<"all" | "needs-review" | UnderstandingLevel>("all");
+  const [filter, setFilter] = useState<"all" | "needs-review" | "addressed" | UnderstandingLevel>("all");
 
-  useEffect(() => {
+  const loadData = async () => {
     if (!lessonId) return;
 
-    async function loadData() {
-      try {
-        // Record teacher view (important for lifecycle transitions)
-        recordAssignmentView(lessonId!).catch((err) => {
-          console.log("Failed to record view (non-critical):", err);
-        });
+    try {
+      // Record teacher view (important for lifecycle transitions)
+      recordAssignmentView(lessonId).catch((err) => {
+        console.log("Failed to record view (non-critical):", err);
+      });
 
-        // First get assigned students for this lesson
-        const [lesson, sessions, assignedData, allStudents] = await Promise.all([
-          getLesson(lessonId!),
-          getSessions(undefined, "completed"),
-          getAssignedStudents(lessonId!),
-          getStudents(),
-        ]);
+      // First get assigned students for this lesson
+      const [lesson, sessions, assignedData, allStudents, status] = await Promise.all([
+        getLesson(lessonId),
+        getSessions(undefined, "completed"),
+        getAssignedStudents(lessonId),
+        getStudents(),
+        getAssignmentReviewStatus(lessonId).catch(() => null),
+      ]);
 
-        // Filter sessions for this lesson
-        const lessonSessions = sessions.filter((s) => s.lessonId === lessonId);
+      // Filter sessions for this lesson
+      const lessonSessions = sessions.filter((s) => s.lessonId === lessonId);
 
-        // Only use assigned student IDs (not all students)
-        const assignedStudentIds = assignedData.studentIds;
+      // Only use assigned student IDs (not all students)
+      const assignedStudentIds = assignedData.studentIds;
 
-        // Build student name lookup from all students but only for assigned ones
-        const studentNames: Record<string, string> = {};
-        allStudents.forEach((s: Student) => {
-          if (assignedStudentIds.includes(s.id)) {
-            studentNames[s.id] = s.name;
-          }
-        });
+      // Build student name lookup from all students but only for assigned ones
+      const studentNames: Record<string, string> = {};
+      allStudents.forEach((s: Student) => {
+        if (assignedStudentIds.includes(s.id)) {
+          studentNames[s.id] = s.name;
+        }
+      });
 
-        // Build review data using only assigned students
-        const data = buildAssignmentReview(
-          lessonId!,
-          (lesson as Lesson).title,
-          lessonSessions,
-          lesson as Lesson,
-          assignedStudentIds,
-          studentNames,
-          assignedData.assignments // Pass assignment details with attempts
-        );
+      // Build review data using only assigned students
+      const data = buildAssignmentReview(
+        lessonId,
+        (lesson as Lesson).title,
+        lessonSessions,
+        lesson as Lesson,
+        assignedStudentIds,
+        studentNames,
+        assignedData.assignments // Pass assignment details with attempts and actionStatus
+      );
 
-        setReviewData(data);
-      } catch (err) {
-        console.error("Failed to load assignment data:", err);
-      } finally {
-        setLoading(false);
-      }
+      setReviewData(data);
+      setReviewStatus(status);
+    } catch (err) {
+      console.error("Failed to load assignment data:", err);
+    } finally {
+      setLoading(false);
     }
+  };
 
+  useEffect(() => {
     loadData();
   }, [lessonId]);
+
+  // Handle marking a student action
+  const handleMarkAction = async (studentId: string, action: StudentActionStatus) => {
+    if (!lessonId || !reviewData) return;
+
+    try {
+      await markStudentAction(lessonId, studentId, action);
+
+      // Update local state optimistically
+      setReviewData((prev) => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          students: prev.students.map((s) =>
+            s.studentId === studentId
+              ? { ...s, actionStatus: action, actionAt: new Date().toISOString() }
+              : s
+          ),
+        };
+      });
+
+      // Refresh status
+      const newStatus = await getAssignmentReviewStatus(lessonId);
+      setReviewStatus(newStatus);
+
+      // If action is "reviewed", navigate to student details
+      if (action === "reviewed") {
+        navigate(`/educator/assignment/${lessonId}/student/${studentId}`);
+      }
+    } catch (err) {
+      console.error("Failed to mark action:", err);
+    }
+  };
 
   if (loading) {
     return (
@@ -146,14 +188,34 @@ export default function AssignmentReview() {
     );
   }
 
+  // Calculate unaddressed students (need review but no action taken)
+  const unaddressedStudents = reviewData.students.filter(
+    (s) => s.needsReview && !s.actionStatus
+  );
+
+  // Calculate breakdown for needs attention strip
+  const strugglingCount = unaddressedStudents.filter(
+    (s) => s.understanding === "needs-support"
+  ).length;
+  const developingWithCoachCount = unaddressedStudents.filter(
+    (s) => s.understanding === "developing" && s.coachSupport === "significant"
+  ).length;
+
+  // Check if assignment is fully reviewed
+  const isFullyReviewed = reviewStatus?.isFullyReviewed || false;
+
   // Apply filter
   const filteredStudents = reviewData.students.filter((student) => {
     if (filter === "all") return true;
-    if (filter === "needs-review") return student.needsReview;
+    if (filter === "needs-review") return student.needsReview && !student.actionStatus;
+    if (filter === "addressed") return !!student.actionStatus;
     return student.understanding === filter;
   });
 
   const { stats, distribution } = reviewData;
+
+  // Get first unaddressed student for "Review First" button
+  const firstUnaddressed = unaddressedStudents[0];
 
   return (
     <div className="container">
@@ -165,6 +227,30 @@ export default function AssignmentReview() {
         <h1>{reviewData.title}</h1>
         <p>{reviewData.questionCount} questions</p>
       </div>
+
+      {/* Assignment Fully Reviewed Banner */}
+      {isFullyReviewed && stats.completed > 0 && (
+        <div
+          className="card"
+          style={{
+            background: "#e8f5e9",
+            borderLeft: "4px solid #4caf50",
+            marginBottom: "16px",
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+            <span style={{ fontSize: "1.5rem" }}>✓</span>
+            <div>
+              <h3 style={{ margin: 0, color: "#2e7d32" }}>Assignment Fully Reviewed</h3>
+              <p style={{ margin: 0, marginTop: "4px", color: "#666", fontSize: "0.9rem" }}>
+                {reviewStatus?.actionBreakdown.reviewed || 0} reviewed
+                {reviewStatus?.actionBreakdown.reassigned ? ` • ${reviewStatus.actionBreakdown.reassigned} reassigned` : ""}
+                {reviewStatus?.actionBreakdown.noActionNeeded ? ` • ${reviewStatus.actionBreakdown.noActionNeeded} no action needed` : ""}
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Summary Stats */}
       <div className="stats-grid">
@@ -214,29 +300,58 @@ export default function AssignmentReview() {
         </div>
       </div>
 
-      {/* Needs Attention Alert */}
-      {stats.needingAttention > 0 && (
+      {/* Needs Attention Strip - Only show if there are unaddressed students */}
+      {unaddressedStudents.length > 0 && (
         <div
           className="card"
           style={{
             background: "#fff3e0",
             borderLeft: "4px solid #ff9800",
-            cursor: "pointer",
           }}
-          onClick={() => setFilter(filter === "needs-review" ? "all" : "needs-review")}
         >
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: "16px" }}>
             <div>
               <h3 style={{ margin: 0, marginBottom: "4px", color: "#e65100" }}>
-                {stats.needingAttention} student{stats.needingAttention !== 1 ? "s" : ""} may need your attention
+                Needs Attention ({unaddressedStudents.length} student{unaddressedStudents.length !== 1 ? "s" : ""})
               </h3>
               <p style={{ margin: 0, color: "#666", fontSize: "0.9rem" }}>
-                Click to filter, or review individual students below
+                {strugglingCount > 0 && `${strugglingCount} struggling`}
+                {strugglingCount > 0 && developingWithCoachCount > 0 && ", "}
+                {developingWithCoachCount > 0 && `${developingWithCoachCount} developing w/ heavy coach support`}
               </p>
             </div>
-            <span style={{ fontSize: "1.5rem", color: "#ff9800" }}>
-              {filter === "needs-review" ? "✓" : "→"}
-            </span>
+            <div style={{ display: "flex", gap: "8px" }}>
+              {firstUnaddressed && (
+                <button
+                  onClick={() => navigate(`/educator/assignment/${lessonId}/student/${firstUnaddressed.studentId}`)}
+                  style={{
+                    padding: "8px 16px",
+                    background: "#ff9800",
+                    color: "white",
+                    border: "none",
+                    borderRadius: "8px",
+                    cursor: "pointer",
+                    fontWeight: 500,
+                  }}
+                >
+                  Review First Student
+                </button>
+              )}
+              <button
+                onClick={() => setFilter(filter === "needs-review" ? "all" : "needs-review")}
+                style={{
+                  padding: "8px 16px",
+                  background: filter === "needs-review" ? "#e65100" : "transparent",
+                  color: filter === "needs-review" ? "white" : "#e65100",
+                  border: `1px solid ${filter === "needs-review" ? "#e65100" : "#ff9800"}`,
+                  borderRadius: "8px",
+                  cursor: "pointer",
+                  fontWeight: 500,
+                }}
+              >
+                {filter === "needs-review" ? "Show All" : "View All Flagged"}
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -248,12 +363,20 @@ export default function AssignmentReview() {
           active={filter === "all"}
           onClick={() => setFilter("all")}
         />
-        {stats.needingAttention > 0 && (
+        {unaddressedStudents.length > 0 && (
           <FilterButton
-            label={`Needs Review (${stats.needingAttention})`}
+            label={`Needs Review (${unaddressedStudents.length})`}
             active={filter === "needs-review"}
             onClick={() => setFilter("needs-review")}
             variant="warning"
+          />
+        )}
+        {reviewStatus && reviewStatus.addressed > 0 && (
+          <FilterButton
+            label={`Addressed (${reviewStatus.addressed})`}
+            active={filter === "addressed"}
+            onClick={() => setFilter("addressed")}
+            variant="success"
           />
         )}
       </div>
@@ -274,7 +397,7 @@ export default function AssignmentReview() {
                   <th style={{ textAlign: "center", padding: "12px 8px" }}>Understanding</th>
                   <th style={{ textAlign: "center", padding: "12px 8px" }}>Coach Support</th>
                   <th style={{ textAlign: "center", padding: "12px 8px" }}>Attempts</th>
-                  <th style={{ textAlign: "center", padding: "12px 8px" }}>Review</th>
+                  <th style={{ textAlign: "center", padding: "12px 8px" }}>Action</th>
                   <th style={{ textAlign: "right", padding: "12px 8px" }}></th>
                 </tr>
               </thead>
@@ -283,9 +406,11 @@ export default function AssignmentReview() {
                   <StudentRow
                     key={student.studentId}
                     student={student}
+                    lessonId={lessonId!}
                     onNavigate={() =>
                       navigate(`/educator/assignment/${lessonId}/student/${student.studentId}`)
                     }
+                    onMarkAction={handleMarkAction}
                   />
                 ))}
               </tbody>
@@ -305,7 +430,7 @@ interface FilterButtonProps {
   label: string;
   active: boolean;
   onClick: () => void;
-  variant?: "default" | "warning";
+  variant?: "default" | "warning" | "success";
 }
 
 function FilterButton({ label, active, onClick, variant = "default" }: FilterButtonProps) {
@@ -318,19 +443,32 @@ function FilterButton({ label, active, onClick, variant = "default" }: FilterBut
     transition: "all 0.2s",
   };
 
-  const activeStyle = variant === "warning"
-    ? { background: "#ff9800", color: "white" }
-    : { background: "#667eea", color: "white" };
-
-  const inactiveStyle = variant === "warning"
-    ? { background: "#fff3e0", color: "#e65100" }
-    : { background: "#f5f5f5", color: "#666" };
+  const getStyles = () => {
+    if (active) {
+      switch (variant) {
+        case "warning":
+          return { background: "#ff9800", color: "white" };
+        case "success":
+          return { background: "#4caf50", color: "white" };
+        default:
+          return { background: "#667eea", color: "white" };
+      }
+    }
+    switch (variant) {
+      case "warning":
+        return { background: "#fff3e0", color: "#e65100" };
+      case "success":
+        return { background: "#e8f5e9", color: "#2e7d32" };
+      default:
+        return { background: "#f5f5f5", color: "#666" };
+    }
+  };
 
   return (
     <button
       style={{
         ...baseStyle,
-        ...(active ? activeStyle : inactiveStyle),
+        ...getStyles(),
       }}
       onClick={onClick}
     >
@@ -345,25 +483,32 @@ function FilterButton({ label, active, onClick, variant = "default" }: FilterBut
 
 interface StudentRowProps {
   student: StudentAssignmentRow;
+  lessonId: string;
   onNavigate: () => void;
+  onMarkAction: (studentId: string, action: StudentActionStatus) => void;
 }
 
-function StudentRow({ student, onNavigate }: StudentRowProps) {
+function StudentRow({ student, lessonId, onNavigate, onMarkAction }: StudentRowProps) {
+  const [showActionMenu, setShowActionMenu] = useState(false);
   const hasStarted = student.questionsAnswered > 0;
+  const needsAction = student.needsReview && !student.actionStatus;
 
   return (
     <tr
       style={{
         borderBottom: "1px solid #eee",
-        cursor: "pointer",
+        background: needsAction ? "#fffbf5" : "transparent",
         transition: "background 0.2s",
       }}
-      onClick={onNavigate}
-      onMouseEnter={(e) => (e.currentTarget.style.background = "#f5f5f5")}
-      onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+      onMouseEnter={(e) => {
+        if (!needsAction) e.currentTarget.style.background = "#f5f5f5";
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.background = needsAction ? "#fffbf5" : "transparent";
+      }}
     >
       {/* Student Name */}
-      <td style={{ padding: "12px 8px" }}>
+      <td style={{ padding: "12px 8px", cursor: "pointer" }} onClick={onNavigate}>
         <span style={{ fontWeight: 500, color: "#667eea" }}>{student.studentName}</span>
         {student.hasTeacherNote && (
           <span style={{ marginLeft: "8px", fontSize: "0.8rem" }} title="Has your notes">
@@ -373,7 +518,7 @@ function StudentRow({ student, onNavigate }: StudentRowProps) {
       </td>
 
       {/* Progress */}
-      <td style={{ textAlign: "center", padding: "12px 8px" }}>
+      <td style={{ textAlign: "center", padding: "12px 8px", cursor: "pointer" }} onClick={onNavigate}>
         {student.isComplete ? (
           <span style={{ color: "#2e7d32" }}>✓ Complete</span>
         ) : hasStarted ? (
@@ -386,7 +531,7 @@ function StudentRow({ student, onNavigate }: StudentRowProps) {
       </td>
 
       {/* Understanding Level */}
-      <td style={{ textAlign: "center", padding: "12px 8px" }}>
+      <td style={{ textAlign: "center", padding: "12px 8px", cursor: "pointer" }} onClick={onNavigate}>
         {hasStarted ? (
           <span
             style={{
@@ -407,7 +552,7 @@ function StudentRow({ student, onNavigate }: StudentRowProps) {
       </td>
 
       {/* Coach Support */}
-      <td style={{ textAlign: "center", padding: "12px 8px" }}>
+      <td style={{ textAlign: "center", padding: "12px 8px", cursor: "pointer" }} onClick={onNavigate}>
         {hasStarted ? (
           <span
             style={{
@@ -423,7 +568,7 @@ function StudentRow({ student, onNavigate }: StudentRowProps) {
       </td>
 
       {/* Attempts */}
-      <td style={{ textAlign: "center", padding: "12px 8px" }}>
+      <td style={{ textAlign: "center", padding: "12px 8px", cursor: "pointer" }} onClick={onNavigate}>
         {student.attempts > 1 ? (
           <span
             style={{
@@ -443,30 +588,182 @@ function StudentRow({ student, onNavigate }: StudentRowProps) {
         )}
       </td>
 
-      {/* Review Status */}
-      <td style={{ textAlign: "center", padding: "12px 8px" }}>
-        {student.isReviewed ? (
-          <span
-            style={{
-              display: "inline-block",
-              padding: "4px 8px",
-              borderRadius: "8px",
-              fontSize: "0.8rem",
-              background: "#e8f5e9",
-              color: "#2e7d32",
-            }}
-          >
-            Reviewed
-          </span>
+      {/* Action Status */}
+      <td style={{ textAlign: "center", padding: "12px 8px", position: "relative" }}>
+        {student.actionStatus ? (
+          <ActionStatusBadge status={student.actionStatus} />
+        ) : student.needsReview ? (
+          <div style={{ position: "relative", display: "inline-block" }}>
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                setShowActionMenu(!showActionMenu);
+              }}
+              style={{
+                padding: "4px 12px",
+                borderRadius: "8px",
+                fontSize: "0.8rem",
+                fontWeight: 500,
+                background: "#fff3e0",
+                color: "#e65100",
+                border: "1px solid #ffcc80",
+                cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                gap: "4px",
+              }}
+            >
+              Needs review
+              <span style={{ fontSize: "0.7rem" }}>▼</span>
+            </button>
+            {showActionMenu && (
+              <ActionMenu
+                onAction={(action) => {
+                  setShowActionMenu(false);
+                  onMarkAction(student.studentId, action);
+                }}
+                onClose={() => setShowActionMenu(false)}
+              />
+            )}
+          </div>
+        ) : hasStarted ? (
+          <span style={{ color: "#999", fontSize: "0.85rem" }}>No action needed</span>
         ) : (
           <span style={{ color: "#999" }}>—</span>
         )}
       </td>
 
-      {/* Action */}
-      <td style={{ textAlign: "right", padding: "12px 8px" }}>
+      {/* Navigate Arrow */}
+      <td style={{ textAlign: "right", padding: "12px 8px", cursor: "pointer" }} onClick={onNavigate}>
         <span style={{ color: "#667eea" }}>→</span>
       </td>
     </tr>
+  );
+}
+
+// ============================================
+// Action Status Badge
+// ============================================
+
+function ActionStatusBadge({ status }: { status: StudentActionStatus }) {
+  const config = {
+    reviewed: { bg: "#e8f5e9", color: "#2e7d32", label: "Reviewed" },
+    reassigned: { bg: "#e3f2fd", color: "#1565c0", label: "Reassigned" },
+    "no-action-needed": { bg: "#f5f5f5", color: "#666", label: "No action needed" },
+  };
+
+  const { bg, color, label } = config[status];
+
+  return (
+    <span
+      style={{
+        display: "inline-block",
+        padding: "4px 8px",
+        borderRadius: "8px",
+        fontSize: "0.8rem",
+        background: bg,
+        color: color,
+      }}
+    >
+      {label}
+    </span>
+  );
+}
+
+// ============================================
+// Action Menu Dropdown
+// ============================================
+
+interface ActionMenuProps {
+  onAction: (action: StudentActionStatus) => void;
+  onClose: () => void;
+}
+
+function ActionMenu({ onAction, onClose }: ActionMenuProps) {
+  return (
+    <>
+      {/* Backdrop to close menu */}
+      <div
+        style={{
+          position: "fixed",
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          zIndex: 99,
+        }}
+        onClick={onClose}
+      />
+      <div
+        style={{
+          position: "absolute",
+          top: "100%",
+          left: "50%",
+          transform: "translateX(-50%)",
+          marginTop: "4px",
+          background: "white",
+          borderRadius: "8px",
+          boxShadow: "0 4px 12px rgba(0,0,0,0.15)",
+          zIndex: 100,
+          minWidth: "160px",
+          overflow: "hidden",
+        }}
+      >
+        <button
+          onClick={() => onAction("reviewed")}
+          style={{
+            display: "block",
+            width: "100%",
+            padding: "10px 16px",
+            textAlign: "left",
+            background: "none",
+            border: "none",
+            cursor: "pointer",
+            fontSize: "0.9rem",
+            color: "#333",
+          }}
+          onMouseEnter={(e) => (e.currentTarget.style.background = "#f5f5f5")}
+          onMouseLeave={(e) => (e.currentTarget.style.background = "none")}
+        >
+          Mark Reviewed
+        </button>
+        <button
+          onClick={() => onAction("reassigned")}
+          style={{
+            display: "block",
+            width: "100%",
+            padding: "10px 16px",
+            textAlign: "left",
+            background: "none",
+            border: "none",
+            cursor: "pointer",
+            fontSize: "0.9rem",
+            color: "#333",
+          }}
+          onMouseEnter={(e) => (e.currentTarget.style.background = "#f5f5f5")}
+          onMouseLeave={(e) => (e.currentTarget.style.background = "none")}
+        >
+          Reassign to Student
+        </button>
+        <button
+          onClick={() => onAction("no-action-needed")}
+          style={{
+            display: "block",
+            width: "100%",
+            padding: "10px 16px",
+            textAlign: "left",
+            background: "none",
+            border: "none",
+            cursor: "pointer",
+            fontSize: "0.9rem",
+            color: "#666",
+          }}
+          onMouseEnter={(e) => (e.currentTarget.style.background = "#f5f5f5")}
+          onMouseLeave={(e) => (e.currentTarget.style.background = "none")}
+        >
+          No Action Needed
+        </button>
+      </div>
+    </>
   );
 }
