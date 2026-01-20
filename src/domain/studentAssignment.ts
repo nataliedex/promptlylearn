@@ -6,6 +6,7 @@
  * - Assigning lessons to specific students (not all students)
  * - Knowing which class context an assignment was made through
  * - Dashboard metrics that only count assigned students
+ * - Tracking multiple attempts per student per assignment
  *
  * Note: A Session is created when a student STARTS working.
  * A StudentAssignment is created when a teacher ASSIGNS the lesson.
@@ -36,6 +37,76 @@ export interface StudentAssignment {
   // Action tracking for teacher workflow
   actionStatus?: StudentActionStatus; // What action teacher took
   actionAt?: string; // When action was taken
+}
+
+// ============================================
+// Assignment Student - Per-Student Progress Tracking
+// ============================================
+
+/**
+ * AssignmentStudent - Tracks per-student progress on an assignment
+ *
+ * This is a lightweight interface for tracking attempts, scores, and completion
+ * at the student-assignment level. Used for:
+ * - Tracking multiple attempts
+ * - Recording scores per attempt
+ * - Generating insights based on performance
+ */
+export interface AssignmentStudent {
+  studentId: string;
+  assignmentId: string;
+
+  // Attempt tracking
+  attempts: number; // Number of times attempted
+  currentAttempt?: number; // Current attempt number (for in-progress tracking)
+
+  // Score tracking
+  score?: number; // Latest score (0-100)
+  highestScore?: number; // Best score across all attempts
+
+  // Completion tracking
+  startedAt?: Date; // When student first started
+  lastCompletedAt?: Date;
+  firstCompletedAt?: Date;
+
+  // Support usage (for insight generation)
+  hintsUsed?: number;
+  coachSessionCount?: number;
+  totalTimeSpent?: number; // Total seconds spent
+}
+
+/**
+ * Create a new AssignmentStudent record
+ */
+export function createAssignmentStudent(
+  studentId: string,
+  assignmentId: string
+): AssignmentStudent {
+  return {
+    studentId,
+    assignmentId,
+    attempts: 0,
+  };
+}
+
+/**
+ * Record a completed attempt
+ */
+export function recordAttempt(
+  record: AssignmentStudent,
+  score: number,
+  timeSpent?: number
+): AssignmentStudent {
+  const now = new Date();
+  return {
+    ...record,
+    attempts: record.attempts + 1,
+    score,
+    highestScore: Math.max(record.highestScore || 0, score),
+    lastCompletedAt: now,
+    firstCompletedAt: record.firstCompletedAt || now,
+    totalTimeSpent: (record.totalTimeSpent || 0) + (timeSpent || 0),
+  };
 }
 
 /**

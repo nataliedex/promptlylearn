@@ -39,6 +39,7 @@ export default function AssignLesson() {
   // Form state
   const [selectedLessonId, setSelectedLessonId] = useState<string>(lessonIdParam || "");
   const [selectedClassId, setSelectedClassId] = useState<string>(classId || "");
+  const [selectedSubject, setSelectedSubject] = useState<string>("");
   const [assignMode, setAssignMode] = useState<"all" | "select">("all");
   const [selectedStudentIds, setSelectedStudentIds] = useState<Set<string>>(new Set());
   const [assigning, setAssigning] = useState(false);
@@ -82,6 +83,7 @@ export default function AssignLesson() {
   const handleClassChange = async (newClassId: string) => {
     setSelectedClassId(newClassId);
     setSelectedStudentIds(new Set());
+    setSelectedSubject(""); // Reset subject when class changes
 
     if (newClassId) {
       try {
@@ -94,6 +96,17 @@ export default function AssignLesson() {
       setSelectedClass(null);
     }
   };
+
+  // Get students who participate in the selected subject (or all students if no subject selected)
+  const getParticipatingStudents = () => {
+    if (!selectedClass) return [];
+    if (!selectedSubject) return selectedClass.students;
+
+    const excludedIds = selectedClass.subjectExclusions?.[selectedSubject] || [];
+    return selectedClass.students.filter((s) => !excludedIds.includes(s.id));
+  };
+
+  const participatingStudents = getParticipatingStudents();
 
   // Load assignment summary when lesson selection changes
   const handleLessonChange = async (newLessonId: string) => {
@@ -117,7 +130,15 @@ export default function AssignLesson() {
 
     setAssigning(true);
     try {
-      const studentIds = assignMode === "select" ? Array.from(selectedStudentIds) : undefined;
+      // If subject is selected, use participating students; otherwise, use selection or all
+      let studentIds: string[] | undefined;
+      if (assignMode === "select") {
+        studentIds = Array.from(selectedStudentIds);
+      } else if (selectedSubject) {
+        // "All" mode with subject filter: only assign to participating students
+        studentIds = participatingStudents.map((s) => s.id);
+      }
+      // else: undefined = all students in class (no subject filter)
 
       const result = await assignLessonToClass(selectedLessonId, selectedClassId, studentIds);
 
@@ -151,9 +172,7 @@ export default function AssignLesson() {
   };
 
   const selectAllStudents = () => {
-    if (selectedClass) {
-      setSelectedStudentIds(new Set(selectedClass.students.map((s) => s.id)));
-    }
+    setSelectedStudentIds(new Set(participatingStudents.map((s) => s.id)));
   };
 
   const deselectAllStudents = () => {
@@ -180,6 +199,7 @@ export default function AssignLesson() {
   const canAssign =
     selectedLessonId &&
     selectedClassId &&
+    participatingStudents.length > 0 &&
     (assignMode === "all" || selectedStudentIds.size > 0);
 
   return (
@@ -327,8 +347,52 @@ export default function AssignLesson() {
         )}
       </div>
 
+      {/* Step 2.5: Select Subject (optional) */}
+      {selectedClass && selectedClass.subjects && selectedClass.subjects.length > 0 && (
+        <div className="card" style={{ marginBottom: "16px" }}>
+          <h3 style={{ margin: 0, marginBottom: "8px" }}>Subject (Optional)</h3>
+          <p style={{ color: "#666", fontSize: "0.9rem", marginBottom: "16px" }}>
+            Select a subject to filter students based on their participation settings.
+          </p>
+
+          <select
+            value={selectedSubject}
+            onChange={(e) => {
+              setSelectedSubject(e.target.value);
+              setSelectedStudentIds(new Set()); // Reset selection when subject changes
+            }}
+            style={{
+              width: "100%",
+              padding: "12px",
+              fontSize: "1rem",
+              borderRadius: "8px",
+              border: "2px solid #e0e0e0",
+            }}
+          >
+            <option value="">All subjects (no filter)</option>
+            {selectedClass.subjects.map((subject) => {
+              const excludedCount = selectedClass.subjectExclusions?.[subject]?.length || 0;
+              const participatingCount = selectedClass.students.length - excludedCount;
+              return (
+                <option key={subject} value={subject}>
+                  {subject} ({participatingCount} of {selectedClass.students.length} students)
+                </option>
+              );
+            })}
+          </select>
+
+          {selectedSubject && participatingStudents.length < selectedClass.students.length && (
+            <div style={{ marginTop: "12px", padding: "12px", background: "#e3f2fd", borderRadius: "8px" }}>
+              <span style={{ color: "#1565c0", fontSize: "0.9rem" }}>
+                {participatingStudents.length} of {selectedClass.students.length} students participate in {selectedSubject}
+              </span>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Step 3: Choose Students */}
-      {selectedClass && selectedClass.students.length > 0 && (
+      {selectedClass && participatingStudents.length > 0 && (
         <div className="card" style={{ marginBottom: "16px" }}>
           <h3 style={{ margin: 0, marginBottom: "16px" }}>3. Choose Students</h3>
 
@@ -337,7 +401,7 @@ export default function AssignLesson() {
               className={`btn ${assignMode === "all" ? "btn-primary" : "btn-secondary"}`}
               onClick={() => setAssignMode("all")}
             >
-              All Students ({selectedClass.students.length})
+              All{selectedSubject ? ` ${selectedSubject}` : ""} Students ({participatingStudents.length})
             </button>
             <button
               className={`btn ${assignMode === "select" ? "btn-primary" : "btn-secondary"}`}
@@ -380,7 +444,7 @@ export default function AssignLesson() {
               </div>
 
               <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-                {selectedClass.students.map((student) => (
+                {participatingStudents.map((student) => (
                   <label
                     key={student.id}
                     style={{
@@ -425,6 +489,22 @@ export default function AssignLesson() {
         </div>
       )}
 
+      {/* No participating students warning */}
+      {selectedClass && selectedClass.students.length > 0 && selectedSubject && participatingStudents.length === 0 && (
+        <div className="card" style={{ background: "#fff3e0", borderLeft: "4px solid #ff9800", marginBottom: "16px" }}>
+          <p style={{ margin: 0, color: "#e65100" }}>
+            No students are configured to participate in {selectedSubject}. You can manage subject participation in the class settings.
+          </p>
+          <button
+            className="btn btn-secondary"
+            onClick={() => navigate(`/educator/class/${selectedClassId}`)}
+            style={{ marginTop: "12px" }}
+          >
+            Manage Class Settings
+          </button>
+        </div>
+      )}
+
       {/* Assign Button */}
       <div style={{ display: "flex", gap: "16px", marginTop: "24px" }}>
         <button
@@ -440,7 +520,7 @@ export default function AssignLesson() {
           {assigning
             ? "Assigning..."
             : assignMode === "all"
-            ? `Assign to All ${selectedClass?.students.length || 0} Students`
+            ? `Assign to ${participatingStudents.length} Student${participatingStudents.length !== 1 ? "s" : ""}${selectedSubject ? ` in ${selectedSubject}` : ""}`
             : `Assign to ${selectedStudentIds.size} Selected Student${selectedStudentIds.size !== 1 ? "s" : ""}`}
         </button>
         <button

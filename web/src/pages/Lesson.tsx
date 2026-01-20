@@ -14,6 +14,7 @@ import {
   type CoachFeedbackResponse,
 } from "../services/api";
 import { useVoice } from "../hooks/useVoice";
+import ModeToggle from "../components/ModeToggle";
 
 type LessonMode = "voice" | "type";
 type VoiceState = "idle" | "speaking" | "listening" | "processing";
@@ -22,8 +23,11 @@ export default function Lesson() {
   const { studentId, lessonId } = useParams<{ studentId: string; lessonId: string }>();
   const [searchParams] = useSearchParams();
   const sessionId = searchParams.get("session");
-  const mode = (searchParams.get("mode") as LessonMode) || "type";
+  const initialMode = (searchParams.get("mode") as LessonMode) || "type";
   const navigate = useNavigate();
+
+  // Mode state - can be toggled during the lesson
+  const [mode, setMode] = useState<LessonMode>(initialMode);
 
   const [lesson, setLesson] = useState<LessonType | null>(null);
   const [session, setSession] = useState<Session | null>(null);
@@ -55,6 +59,7 @@ export default function Lesson() {
     startRecording,
     stopRecording,
     speak,
+    cancelRecording,
   } = useVoice();
 
   // Update voice state based on hook states
@@ -106,6 +111,23 @@ export default function Lesson() {
   // Handler for the Start Lesson button (provides user interaction for browser autoplay policy)
   const handleStartLesson = () => {
     setLessonStarted(true);
+  };
+
+  // Handler for toggling between voice and text mode
+  const handleModeToggle = (newMode: LessonMode) => {
+    if (newMode === mode) return;
+
+    // Cancel any ongoing voice activity when switching to text mode
+    if (newMode === "type" && isRecording) {
+      cancelRecording();
+    }
+
+    setMode(newMode);
+
+    // If switching to voice mode and we're ready, start voice flow
+    if (newMode === "voice" && lessonStarted && currentPrompt && voiceAvailable && !feedback) {
+      setVoiceStarted(false); // Reset so the effect triggers
+    }
   };
 
   const startVoiceFlow = async () => {
@@ -435,9 +457,18 @@ export default function Lesson() {
   if (isVoiceMode) {
     return (
       <div className="container">
-        <Link to={`/student/${studentId}`} className="back-btn">
-          ← Exit Lesson
-        </Link>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
+          <Link to={`/student/${studentId}`} className="back-btn" style={{ margin: 0 }}>
+            ← Exit Lesson
+          </Link>
+          {voiceAvailable && (
+            <ModeToggle
+              mode={mode}
+              onToggle={handleModeToggle}
+              disabled={voiceState === "processing" || submitting}
+            />
+          )}
+        </div>
 
         <div className="header">
           <h1>{lesson.title}</h1>
@@ -597,9 +628,18 @@ export default function Lesson() {
   // Type mode UI (original)
   return (
     <div className="container">
-      <Link to={`/student/${studentId}`} className="back-btn">
-        ← Exit Lesson
-      </Link>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
+        <Link to={`/student/${studentId}`} className="back-btn" style={{ margin: 0 }}>
+          ← Exit Lesson
+        </Link>
+        {voiceAvailable && (
+          <ModeToggle
+            mode={mode}
+            onToggle={handleModeToggle}
+            disabled={submitting || isConversing}
+          />
+        )}
+      </div>
 
       <div className="header">
         <h1>{lesson.title}</h1>

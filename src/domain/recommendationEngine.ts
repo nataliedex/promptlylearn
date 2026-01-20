@@ -1,20 +1,24 @@
 /**
- * Recommendation Engine - Detection Rules and Logic
+ * Recommendation Engine - Educational Support Intelligence
  *
- * This module contains the rule-based detection logic that analyzes
- * student performance data and generates actionable recommendations.
+ * This module analyzes student performance data and generates teacher-actionable
+ * insights aligned with the Educational Support Intelligence specification.
  *
  * Design principles:
- * - Rule-based for auditability and predictability
+ * - Conservative approach: Only surface insights with strong evidence (confidence >= 0.7)
+ * - One insight per student per assignment (prioritize highest value)
  * - Observable signals only (no inference about emotions/traits)
- * - Each recommendation includes audit trail data
+ * - Teacher-actionable, non-judgmental language
+ * - Each insight includes audit trail data
  */
 
 import { randomUUID } from "crypto";
 import {
   Recommendation,
   RecommendationType,
-  ConfidenceLevel,
+  InsightType,
+  PriorityLevel,
+  ConfidenceScore,
   StudentPerformanceData,
   AssignmentAggregateData,
   RECOMMENDATION_CONFIG,
@@ -27,7 +31,7 @@ import { recommendationStore } from "../stores/recommendationStore";
 
 export function computePriority(
   type: RecommendationType,
-  confidence: ConfidenceLevel,
+  priorityLevel: PriorityLevel,
   createdAt: string,
   studentCount: number
 ): number {
@@ -37,24 +41,28 @@ export function computePriority(
   // Type weight
   switch (type) {
     case "individual-checkin":
+    case "check_in":
       priority += config.PRIORITY_INDIVIDUAL_CHECKIN;
       break;
     case "small-group":
       priority += config.PRIORITY_SMALL_GROUP;
       break;
     case "enrichment":
+    case "challenge_opportunity":
       priority += config.PRIORITY_ENRICHMENT;
       break;
     case "celebrate":
+    case "celebrate_progress":
       priority += config.PRIORITY_CELEBRATE;
       break;
     case "assignment-adjustment":
+    case "monitor":
       priority += config.PRIORITY_SMALL_GROUP; // Same as group
       break;
   }
 
-  // Confidence weight
-  switch (confidence) {
+  // Confidence weight based on priority level
+  switch (priorityLevel) {
     case "high":
       priority += config.PRIORITY_HIGH_CONFIDENCE;
       break;
@@ -81,10 +89,68 @@ export function computePriority(
 }
 
 // ============================================
-// Rule 1: Struggling Student (Individual Check-in)
+// Helper: Create Insight
 // ============================================
 
-function detectStrugglingStudents(students: StudentPerformanceData[]): Recommendation[] {
+interface CreateInsightParams {
+  insightType: InsightType;
+  legacyType: RecommendationType;
+  summary: string;
+  evidence: string[];
+  suggestedTeacherActions: string[];
+  priorityLevel: PriorityLevel;
+  confidenceScore: ConfidenceScore;
+  studentIds: string[];
+  assignmentId?: string;
+  ruleName: string;
+  signals: Record<string, any>;
+}
+
+/**
+ * Create a recommendation/insight with both new and legacy fields populated
+ */
+function createInsight(params: CreateInsightParams): Recommendation {
+  const now = new Date().toISOString();
+
+  return {
+    id: randomUUID(),
+    insightType: params.insightType,
+    type: params.legacyType,
+
+    // New format fields
+    summary: params.summary,
+    evidence: params.evidence,
+    suggestedTeacherActions: params.suggestedTeacherActions,
+    priorityLevel: params.priorityLevel,
+    confidenceScore: params.confidenceScore,
+
+    // Legacy fields (populated for backward compatibility)
+    title: params.summary,
+    reason: params.evidence.join("; "),
+    suggestedAction: params.suggestedTeacherActions[0] || "",
+    confidence: params.priorityLevel,
+    priority: computePriority(params.legacyType, params.priorityLevel, now, params.studentIds.length),
+
+    // Context
+    studentIds: params.studentIds,
+    assignmentId: params.assignmentId,
+    triggerData: {
+      ruleName: params.ruleName,
+      signals: params.signals,
+      generatedAt: now,
+    },
+
+    // State
+    status: "active",
+    createdAt: now,
+  };
+}
+
+// ============================================
+// Rule 1: Check-in Insight (Student May Need Support)
+// ============================================
+
+function detectCheckInNeeds(students: StudentPerformanceData[]): Recommendation[] {
   const recommendations: Recommendation[] = [];
   const config = RECOMMENDATION_CONFIG;
 
@@ -93,8 +159,11 @@ function detectStrugglingStudents(students: StudentPerformanceData[]): Recommend
     if (student.hasTeacherNote) continue;
 
     let triggered = false;
-    let confidence: ConfidenceLevel = "medium";
+    let confidenceScore: ConfidenceScore = 0.75;
+    let priorityLevel: PriorityLevel = "medium";
+    const evidence: string[] = [];
     const signals: Record<string, any> = {
+      studentName: student.studentName,
       score: student.score,
       hintUsageRate: student.hintUsageRate,
       coachIntent: student.coachIntent,
@@ -104,7 +173,9 @@ function detectStrugglingStudents(students: StudentPerformanceData[]): Recommend
     // Condition 1: Very low score
     if (student.score < config.STRUGGLING_THRESHOLD) {
       triggered = true;
-      confidence = "high";
+      confidenceScore = 0.9;
+      priorityLevel = "high";
+      evidence.push(`Scored ${student.score}% on ${student.assignmentTitle}`);
     }
 
     // Condition 2: Heavy hint usage with below-developing score
@@ -113,51 +184,45 @@ function detectStrugglingStudents(students: StudentPerformanceData[]): Recommend
       student.score < config.DEVELOPING_THRESHOLD
     ) {
       triggered = true;
-      confidence = "high";
+      confidenceScore = Math.max(confidenceScore, 0.85);
+      priorityLevel = "high";
+      evidence.push(`Used hints on ${Math.round(student.hintUsageRate * 100)}% of questions`);
+      if (!evidence.some(e => e.includes("Scored"))) {
+        evidence.push(`Scored ${student.score}% on ${student.assignmentTitle}`);
+      }
     }
 
     // Condition 3: Support-seeking coach pattern with below-developing score
     if (student.coachIntent === "support-seeking" && student.score < 50) {
       triggered = true;
-      if (confidence !== "high") confidence = "medium";
+      confidenceScore = Math.max(confidenceScore, 0.8);
+      evidence.push("Coach conversations suggest seeking support");
     }
 
-    if (triggered) {
+    // Only surface if meets minimum confidence threshold
+    if (triggered && confidenceScore >= config.MIN_CONFIDENCE_SCORE) {
       // Check for duplicate
-      if (recommendationStore.exists("struggling-student", [student.studentId], student.assignmentId)) {
+      if (recommendationStore.exists("needs-support", [student.studentId], student.assignmentId)) {
         continue;
       }
 
-      // Build context strings
-      let hintContext = "";
-      if (student.hintUsageRate > config.HEAVY_HINT_USAGE) {
-        hintContext = ` with heavy hint usage (${Math.round(student.hintUsageRate * 100)}%)`;
-      }
-
-      let coachContext = "";
-      if (student.coachIntent === "support-seeking") {
-        coachContext = " and support-seeking coach interactions";
-      }
-
-      const now = new Date().toISOString();
-      const rec: Recommendation = {
-        id: randomUUID(),
-        type: "individual-checkin",
-        title: `Check in with ${student.studentName}`,
-        reason: `Scored ${student.score}% on ${student.assignmentTitle}${hintContext}${coachContext}`,
-        suggestedAction: "Review their responses and consider a brief conversation",
-        confidence,
-        priority: computePriority("individual-checkin", confidence, now, 1),
+      const rec = createInsight({
+        insightType: "check_in",
+        legacyType: "individual-checkin",
+        summary: `${student.studentName} may benefit from a check-in`,
+        evidence,
+        suggestedTeacherActions: [
+          "Review their responses to understand where they encountered difficulty",
+          "Consider a brief one-on-one conversation to gauge understanding",
+          "Identify if additional practice or different explanation approaches might help",
+        ],
+        priorityLevel,
+        confidenceScore,
         studentIds: [student.studentId],
         assignmentId: student.assignmentId,
-        triggerData: {
-          ruleName: "struggling-student",
-          signals,
-          generatedAt: now,
-        },
-        status: "active",
-        createdAt: now,
-      };
+        ruleName: "needs-support",
+        signals,
+      });
 
       recommendations.push(rec);
     }
@@ -167,10 +232,10 @@ function detectStrugglingStudents(students: StudentPerformanceData[]): Recommend
 }
 
 // ============================================
-// Rule 2: Small Group Intervention
+// Rule 2: Group Check-in (Multiple Students May Need Support)
 // ============================================
 
-function detectGroupStruggle(
+function detectGroupCheckIn(
   students: StudentPerformanceData[],
   aggregates: AssignmentAggregateData[]
 ): Recommendation[] {
@@ -178,53 +243,58 @@ function detectGroupStruggle(
   const config = RECOMMENDATION_CONFIG;
 
   for (const agg of aggregates) {
-    // Need at least MIN_GROUP_SIZE students struggling
+    // Need at least MIN_GROUP_SIZE students needing support
     if (agg.studentsNeedingSupport.length < config.MIN_GROUP_SIZE) continue;
 
-    // Get student names for the struggling students
-    const strugglingStudents = students.filter(
+    // Get student details for those needing support
+    const supportStudents = students.filter(
       (s) =>
         agg.studentsNeedingSupport.includes(s.studentId) && s.assignmentId === agg.assignmentId
     );
 
-    if (strugglingStudents.length < config.MIN_GROUP_SIZE) continue;
+    if (supportStudents.length < config.MIN_GROUP_SIZE) continue;
 
     // Check for duplicate
     if (
-      recommendationStore.exists("group-struggle", agg.studentsNeedingSupport, agg.assignmentId)
+      recommendationStore.exists("group-support", agg.studentsNeedingSupport, agg.assignmentId)
     ) {
       continue;
     }
 
-    const studentNames = strugglingStudents.map((s) => s.studentName).join(", ");
+    const studentNames = supportStudents.map((s) => s.studentName).join(", ");
     const avgScore = Math.round(
-      strugglingStudents.reduce((sum, s) => sum + s.score, 0) / strugglingStudents.length
+      supportStudents.reduce((sum, s) => sum + s.score, 0) / supportStudents.length
     );
 
-    const now = new Date().toISOString();
-    const rec: Recommendation = {
-      id: randomUUID(),
-      type: "small-group",
-      title: `${strugglingStudents.length} students need support on ${agg.assignmentTitle}`,
-      reason: `${studentNames} averaged ${avgScore}% on this assignment`,
-      suggestedAction: "Consider a small group review session on this topic",
-      confidence: "high",
-      priority: computePriority("small-group", "high", now, strugglingStudents.length),
+    // Higher confidence with more students
+    const confidenceScore: ConfidenceScore = supportStudents.length >= 3 ? 0.95 : 0.85;
+
+    const rec = createInsight({
+      insightType: "check_in",
+      legacyType: "small-group",
+      summary: `${supportStudents.length} students may benefit from group review on ${agg.assignmentTitle}`,
+      evidence: [
+        `${studentNames} show similar patterns`,
+        `Group averaged ${avgScore}% on this assignment`,
+        `From ${agg.className}`,
+      ],
+      suggestedTeacherActions: [
+        "Consider a small group review session focused on common areas of difficulty",
+        "Review responses to identify shared misconceptions",
+        "Prepare targeted practice activities for this group",
+      ],
+      priorityLevel: "high",
+      confidenceScore,
       studentIds: agg.studentsNeedingSupport,
       assignmentId: agg.assignmentId,
-      triggerData: {
-        ruleName: "group-struggle",
-        signals: {
-          studentCount: strugglingStudents.length,
-          studentNames,
-          averageScore: avgScore,
-          className: agg.className,
-        },
-        generatedAt: now,
+      ruleName: "group-support",
+      signals: {
+        studentCount: supportStudents.length,
+        studentNames,
+        averageScore: avgScore,
+        className: agg.className,
       },
-      status: "active",
-      createdAt: now,
-    };
+    });
 
     recommendations.push(rec);
   }
@@ -233,16 +303,18 @@ function detectGroupStruggle(
 }
 
 // ============================================
-// Rule 3: Enrichment Opportunity
+// Rule 3: Challenge Opportunity (Ready for Extension)
 // ============================================
 
-function detectEnrichmentOpportunities(students: StudentPerformanceData[]): Recommendation[] {
+function detectChallengeOpportunities(students: StudentPerformanceData[]): Recommendation[] {
   const recommendations: Recommendation[] = [];
   const config = RECOMMENDATION_CONFIG;
 
   for (const student of students) {
     let triggered = false;
-    let confidence: ConfidenceLevel = "medium";
+    let confidenceScore: ConfidenceScore = 0.8;
+    let priorityLevel: PriorityLevel = "medium";
+    const evidence: string[] = [];
 
     // Condition: High score with minimal hints
     if (
@@ -250,14 +322,19 @@ function detectEnrichmentOpportunities(students: StudentPerformanceData[]): Reco
       student.hintUsageRate < config.MINIMAL_HINT_USAGE
     ) {
       triggered = true;
+      evidence.push(`Scored ${student.score}% on ${student.assignmentTitle}`);
+      evidence.push(`Used hints on only ${Math.round(student.hintUsageRate * 100)}% of questions`);
 
       // Boost confidence if also enrichment-seeking
       if (student.coachIntent === "enrichment-seeking") {
-        confidence = "high";
+        confidenceScore = 0.9;
+        priorityLevel = "high";
+        evidence.push("Coach conversations show interest in deeper learning");
       }
     }
 
-    if (triggered) {
+    // Only surface if meets minimum confidence threshold
+    if (triggered && confidenceScore >= config.MIN_CONFIDENCE_SCORE) {
       // Check for duplicate
       if (
         recommendationStore.exists("ready-for-challenge", [student.studentId], student.assignmentId)
@@ -265,34 +342,28 @@ function detectEnrichmentOpportunities(students: StudentPerformanceData[]): Reco
         continue;
       }
 
-      let coachContext = "";
-      if (student.coachIntent === "enrichment-seeking") {
-        coachContext = " and is actively seeking deeper learning";
-      }
-
-      const now = new Date().toISOString();
-      const rec: Recommendation = {
-        id: randomUUID(),
-        type: "enrichment",
-        title: `Challenge opportunity for ${student.studentName}`,
-        reason: `Scored ${student.score}% with minimal help, showing mastery${coachContext}`,
-        suggestedAction: "Consider offering extension activities or peer tutoring role",
-        confidence,
-        priority: computePriority("enrichment", confidence, now, 1),
+      const rec = createInsight({
+        insightType: "challenge_opportunity",
+        legacyType: "enrichment",
+        summary: `${student.studentName} shows readiness for additional challenge`,
+        evidence,
+        suggestedTeacherActions: [
+          "Consider offering extension activities on this topic",
+          "Explore peer tutoring opportunities",
+          "Discuss advanced materials or independent projects",
+        ],
+        priorityLevel,
+        confidenceScore,
         studentIds: [student.studentId],
         assignmentId: student.assignmentId,
-        triggerData: {
-          ruleName: "ready-for-challenge",
-          signals: {
-            score: student.score,
-            hintUsageRate: student.hintUsageRate,
-            coachIntent: student.coachIntent,
-          },
-          generatedAt: now,
+        ruleName: "ready-for-challenge",
+        signals: {
+          studentName: student.studentName,
+          score: student.score,
+          hintUsageRate: student.hintUsageRate,
+          coachIntent: student.coachIntent,
         },
-        status: "active",
-        createdAt: now,
-      };
+      });
 
       recommendations.push(rec);
     }
@@ -302,10 +373,10 @@ function detectEnrichmentOpportunities(students: StudentPerformanceData[]): Reco
 }
 
 // ============================================
-// Rule 4: Notable Improvement (Celebrate)
+// Rule 4: Celebrate Progress (Notable Improvement)
 // ============================================
 
-function detectNotableImprovement(students: StudentPerformanceData[]): Recommendation[] {
+function detectCelebrateProgress(students: StudentPerformanceData[]): Recommendation[] {
   const recommendations: Recommendation[] = [];
   const config = RECOMMENDATION_CONFIG;
 
@@ -324,29 +395,33 @@ function detectNotableImprovement(students: StudentPerformanceData[]): Recommend
         continue;
       }
 
-      const now = new Date().toISOString();
-      const rec: Recommendation = {
-        id: randomUUID(),
-        type: "celebrate",
-        title: `Celebrate ${student.studentName}'s progress!`,
-        reason: `Improved from ${student.previousScore}% to ${student.score}% on ${student.assignmentTitle}`,
-        suggestedAction: "A quick recognition could reinforce their effort",
-        confidence: "medium",
-        priority: computePriority("celebrate", "medium", now, 1),
+      // Calculate confidence based on improvement magnitude
+      const confidenceScore: ConfidenceScore = improvement >= 30 ? 0.9 : 0.85;
+
+      const rec = createInsight({
+        insightType: "celebrate_progress",
+        legacyType: "celebrate",
+        summary: `${student.studentName} showed notable improvement`,
+        evidence: [
+          `Improved from ${student.previousScore}% to ${student.score}% (+${improvement} points)`,
+          `Assignment: ${student.assignmentTitle}`,
+        ],
+        suggestedTeacherActions: [
+          "Brief acknowledgment can reinforce their effort and growth",
+          "Consider sharing what strategies they used that worked well",
+        ],
+        priorityLevel: "medium",
+        confidenceScore,
         studentIds: [student.studentId],
         assignmentId: student.assignmentId,
-        triggerData: {
-          ruleName: "notable-improvement",
-          signals: {
-            previousScore: student.previousScore,
-            currentScore: student.score,
-            improvement,
-          },
-          generatedAt: now,
+        ruleName: "notable-improvement",
+        signals: {
+          studentName: student.studentName,
+          previousScore: student.previousScore,
+          currentScore: student.score,
+          improvement,
         },
-        status: "active",
-        createdAt: now,
-      };
+      });
 
       recommendations.push(rec);
     }
@@ -356,11 +431,12 @@ function detectNotableImprovement(students: StudentPerformanceData[]): Recommend
 }
 
 // ============================================
-// Rule 5: Assignment Difficulty Issue
+// Rule 5: Monitor (Assignment Worth Watching)
 // ============================================
 
-function detectAssignmentIssues(aggregates: AssignmentAggregateData[]): Recommendation[] {
+function detectMonitorSituations(aggregates: AssignmentAggregateData[]): Recommendation[] {
   const recommendations: Recommendation[] = [];
+  const config = RECOMMENDATION_CONFIG;
 
   for (const agg of aggregates) {
     // Conditions: low average + low completion + enough time has passed
@@ -370,25 +446,34 @@ function detectAssignmentIssues(aggregates: AssignmentAggregateData[]): Recommen
       agg.daysSinceAssigned > 5
     ) {
       // Check for duplicate
-      if (recommendationStore.exists("assignment-difficulty", [], agg.assignmentId)) {
+      if (recommendationStore.exists("watch-progress", [], agg.assignmentId)) {
         continue;
       }
 
       const completionRate = Math.round((agg.completedCount / agg.studentCount) * 100);
+      const confidenceScore: ConfidenceScore = 0.75;
 
-      const now = new Date().toISOString();
-      const rec: Recommendation = {
-        id: randomUUID(),
-        type: "assignment-adjustment",
-        title: `Review ${agg.assignmentTitle} difficulty`,
-        reason: `Class average is ${Math.round(agg.averageScore)}% with ${completionRate}% completion after ${agg.daysSinceAssigned} days`,
-        suggestedAction: "Consider adding scaffolding or breaking into smaller parts",
-        confidence: "medium",
-        priority: computePriority("assignment-adjustment", "medium", now, agg.studentCount),
-        studentIds: [], // Assignment-level, not student-specific
-        assignmentId: agg.assignmentId,
-        triggerData: {
-          ruleName: "assignment-difficulty",
+      // Only surface if meets minimum confidence threshold
+      if (confidenceScore >= config.MIN_CONFIDENCE_SCORE) {
+        const rec = createInsight({
+          insightType: "monitor",
+          legacyType: "assignment-adjustment",
+          summary: `${agg.assignmentTitle} progress worth monitoring`,
+          evidence: [
+            `Class average: ${Math.round(agg.averageScore)}%`,
+            `Completion rate: ${completionRate}% (${agg.completedCount}/${agg.studentCount})`,
+            `${agg.daysSinceAssigned} days since assigned`,
+          ],
+          suggestedTeacherActions: [
+            "Consider checking in with students who haven't started",
+            "Review if assignment scaffolding or instructions need adjustment",
+            "No immediate action needed - worth watching",
+          ],
+          priorityLevel: "low",
+          confidenceScore,
+          studentIds: [], // Assignment-level, not student-specific
+          assignmentId: agg.assignmentId,
+          ruleName: "watch-progress",
           signals: {
             averageScore: agg.averageScore,
             completionRate,
@@ -396,17 +481,68 @@ function detectAssignmentIssues(aggregates: AssignmentAggregateData[]): Recommen
             studentCount: agg.studentCount,
             completedCount: agg.completedCount,
           },
-          generatedAt: now,
-        },
-        status: "active",
-        createdAt: now,
-      };
+        });
 
-      recommendations.push(rec);
+        recommendations.push(rec);
+      }
     }
   }
 
   return recommendations;
+}
+
+// ============================================
+// One Insight Per Student Per Assignment
+// ============================================
+
+/**
+ * Apply the one-insight-per-student-per-assignment constraint.
+ * When multiple insights exist for the same student on the same assignment,
+ * keep only the highest priority one.
+ */
+function applyOneInsightConstraint(recommendations: Recommendation[]): Recommendation[] {
+  const config = RECOMMENDATION_CONFIG;
+  const priorityOrder = config.INSIGHT_PRIORITY_ORDER;
+
+  // Group by student+assignment
+  const byStudentAssignment = new Map<string, Recommendation[]>();
+
+  for (const rec of recommendations) {
+    for (const studentId of rec.studentIds) {
+      const key = `${studentId}:${rec.assignmentId || "no-assignment"}`;
+      if (!byStudentAssignment.has(key)) {
+        byStudentAssignment.set(key, []);
+      }
+      byStudentAssignment.get(key)!.push(rec);
+    }
+  }
+
+  // For each student+assignment, keep only the highest priority insight
+  const keptIds = new Set<string>();
+
+  for (const [, recs] of byStudentAssignment) {
+    if (recs.length === 1) {
+      keptIds.add(recs[0].id);
+    } else {
+      // Sort by insight type priority (higher index = higher priority)
+      recs.sort((a, b) => {
+        const aPriority = priorityOrder.indexOf(a.insightType as string);
+        const bPriority = priorityOrder.indexOf(b.insightType as string);
+        // If tied on type, use confidence score
+        if (aPriority === bPriority) {
+          return b.confidenceScore - a.confidenceScore;
+        }
+        return bPriority - aPriority;
+      });
+      // Keep the highest priority one
+      keptIds.add(recs[0].id);
+    }
+  }
+
+  // Return only kept recommendations (plus any assignment-level ones with no students)
+  return recommendations.filter(
+    rec => keptIds.has(rec.id) || rec.studentIds.length === 0
+  );
 }
 
 // ============================================
@@ -416,14 +552,20 @@ function detectAssignmentIssues(aggregates: AssignmentAggregateData[]): Recommen
 export interface GenerateRecommendationsResult {
   generated: Recommendation[];
   skippedDuplicates: number;
+  filteredByConstraint: number;
 }
 
 /**
- * Run all detection rules and generate recommendations
+ * Run all detection rules and generate insights
+ *
+ * Key principles:
+ * - Conservative approach: Only surface insights with strong evidence (confidence >= 0.7)
+ * - One insight per student per assignment (prioritize highest value)
+ * - Teacher-actionable, non-judgmental language
  *
  * @param students - Individual student performance data
  * @param aggregates - Assignment-level aggregate data
- * @returns Generated recommendations
+ * @returns Generated insights
  */
 export function generateRecommendations(
   students: StudentPerformanceData[],
@@ -432,19 +574,23 @@ export function generateRecommendations(
   const allRecommendations: Recommendation[] = [];
 
   // Run all detection rules
-  const struggling = detectStrugglingStudents(students);
-  const groups = detectGroupStruggle(students, aggregates);
-  const enrichment = detectEnrichmentOpportunities(students);
-  const improvements = detectNotableImprovement(students);
-  const assignmentIssues = detectAssignmentIssues(aggregates);
+  const checkIns = detectCheckInNeeds(students);
+  const groupCheckIns = detectGroupCheckIn(students, aggregates);
+  const challenges = detectChallengeOpportunities(students);
+  const celebrations = detectCelebrateProgress(students);
+  const monitors = detectMonitorSituations(aggregates);
 
-  allRecommendations.push(
-    ...struggling,
-    ...groups,
-    ...enrichment,
-    ...improvements,
-    ...assignmentIssues
-  );
+  const beforeConstraint = [
+    ...checkIns,
+    ...groupCheckIns,
+    ...challenges,
+    ...celebrations,
+    ...monitors,
+  ];
+
+  // Apply one-insight-per-student-per-assignment constraint
+  const afterConstraint = applyOneInsightConstraint(beforeConstraint);
+  allRecommendations.push(...afterConstraint);
 
   // Save all new recommendations
   if (allRecommendations.length > 0) {
@@ -454,6 +600,7 @@ export function generateRecommendations(
   return {
     generated: allRecommendations,
     skippedDuplicates: 0, // Duplicates are filtered within each rule
+    filteredByConstraint: beforeConstraint.length - afterConstraint.length,
   };
 }
 

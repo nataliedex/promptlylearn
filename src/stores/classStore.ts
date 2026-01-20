@@ -50,15 +50,19 @@ export class ClassStore {
     ensureDataDir();
 
     const now = new Date().toISOString();
+    const studentIds = input.studentIds || [];
     const classObj: Class = {
       id: generateClassId(input.name),
       name: input.name,
+      teacherId: input.teacherId,
+      students: studentIds,
+      studentIds: studentIds, // Legacy alias
       description: input.description,
       gradeLevel: input.gradeLevel,
       schoolYear: input.schoolYear,
       period: input.period,
       subject: input.subject,
-      studentIds: input.studentIds || [],
+      subjects: input.subjects || [],
       createdAt: now,
     };
 
@@ -77,7 +81,12 @@ export class ClassStore {
 
     try {
       const raw = fs.readFileSync(filePath, "utf-8");
-      return JSON.parse(raw);
+      const classObj = JSON.parse(raw);
+      // Backward compatibility: ensure subjects array exists
+      if (!classObj.subjects) {
+        classObj.subjects = [];
+      }
+      return classObj;
     } catch {
       return null;
     }
@@ -184,6 +193,7 @@ export class ClassStore {
       schoolYear: c.schoolYear,
       period: c.period,
       subject: c.subject,
+      subjects: c.subjects || [],
       studentCount: c.studentIds.length,
       createdAt: c.createdAt,
       archivedAt: c.archivedAt,
@@ -256,5 +266,154 @@ export class ClassStore {
    */
   findByStudent(studentId: string): Class[] {
     return this.getAll().filter((c) => c.studentIds.includes(studentId));
+  }
+
+  // ============================================
+  // Subject Participation Management
+  // ============================================
+
+  /**
+   * Update the subjects list for a class
+   */
+  updateSubjects(classId: string, subjects: string[]): Class | null {
+    const existing = this.load(classId);
+    if (!existing) {
+      return null;
+    }
+
+    existing.subjects = subjects;
+    existing.updatedAt = new Date().toISOString();
+
+    // Clean up exclusions for removed subjects
+    if (existing.subjectExclusions) {
+      const subjectSet = new Set(subjects);
+      for (const key of Object.keys(existing.subjectExclusions)) {
+        if (!subjectSet.has(key)) {
+          delete existing.subjectExclusions[key];
+        }
+      }
+    }
+
+    fs.writeFileSync(getFilePath(classId), JSON.stringify(existing, null, 2), "utf-8");
+    return existing;
+  }
+
+  /**
+   * Add a subject to a class
+   */
+  addSubject(classId: string, subject: string): Class | null {
+    const existing = this.load(classId);
+    if (!existing) {
+      return null;
+    }
+
+    // Don't add duplicates
+    if (!existing.subjects.includes(subject)) {
+      existing.subjects.push(subject);
+      existing.updatedAt = new Date().toISOString();
+      fs.writeFileSync(getFilePath(classId), JSON.stringify(existing, null, 2), "utf-8");
+    }
+
+    return existing;
+  }
+
+  /**
+   * Remove a subject from a class
+   */
+  removeSubject(classId: string, subject: string): Class | null {
+    const existing = this.load(classId);
+    if (!existing) {
+      return null;
+    }
+
+    existing.subjects = existing.subjects.filter((s) => s !== subject);
+
+    // Clean up exclusions for removed subject
+    if (existing.subjectExclusions && existing.subjectExclusions[subject]) {
+      delete existing.subjectExclusions[subject];
+    }
+
+    existing.updatedAt = new Date().toISOString();
+    fs.writeFileSync(getFilePath(classId), JSON.stringify(existing, null, 2), "utf-8");
+    return existing;
+  }
+
+  /**
+   * Set whether a student is excluded from a subject
+   * excluded = true means student does NOT participate
+   * excluded = false means student DOES participate (removes from exclusion list)
+   */
+  setStudentSubjectExclusion(
+    classId: string,
+    studentId: string,
+    subject: string,
+    excluded: boolean
+  ): Class | null {
+    const existing = this.load(classId);
+    if (!existing) {
+      return null;
+    }
+
+    // Ensure subject exists
+    if (!existing.subjects.includes(subject)) {
+      return null;
+    }
+
+    // Initialize subjectExclusions if needed
+    if (!existing.subjectExclusions) {
+      existing.subjectExclusions = {};
+    }
+
+    // Initialize exclusion array for subject if needed
+    if (!existing.subjectExclusions[subject]) {
+      existing.subjectExclusions[subject] = [];
+    }
+
+    const exclusionList = existing.subjectExclusions[subject];
+    const isCurrentlyExcluded = exclusionList.includes(studentId);
+
+    if (excluded && !isCurrentlyExcluded) {
+      // Add to exclusion list
+      exclusionList.push(studentId);
+    } else if (!excluded && isCurrentlyExcluded) {
+      // Remove from exclusion list
+      existing.subjectExclusions[subject] = exclusionList.filter((id) => id !== studentId);
+    }
+
+    // Clean up empty exclusion arrays
+    if (existing.subjectExclusions[subject].length === 0) {
+      delete existing.subjectExclusions[subject];
+    }
+
+    existing.updatedAt = new Date().toISOString();
+    fs.writeFileSync(getFilePath(classId), JSON.stringify(existing, null, 2), "utf-8");
+    return existing;
+  }
+
+  /**
+   * Get students who participate in a specific subject
+   * Returns studentIds filtered to exclude those in the subjectExclusions list
+   */
+  getStudentsForSubject(classId: string, subject: string): string[] {
+    const classObj = this.load(classId);
+    if (!classObj) {
+      return [];
+    }
+
+    const excludedIds = classObj.subjectExclusions?.[subject] || [];
+    return classObj.studentIds.filter((id) => !excludedIds.includes(id));
+  }
+
+  /**
+   * Check if a student participates in a subject
+   */
+  studentParticipatesInSubject(classId: string, studentId: string, subject: string): boolean {
+    const classObj = this.load(classId);
+    if (!classObj) {
+      return false;
+    }
+
+    const excludedIds = classObj.subjectExclusions?.[subject] || [];
+    return !excludedIds.includes(studentId);
   }
 }

@@ -49,6 +49,7 @@ export interface ComputedAssignmentState {
   // Stats
   totalStudents: number;
   completedCount: number;
+  inProgressCount: number;
   distribution: {
     strong: number;
     developing: number;
@@ -149,6 +150,7 @@ export function computeAssignmentState(
   // Build student statuses
   const studentStatuses: StudentStatus[] = [];
   let completedCount = 0;
+  let inProgressCount = 0;
   let strong = 0;
   let developing = 0;
   let needsSupport = 0;
@@ -207,7 +209,11 @@ export function computeAssignmentState(
       improvedAfterHelp,
     });
 
-    if (isComplete) completedCount++;
+    if (isComplete) {
+      completedCount++;
+    } else {
+      inProgressCount++;
+    }
     if (understanding === "strong") strong++;
     else if (understanding === "developing") developing++;
     else needsSupport++;
@@ -295,6 +301,7 @@ export function computeAssignmentState(
     activeReasons,
     totalStudents,
     completedCount,
+    inProgressCount,
     distribution: { strong, developing, needsSupport },
     studentStatuses,
     studentsNeedingSupport,

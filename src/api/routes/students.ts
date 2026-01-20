@@ -55,6 +55,8 @@ router.post("/", (req, res) => {
     const newStudent: Student = {
       id: randomUUID(),
       name: trimmedName,
+      classes: [],
+      assignments: [],
       createdAt: new Date(),
     };
 
@@ -100,10 +102,14 @@ router.get("/:id/lessons", (req, res) => {
     const activeAssignments = studentAssignmentStore.getActiveStudentAssignments(id);
     const assignedLessonIds = [...new Set(activeAssignments.map(a => a.lessonId))];
 
-    // Build a map of attempts per lesson
+    // Build maps of attempts and assignedAt per lesson
     const attemptsMap: Record<string, number> = {};
+    const assignedAtMap: Record<string, string> = {};
     activeAssignments.forEach(a => {
       attemptsMap[a.lessonId] = a.attempts || 1;
+      if (a.assignedAt) {
+        assignedAtMap[a.lessonId] = String(a.assignedAt);
+      }
     });
 
     // Get full lesson data and filter to assigned ones
@@ -118,7 +124,9 @@ router.get("/:id/lessons", (req, res) => {
         gradeLevel: lesson.gradeLevel,
         promptCount: lesson.prompts.length,
         standards: lesson.standards,
+        subject: lesson.subject,
         attempts: attemptsMap[lesson.id] || 1,
+        assignedAt: assignedAtMap[lesson.id],
       }));
 
     res.json({

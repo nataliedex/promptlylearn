@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { loadLesson, getAllLessons } from "../../loaders/lessonLoader";
 import { generateLesson, generateSingleQuestion, type LessonParams } from "../../domain/lessonGenerator";
-import { saveLesson, archiveLesson, unarchiveLesson, getArchivedLessons } from "../../stores/lessonStore";
+import { saveLesson, archiveLesson, unarchiveLesson, getArchivedLessons, updateLessonSubject } from "../../stores/lessonStore";
 import { StudentAssignmentStore } from "../../stores/studentAssignmentStore";
 import { ClassStore } from "../../stores/classStore";
 
@@ -22,11 +22,38 @@ router.get("/", (req, res) => {
       gradeLevel: lesson.gradeLevel,
       promptCount: lesson.prompts.length,
       standards: lesson.standards,
+      subject: lesson.subject,
     }));
     res.json(lessonList);
   } catch (error) {
     console.error("Error fetching lessons:", error);
     res.status(500).json({ error: "Failed to fetch lessons" });
+  }
+});
+
+// GET /api/lessons/unassigned - List lessons with no assignments
+router.get("/unassigned", (req, res) => {
+  try {
+    const lessons = getAllLessons();
+    // Filter to only lessons that have no student assignments
+    const unassignedLessons = lessons.filter(lesson =>
+      !studentAssignmentStore.hasAssignments(lesson.id)
+    );
+    // Return lesson metadata without full prompts for listing
+    const lessonList = unassignedLessons.map(lesson => ({
+      id: lesson.id,
+      title: lesson.title,
+      description: lesson.description,
+      difficulty: lesson.difficulty,
+      gradeLevel: lesson.gradeLevel,
+      promptCount: lesson.prompts.length,
+      standards: lesson.standards,
+      subject: lesson.subject,
+    }));
+    res.json(lessonList);
+  } catch (error) {
+    console.error("Error fetching unassigned lessons:", error);
+    res.status(500).json({ error: "Failed to fetch unassigned lessons" });
   }
 });
 
@@ -135,6 +162,7 @@ router.get("/archived/list", (req, res) => {
       gradeLevel: lesson.gradeLevel,
       promptCount: lesson.prompts.length,
       standards: lesson.standards,
+      subject: lesson.subject,
       archivedAt: (lesson as any).archivedAt,
     }));
     res.json(lessonList);
@@ -175,6 +203,37 @@ router.post("/:id/unarchive", (req, res) => {
   } catch (error) {
     console.error("Error unarchiving lesson:", error);
     res.status(500).json({ error: "Failed to restore lesson" });
+  }
+});
+
+// PATCH /api/lessons/:id/subject - Update lesson subject
+router.patch("/:id/subject", (req, res) => {
+  try {
+    const { id } = req.params;
+    const { subject } = req.body;
+
+    // subject can be a string or null to clear
+    if (subject !== null && subject !== undefined && typeof subject !== "string") {
+      return res.status(400).json({ error: "subject must be a string or null" });
+    }
+
+    const lesson = updateLessonSubject(id, subject ?? null);
+
+    if (!lesson) {
+      return res.status(404).json({ error: "Lesson not found" });
+    }
+
+    res.json({
+      success: true,
+      lesson: {
+        id: lesson.id,
+        title: lesson.title,
+        subject: lesson.subject,
+      },
+    });
+  } catch (error) {
+    console.error("Error updating lesson subject:", error);
+    res.status(500).json({ error: "Failed to update lesson subject" });
   }
 });
 

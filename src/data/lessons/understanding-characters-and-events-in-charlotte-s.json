@@ -1,0 +1,51 @@
+{
+  "id": "understanding-characters-and-events-in-charlotte-s",
+  "title": "Understanding Characters and Events in Charlotte's Web",
+  "description": "In this lesson, students will explore the motivations and feelings of characters in 'Charlotte's Web,' discuss important events and their consequences, and make predictions about the story.",
+  "difficulty": "beginner",
+  "gradeLevel": "2nd grade",
+  "standards": [
+    "RL.2.1",
+    "RL.2.3",
+    "RL.2.2"
+  ],
+  "prompts": [
+    {
+      "id": "q1",
+      "type": "explain",
+      "input": "Why do you think Charlotte wants to help Wilbur? Explain your reasoning.",
+      "hints": [
+        "Think about how Charlotte feels about Wilbur as a friend.",
+        "Consider what might happen to Wilbur if Charlotte doesn't help."
+      ],
+      "standards": [
+        "RL.2.3"
+      ]
+    },
+    {
+      "id": "q2",
+      "type": "explain",
+      "input": "How do you think Fern feels when she learns that Wilbur is going to be sold? Why do you think she feels that way?",
+      "hints": [
+        "Consider what Fern's relationship with Wilbur is like.",
+        "Think about how she might react to losing someone she cares about."
+      ],
+      "standards": [
+        "RL.2.1"
+      ]
+    },
+    {
+      "id": "q3",
+      "type": "explain",
+      "input": "What do you think might happen if Charlotte's plan to save Wilbur doesn't work? How did you come to that conclusion?",
+      "hints": [
+        "Think about the challenges Wilbur faces throughout the story.",
+        "Consider what other characters might do if Charlotte's plan fails."
+      ],
+      "standards": [
+        "RL.2.2"
+      ]
+    }
+  ],
+  "subject": "Language Arts"
+}

@@ -85,14 +85,19 @@ router.get("/:id", (req, res) => {
  */
 router.post("/", (req, res) => {
   try {
-    const { name, description, gradeLevel, schoolYear, period, subject } = req.body;
+    const { name, teacherId, description, gradeLevel, schoolYear, period, subject } = req.body;
 
     if (!name || typeof name !== "string" || name.trim().length === 0) {
       return res.status(400).json({ error: "Class name is required" });
     }
 
+    if (!teacherId || typeof teacherId !== "string") {
+      return res.status(400).json({ error: "teacherId is required" });
+    }
+
     const classObj = classStore.create({
       name: name.trim(),
+      teacherId,
       description,
       gradeLevel,
       schoolYear,
@@ -260,6 +265,8 @@ router.post("/:id/students/bulk", (req, res) => {
         student = {
           id: randomUUID(),
           name,
+          classes: [],
+          assignments: [],
           createdAt: new Date(),
         };
         studentStore.save(student);
@@ -304,6 +311,165 @@ router.delete("/:id/students/:studentId", (req, res) => {
   } catch (error) {
     console.error("Error removing student from class:", error);
     res.status(500).json({ error: "Failed to remove student from class" });
+  }
+});
+
+// ============================================
+// Subject Management
+// ============================================
+
+/**
+ * PUT /api/classes/:id/subjects
+ * Update the subjects list for a class
+ */
+router.put("/:id/subjects", (req, res) => {
+  try {
+    const { subjects } = req.body;
+
+    if (!Array.isArray(subjects)) {
+      return res.status(400).json({ error: "subjects array is required" });
+    }
+
+    // Validate subjects are non-empty strings
+    const cleanedSubjects = subjects
+      .filter((s): s is string => typeof s === "string" && s.trim().length > 0)
+      .map((s) => s.trim());
+
+    const updated = classStore.updateSubjects(req.params.id, cleanedSubjects);
+
+    if (!updated) {
+      return res.status(404).json({ error: "Class not found" });
+    }
+
+    res.json(updated);
+  } catch (error) {
+    console.error("Error updating subjects:", error);
+    res.status(500).json({ error: "Failed to update subjects" });
+  }
+});
+
+/**
+ * POST /api/classes/:id/subjects
+ * Add a subject to a class
+ */
+router.post("/:id/subjects", (req, res) => {
+  try {
+    const { subject } = req.body;
+
+    if (!subject || typeof subject !== "string" || subject.trim().length === 0) {
+      return res.status(400).json({ error: "subject name is required" });
+    }
+
+    const updated = classStore.addSubject(req.params.id, subject.trim());
+
+    if (!updated) {
+      return res.status(404).json({ error: "Class not found" });
+    }
+
+    res.json(updated);
+  } catch (error) {
+    console.error("Error adding subject:", error);
+    res.status(500).json({ error: "Failed to add subject" });
+  }
+});
+
+/**
+ * DELETE /api/classes/:id/subjects/:subject
+ * Remove a subject from a class
+ */
+router.delete("/:id/subjects/:subject", (req, res) => {
+  try {
+    const subject = decodeURIComponent(req.params.subject);
+    const updated = classStore.removeSubject(req.params.id, subject);
+
+    if (!updated) {
+      return res.status(404).json({ error: "Class not found" });
+    }
+
+    res.json(updated);
+  } catch (error) {
+    console.error("Error removing subject:", error);
+    res.status(500).json({ error: "Failed to remove subject" });
+  }
+});
+
+// ============================================
+// Subject Participation
+// ============================================
+
+/**
+ * PUT /api/classes/:id/subjects/:subject/participation
+ * Set a student's participation in a subject
+ * Body: { studentId: string, excluded: boolean }
+ */
+router.put("/:id/subjects/:subject/participation", (req, res) => {
+  try {
+    const subject = decodeURIComponent(req.params.subject);
+    const { studentId, excluded } = req.body;
+
+    if (!studentId || typeof studentId !== "string") {
+      return res.status(400).json({ error: "studentId is required" });
+    }
+
+    if (typeof excluded !== "boolean") {
+      return res.status(400).json({ error: "excluded must be a boolean" });
+    }
+
+    const updated = classStore.setStudentSubjectExclusion(
+      req.params.id,
+      studentId,
+      subject,
+      excluded
+    );
+
+    if (!updated) {
+      return res.status(404).json({ error: "Class or subject not found" });
+    }
+
+    res.json(updated);
+  } catch (error) {
+    console.error("Error updating participation:", error);
+    res.status(500).json({ error: "Failed to update participation" });
+  }
+});
+
+/**
+ * GET /api/classes/:id/subjects/:subject/students
+ * Get students who participate in a specific subject
+ */
+router.get("/:id/subjects/:subject/students", (req, res) => {
+  try {
+    const subject = decodeURIComponent(req.params.subject);
+    const classObj = classStore.load(req.params.id);
+
+    if (!classObj) {
+      return res.status(404).json({ error: "Class not found" });
+    }
+
+    if (!classObj.subjects.includes(subject)) {
+      return res.status(404).json({ error: "Subject not found in class" });
+    }
+
+    const participatingIds = classStore.getStudentsForSubject(req.params.id, subject);
+
+    // Load full student details
+    const students: Student[] = [];
+    for (const studentId of participatingIds) {
+      const student = studentStore.load(studentId);
+      if (student) {
+        students.push(student);
+      }
+    }
+
+    res.json({
+      subject,
+      totalStudents: classObj.studentIds.length,
+      participatingCount: students.length,
+      students,
+    });
+  } catch (error) {
+    console.error("Error fetching subject students:", error);
+    res.status(500).json({ error: "Failed to fetch subject students" });
   }
 });
 

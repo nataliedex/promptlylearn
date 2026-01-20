@@ -39,6 +39,8 @@ export async function askForStudent(rl: readline.Interface): Promise<Student> {
         const newStudent: Student = {
           id: generateId(),
           name: trimmedName,
+          classes: [],
+          assignments: [],
           createdAt: new Date()
         };
         studentStore.save(newStudent);

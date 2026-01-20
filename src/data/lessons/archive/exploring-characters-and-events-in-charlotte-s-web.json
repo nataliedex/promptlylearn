@@ -1,0 +1,53 @@
+{
+  "id": "exploring-characters-and-events-in-charlotte-s-web",
+  "title": "Exploring Characters and Events in 'Charlotte's Web'",
+  "description": "In this lesson, students will dive into the story of 'Charlotte's Web' by exploring the feelings and motivations of characters, important events, and the themes of friendship and loyalty.",
+  "difficulty": "beginner",
+  "gradeLevel": "2nd grade",
+  "standards": [
+    "RL.2.1",
+    "RL.2.2",
+    "RL.2.3"
+  ],
+  "prompts": [
+    {
+      "id": "q1",
+      "type": "explain",
+      "input": "How do you think Wilbur feels when he first meets Charlotte? Why do you think he feels that way?",
+      "hints": [
+        "Think about what Wilbur is going through at that moment.",
+        "Consider how Charlotte's character might make him feel."
+      ],
+      "standards": [
+        "RL.2.3"
+      ]
+    },
+    {
+      "id": "q2",
+      "type": "explain",
+      "input": "What do you think is the most important event in the story? How does that event change the characters or the story?",
+      "hints": [
+        "Look for events that made a big difference to Wilbur or Charlotte.",
+        "Try to think about how the characters reacted to that event."
+      ],
+      "standards": [
+        "RL.2.2",
+        "RL.2.3"
+      ]
+    },
+    {
+      "id": "q3",
+      "type": "explain",
+      "input": "Why do you think friendship is an important theme in 'Charlotte's Web'? How do the characters show friendship to each other?",
+      "hints": [
+        "Reflect on the actions that Charlotte and Wilbur take for each other.",
+        "Think about how their friendship helps them through tough times."
+      ],
+      "standards": [
+        "RL.2.2",
+        "RL.2.3"
+      ]
+    }
+  ],
+  "archivedAt": "2026-01-20T17:03:34.929Z"
+}

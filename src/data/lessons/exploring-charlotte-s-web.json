@@ -1,0 +1,37 @@
+{
+  "id": "exploring-charlotte-s-web",
+  "title": "Exploring Charlotte's Web",
+  "description": "In this lesson, students will dive into the story of 'Charlotte's Web' to understand the key details and characters. They will practice asking and answering questions to show their comprehension of the text.",
+  "difficulty": "intermediate",
+  "gradeLevel": "2nd grade",
+  "standards": [
+    "RL.2.1"
+  ],
+  "prompts": [
+    {
+      "id": "q1",
+      "type": "explain",
+      "input": "Who is your favorite character in 'Charlotte's Web' and why do you like them?",
+      "hints": [
+        "Think about what this character does in the story.",
+        "Consider how this character makes you feel and why."
+      ],
+      "standards": [
+        "RL.2.1"
+      ]
+    },
+    {
+      "id": "q2",
+      "type": "explain",
+      "input": "What was a major challenge that Wilbur faced in the story, and how did he respond to it?",
+      "hints": [
+        "Look for parts in the story where Wilbur feels scared or worried.",
+        "Think about how his friends helped him or what he did to solve the problem."
+      ],
+      "standards": [
+        "RL.2.1"
+      ]
+    }
+  ],
+  "subject": "Language Arts"
+}

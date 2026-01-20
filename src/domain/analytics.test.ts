@@ -300,8 +300,8 @@ describe("analytics", () => {
   describe("getClassAnalytics", () => {
     it("returns complete class analytics", () => {
       const students: Student[] = [
-        { id: "s1", name: "Alice", createdAt: new Date() },
-        { id: "s2", name: "Bob", createdAt: new Date() },
+        { id: "s1", name: "Alice", classes: [], assignments: [], createdAt: new Date() },
+        { id: "s2", name: "Bob", classes: [], assignments: [], createdAt: new Date() },
       ];
 
       const sessions = [

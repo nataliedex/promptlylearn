@@ -19,9 +19,11 @@ import {
   getAssignmentDashboard,
   triggerAutoArchive,
   archiveAssignment,
+  archiveLesson,
   getClasses,
   getClass,
   getLessonAssignments,
+  getLessons,
   getStudents,
   getStudentCoachingInsights,
   getAssignedStudents,
@@ -31,6 +33,8 @@ import {
   markRecommendationReviewed,
   dismissRecommendation,
   submitRecommendationFeedback,
+  getUnassignedLessons,
+  updateLessonSubject,
   type ComputedAssignmentState,
   type AssignmentDashboardData,
   type ClassSummary,
@@ -39,6 +43,7 @@ import {
   type CoachingInsight,
   type Recommendation,
   type FeedbackType,
+  type LessonSummary,
 } from "../services/api";
 import RecommendationPanel from "../components/RecommendationPanel";
 import { useToast } from "../components/Toast";
@@ -67,6 +72,8 @@ export default function EducatorDashboard() {
   const [coachingActivity, setCoachingActivity] = useState<StudentCoachingActivity[]>([]);
   const [recommendations, setRecommendations] = useState<Recommendation[]>([]);
   const [recommendationsLoading, setRecommendationsLoading] = useState(false);
+  const [unassignedLessons, setUnassignedLessons] = useState<LessonSummary[]>([]);
+  const [lessonSubjects, setLessonSubjects] = useState<Map<string, string | undefined>>(new Map());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -87,15 +94,25 @@ export default function EducatorDashboard() {
         console.log("Auto-archive check skipped");
       });
 
-      const [dashData, classesData, studentsData] = await Promise.all([
+      const [dashData, classesData, studentsData, unassignedData, allLessonsData] = await Promise.all([
         getAssignmentDashboard(),
         getClasses(),
         getStudents(),
+        getUnassignedLessons(),
+        getLessons(),
       ]);
 
       setDashboardData(dashData);
       setClasses(classesData);
       setAllStudents(studentsData);
+      setUnassignedLessons(unassignedData);
+
+      // Build lesson subjects map
+      const subjectsMap = new Map<string, string | undefined>();
+      allLessonsData.forEach(lesson => {
+        subjectsMap.set(lesson.id, lesson.subject);
+      });
+      setLessonSubjects(subjectsMap);
 
       // Load class associations for each assignment
       const allAssignments = [...dashData.active, ...dashData.resolved];
@@ -183,6 +200,20 @@ export default function EducatorDashboard() {
     }
   };
 
+  const handleArchiveUnassignedLesson = async (lessonId: string, title: string) => {
+    if (!confirm(`Archive "${title}"? You can restore it later from the archived lessons.`)) {
+      return;
+    }
+
+    try {
+      await archiveLesson(lessonId);
+      await loadData();
+    } catch (err) {
+      console.error("Failed to archive lesson:", err);
+      showError("Failed to archive lesson. Please try again.");
+    }
+  };
+
   // Recommendation handlers
   const handleReviewRecommendation = async (id: string) => {
     try {
@@ -225,6 +256,20 @@ export default function EducatorDashboard() {
       console.error("Failed to refresh recommendations:", err);
     } finally {
       setRecommendationsLoading(false);
+    }
+  };
+
+  const handleAssignmentSubjectChange = async (lessonId: string, subject: string | null) => {
+    try {
+      await updateLessonSubject(lessonId, subject);
+      setLessonSubjects(prev => {
+        const next = new Map(prev);
+        next.set(lessonId, subject || undefined);
+        return next;
+      });
+    } catch (err) {
+      console.error("Failed to update lesson subject:", err);
+      showError("Failed to update subject. Please try again.");
     }
   };
 
@@ -347,6 +392,7 @@ export default function EducatorDashboard() {
       {/* What Should I Do Next? - Recommendations */}
       <RecommendationPanel
         recommendations={recommendations}
+        students={allStudents}
         onReview={handleReviewRecommendation}
         onDismiss={handleDismissRecommendation}
         onFeedback={handleRecommendationFeedback}
@@ -390,6 +436,27 @@ export default function EducatorDashboard() {
         />
       )}
 
+      {/* Unassigned Lessons */}
+      {unassignedLessons.length > 0 && (
+        <UnassignedLessonsSection
+          lessons={unassignedLessons}
+          availableSubjects={[...new Set(classes.flatMap(c => c.subjects || []))]}
+          onAssign={(lessonId) => navigate(`/educator/assign-lesson?lessonId=${lessonId}`)}
+          onArchive={handleArchiveUnassignedLesson}
+          onSubjectChange={async (lessonId, subject) => {
+            try {
+              await updateLessonSubject(lessonId, subject);
+              setUnassignedLessons(prev =>
+                prev.map(l => l.id === lessonId ? { ...l, subject: subject || undefined } : l)
+              );
+            } catch (err) {
+              console.error("Failed to update lesson subject:", err);
+              showError("Failed to update subject. Please try again.");
+            }
+          }}
+        />
+      )}
+
       {/* Active Assignments by Class */}
       {activeByClass.length > 0 && (
         <>
@@ -429,6 +496,8 @@ export default function EducatorDashboard() {
                   <AssignmentCard
                     key={`${group.classId}-${assignment.assignmentId}`}
                     assignment={assignment}
+                    subject={lessonSubjects.get(assignment.assignmentId)}
+                    availableSubjects={[...new Set(classes.flatMap(c => c.subjects || []))]}
                     onNavigate={() => navigate(`/educator/assignment/${assignment.assignmentId}`)}
                     onArchive={() => handleArchiveAssignment(assignment.assignmentId, assignment.title)}
                     onAddStudent={() => setAddStudentModal({
@@ -436,6 +505,7 @@ export default function EducatorDashboard() {
                       assignmentId: assignment.assignmentId,
                       assignmentTitle: assignment.title,
                     })}
+                    onSubjectChange={(subject) => handleAssignmentSubjectChange(assignment.assignmentId, subject)}
                   />
                 ))}
               </div>
@@ -671,13 +741,36 @@ function NeedsAttentionSection({ students, onNavigate }: NeedsAttentionSectionPr
 
 interface AssignmentCardProps {
   assignment: ComputedAssignmentState;
+  subject?: string;
+  availableSubjects: string[];
   onNavigate: () => void;
   onArchive: () => void;
   onAddStudent: () => void;
+  onSubjectChange: (subject: string | null) => Promise<void>;
 }
 
-function AssignmentCard({ assignment, onNavigate, onArchive, onAddStudent }: AssignmentCardProps) {
-  const { title, totalStudents, completedCount, distribution, studentsNeedingSupport, studentStatuses } = assignment;
+function AssignmentCard({ assignment, subject, availableSubjects, onNavigate, onArchive, onAddStudent, onSubjectChange }: AssignmentCardProps) {
+  const { title, totalStudents, completedCount, inProgressCount, distribution, studentsNeedingSupport, studentStatuses, assignmentId } = assignment;
+  const [editingSubject, setEditingSubject] = useState(false);
+  const [subjectValue, setSubjectValue] = useState(subject || "");
+  const [originalValue, setOriginalValue] = useState(subject || "");
+
+  const handleStartEditSubject = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setEditingSubject(true);
+    setSubjectValue(subject || "");
+    setOriginalValue(subject || "");
+  };
+
+  const handleSaveSubject = async () => {
+    const newValue = subjectValue.trim() || null;
+    const oldValue = originalValue.trim() || null;
+
+    if (newValue !== oldValue) {
+      await onSubjectChange(newValue);
+    }
+    setEditingSubject(false);
+  };
 
   const hasActivity = completedCount > 0;
 
@@ -708,7 +801,68 @@ function AssignmentCard({ assignment, onNavigate, onArchive, onAddStudent }: Ass
     >
       {/* Header: Title and Action Buttons */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-        <h3 style={{ margin: 0, color: "#667eea", flex: 1 }}>{title}</h3>
+        <div style={{ flex: 1 }}>
+          <h3 style={{ margin: 0, color: "#667eea" }}>{title}</h3>
+          {/* Subject Badge */}
+          <div style={{ marginTop: "4px" }} onClick={(e) => e.stopPropagation()}>
+            {editingSubject ? (
+              <input
+                type="text"
+                list={`subjects-${assignmentId}`}
+                value={subjectValue}
+                onChange={(e) => setSubjectValue(e.target.value)}
+                placeholder="Enter subject..."
+                style={{
+                  padding: "2px 6px",
+                  border: "1px solid #667eea",
+                  borderRadius: "4px",
+                  fontSize: "0.8rem",
+                  width: "120px",
+                }}
+                autoFocus
+                onBlur={handleSaveSubject}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.currentTarget.blur();
+                  } else if (e.key === "Escape") {
+                    setSubjectValue(originalValue);
+                    setEditingSubject(false);
+                  }
+                }}
+              />
+            ) : (
+              <button
+                onClick={handleStartEditSubject}
+                style={{
+                  padding: "2px 8px",
+                  background: subject ? "#f0f0ff" : "transparent",
+                  color: subject ? "#667eea" : "#999",
+                  border: "1px dashed #c5cae9",
+                  borderRadius: "4px",
+                  cursor: "pointer",
+                  fontSize: "0.75rem",
+                  transition: "all 0.2s",
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.borderColor = "#667eea";
+                  e.currentTarget.style.background = "#f0f0ff";
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.borderColor = "#c5cae9";
+                  e.currentTarget.style.background = subject ? "#f0f0ff" : "transparent";
+                }}
+                title={subject ? "Click to change subject" : "Click to assign a subject"}
+              >
+                {subject || "+ Subject"}
+              </button>
+            )}
+            <datalist id={`subjects-${assignmentId}`}>
+              {availableSubjects.map((s) => (
+                <option key={s} value={s} />
+              ))}
+            </datalist>
+          </div>
+        </div>
         <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
           <button
             onClick={(e) => {
@@ -771,6 +925,11 @@ function AssignmentCard({ assignment, onNavigate, onArchive, onAddStudent }: Ass
       {/* Completion Status */}
       <p style={{ margin: 0, marginTop: "12px", color: "#666" }}>
         <span style={{ fontWeight: 600 }}>{completedCount}</span>/{totalStudents} completed
+        {inProgressCount > 0 && (
+          <span style={{ marginLeft: "12px" }}>
+            <span style={{ fontWeight: 600 }}>{inProgressCount}</span>/{totalStudents} in progress
+          </span>
+        )}
       </p>
 
       {/* Understanding Distribution Table (only if there's activity) */}
@@ -1279,6 +1438,214 @@ function AddStudentModal({
             {saving ? "Adding..." : `Add ${selectedStudents.size} Student${selectedStudents.size !== 1 ? "s" : ""}`}
           </button>
         </div>
+      </div>
+    </div>
+  );
+}
+
+// ============================================
+// Unassigned Lessons Section
+// ============================================
+
+interface UnassignedLessonsSectionProps {
+  lessons: LessonSummary[];
+  availableSubjects: string[];
+  onAssign: (lessonId: string) => void;
+  onArchive: (lessonId: string, title: string) => void;
+  onSubjectChange: (lessonId: string, subject: string | null) => Promise<void>;
+}
+
+function UnassignedLessonsSection({ lessons, availableSubjects, onAssign, onArchive, onSubjectChange }: UnassignedLessonsSectionProps) {
+  const [editingSubject, setEditingSubject] = useState<string | null>(null);
+  const [subjectValue, setSubjectValue] = useState("");
+  const [originalValue, setOriginalValue] = useState("");
+
+  const handleStartEditSubject = (lessonId: string, currentSubject?: string) => {
+    setEditingSubject(lessonId);
+    setSubjectValue(currentSubject || "");
+    setOriginalValue(currentSubject || "");
+  };
+
+  const handleSaveSubject = async (lessonId: string) => {
+    const newValue = subjectValue.trim() || null;
+    const oldValue = originalValue.trim() || null;
+
+    // Only save if value actually changed
+    if (newValue !== oldValue) {
+      await onSubjectChange(lessonId, newValue);
+    }
+    setEditingSubject(null);
+    setSubjectValue("");
+    setOriginalValue("");
+  };
+
+  return (
+    <div
+      className="card"
+      style={{
+        marginTop: "16px",
+        background: "#e3f2fd",
+        borderLeft: "4px solid #2196f3",
+      }}
+    >
+      <div style={{ marginBottom: "16px" }}>
+        <h3 style={{ margin: 0, color: "#1565c0" }}>
+          Unassigned Lessons ({lessons.length})
+        </h3>
+        <p style={{ margin: 0, color: "#666", marginTop: "4px" }}>
+          Lessons created but not yet assigned to any class
+        </p>
+      </div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+        {lessons.map((lesson) => (
+          <div
+            key={lesson.id}
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              padding: "12px 16px",
+              background: "white",
+              borderRadius: "8px",
+              flexWrap: "wrap",
+              gap: "8px",
+            }}
+          >
+            <div style={{ flex: 1, minWidth: "200px" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "12px", flexWrap: "wrap" }}>
+                <span style={{ fontWeight: 600, color: "#333" }}>{lesson.title}</span>
+                <span
+                  style={{
+                    fontSize: "0.75rem",
+                    padding: "2px 8px",
+                    borderRadius: "4px",
+                    background: lesson.difficulty === "beginner" ? "#e8f5e9" :
+                               lesson.difficulty === "intermediate" ? "#fff3e0" : "#ffebee",
+                    color: lesson.difficulty === "beginner" ? "#2e7d32" :
+                           lesson.difficulty === "intermediate" ? "#ed6c02" : "#d32f2f",
+                  }}
+                >
+                  {lesson.difficulty}
+                </span>
+              </div>
+              <p style={{ margin: 0, marginTop: "4px", color: "#666", fontSize: "0.85rem" }}>
+                {lesson.promptCount} question{lesson.promptCount !== 1 ? "s" : ""}
+                {lesson.gradeLevel && ` • ${lesson.gradeLevel}`}
+              </p>
+            </div>
+
+            {/* Subject Assignment */}
+            <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+              {editingSubject === lesson.id ? (
+                <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+                  <input
+                    type="text"
+                    list={`subjects-${lesson.id}`}
+                    value={subjectValue}
+                    onChange={(e) => setSubjectValue(e.target.value)}
+                    placeholder="Enter subject..."
+                    style={{
+                      padding: "4px 8px",
+                      border: "1px solid #2196f3",
+                      borderRadius: "4px",
+                      fontSize: "0.85rem",
+                      width: "140px",
+                    }}
+                    autoFocus
+                    onBlur={() => handleSaveSubject(lesson.id)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.currentTarget.blur();
+                      } else if (e.key === "Escape") {
+                        setSubjectValue(originalValue);
+                        setEditingSubject(null);
+                      }
+                    }}
+                  />
+                  <datalist id={`subjects-${lesson.id}`}>
+                    {availableSubjects.map((s) => (
+                      <option key={s} value={s} />
+                    ))}
+                  </datalist>
+                </div>
+              ) : (
+                <button
+                  onClick={() => handleStartEditSubject(lesson.id, lesson.subject)}
+                  style={{
+                    padding: "4px 10px",
+                    background: lesson.subject ? "#e3f2fd" : "transparent",
+                    color: lesson.subject ? "#1565c0" : "#999",
+                    border: "1px dashed #90caf9",
+                    borderRadius: "4px",
+                    cursor: "pointer",
+                    fontSize: "0.8rem",
+                    transition: "all 0.2s",
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.borderColor = "#2196f3";
+                    e.currentTarget.style.background = "#e3f2fd";
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.borderColor = "#90caf9";
+                    e.currentTarget.style.background = lesson.subject ? "#e3f2fd" : "transparent";
+                  }}
+                  title={lesson.subject ? "Click to change subject" : "Click to assign a subject"}
+                >
+                  {lesson.subject || "+ Subject"}
+                </button>
+              )}
+            </div>
+
+            <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+              <button
+                onClick={() => onAssign(lesson.id)}
+                style={{
+                  padding: "6px 12px",
+                  background: "#2196f3",
+                  color: "white",
+                  border: "none",
+                  borderRadius: "6px",
+                  cursor: "pointer",
+                  fontSize: "0.85rem",
+                  fontWeight: 500,
+                  transition: "background 0.2s",
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background = "#1976d2";
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = "#2196f3";
+                }}
+              >
+                Assign
+              </button>
+              <button
+                onClick={() => onArchive(lesson.id, lesson.title)}
+                style={{
+                  padding: "6px 12px",
+                  background: "transparent",
+                  color: "#999",
+                  border: "1px solid #ddd",
+                  borderRadius: "6px",
+                  cursor: "pointer",
+                  fontSize: "0.85rem",
+                  transition: "color 0.2s, border-color 0.2s",
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.color = "#666";
+                  e.currentTarget.style.borderColor = "#bbb";
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.color = "#999";
+                  e.currentTarget.style.borderColor = "#ddd";
+                }}
+              >
+                Archive
+              </button>
+            </div>
+          </div>
+        ))}
       </div>
     </div>
   );

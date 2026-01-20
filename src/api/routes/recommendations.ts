@@ -15,6 +15,9 @@ import {
   AssignmentAggregateData,
   RECOMMENDATION_CONFIG,
   FeedbackType,
+  BadgeType,
+  isBadgeType,
+  getBadgeTypeName,
 } from "../../domain/recommendation";
 import { SessionStore } from "../../stores/sessionStore";
 import { StudentStore } from "../../stores/studentStore";
@@ -22,6 +25,11 @@ import { ClassStore } from "../../stores/classStore";
 import { StudentAssignmentStore } from "../../stores/studentAssignmentStore";
 import { CoachSessionStore } from "../../stores/coachSessionStore";
 import { getAllLessons } from "../../loaders/lessonLoader";
+import {
+  pushAssignmentBack,
+  awardBadge,
+  addTeacherNote,
+} from "../../stores/actionHandlers";
 
 const router = Router();
 const sessionStore = new SessionStore();
@@ -311,6 +319,28 @@ router.post("/:id/feedback", (req, res) => {
 });
 
 /**
+ * GET /api/recommendations/badge-types
+ * Get available badge types
+ * NOTE: This route must come BEFORE /:id to avoid being captured by the param route
+ */
+router.get("/badge-types", (req, res) => {
+  try {
+    const badgeTypes = [
+      { id: "progress_star", name: "Progress Star", icon: "⭐", description: "Great effort and progress" },
+      { id: "mastery_badge", name: "Mastery Badge", icon: "🏆", description: "Demonstrated understanding" },
+      { id: "focus_badge", name: "Focus Badge", icon: "🎯", description: "Stayed on task" },
+      { id: "creativity_badge", name: "Creativity Badge", icon: "💡", description: "Showed creative thinking" },
+      { id: "collaboration_badge", name: "Collaboration Badge", icon: "🤝", description: "Helped others" },
+    ];
+
+    res.json({ badgeTypes });
+  } catch (error) {
+    console.error("Error fetching badge types:", error);
+    res.status(500).json({ error: "Failed to fetch badge types" });
+  }
+});
+
+/**
  * GET /api/recommendations/:id
  * Get a single recommendation by ID
  */
@@ -326,6 +356,126 @@ router.get("/:id", (req, res) => {
   } catch (error) {
     console.error("Error fetching recommendation:", error);
     res.status(500).json({ error: "Failed to fetch recommendation" });
+  }
+});
+
+// ============================================
+// Teacher Action Endpoints
+// ============================================
+
+/**
+ * POST /api/recommendations/:id/actions/reassign
+ * Push assignment back to student for retry
+ */
+router.post("/:id/actions/reassign", (req, res) => {
+  try {
+    const { id } = req.params;
+    const { studentId, assignmentId, teacherId = "educator" } = req.body;
+
+    if (!studentId || !assignmentId) {
+      return res.status(400).json({ error: "studentId and assignmentId are required" });
+    }
+
+    // Push assignment back
+    pushAssignmentBack(studentId, assignmentId);
+
+    // Mark the recommendation as reviewed
+    recommendationStore.markReviewed(id, teacherId);
+
+    res.json({
+      success: true,
+      action: "reassign",
+      studentId,
+      assignmentId,
+    });
+  } catch (error) {
+    console.error("Error reassigning assignment:", error);
+    res.status(500).json({ error: "Failed to reassign assignment" });
+  }
+});
+
+/**
+ * POST /api/recommendations/:id/actions/award-badge
+ * Award a badge to student
+ */
+router.post("/:id/actions/award-badge", (req, res) => {
+  try {
+    const { id } = req.params;
+    const { studentId, badgeType, message, assignmentId, teacherId = "educator" } = req.body;
+
+    if (!studentId || !badgeType) {
+      return res.status(400).json({ error: "studentId and badgeType are required" });
+    }
+
+    // Validate badge type
+    if (!isBadgeType(badgeType)) {
+      return res.status(400).json({
+        error: `Invalid badge type: ${badgeType}. Valid types: progress_star, mastery_badge, focus_badge, creativity_badge, collaboration_badge`,
+      });
+    }
+
+    // Award badge
+    const badge = awardBadge(studentId, badgeType, assignmentId, teacherId, message);
+
+    // Mark the recommendation as reviewed
+    recommendationStore.markReviewed(id, teacherId);
+
+    res.json({
+      success: true,
+      action: "award-badge",
+      badge: {
+        id: badge.id,
+        type: badge.type,
+        typeName: getBadgeTypeName(badge.type),
+        message: badge.message,
+      },
+    });
+  } catch (error) {
+    console.error("Error awarding badge:", error);
+    res.status(500).json({ error: "Failed to award badge" });
+  }
+});
+
+/**
+ * POST /api/recommendations/:id/actions/add-note
+ * Add a teacher note to the insight
+ */
+router.post("/:id/actions/add-note", (req, res) => {
+  try {
+    const { id } = req.params;
+    const { note, teacherId = "educator" } = req.body;
+
+    if (!note) {
+      return res.status(400).json({ error: "note is required" });
+    }
+
+    const recommendation = recommendationStore.load(id);
+    if (!recommendation) {
+      return res.status(404).json({ error: "Recommendation not found" });
+    }
+
+    // Add note to the insight (if insightId is available, otherwise create one)
+    // For now we'll add note to all students in the recommendation
+    for (const studentId of recommendation.studentIds) {
+      try {
+        // Create a simple note insight for each student
+        addTeacherNote(`rec-${id}`, note, teacherId);
+      } catch {
+        // If insight doesn't exist, that's okay - note is still recorded
+      }
+    }
+
+    // Mark the recommendation as reviewed with the note
+    recommendationStore.markReviewed(id, teacherId);
+
+    res.json({
+      success: true,
+      action: "add-note",
+      note,
+    });
+  } catch (error) {
+    console.error("Error adding note:", error);
+    res.status(500).json({ error: "Failed to add note" });
   }
 });
 

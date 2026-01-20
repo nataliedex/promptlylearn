@@ -12,6 +12,9 @@ import {
   updateClass,
   bulkAddStudentsToClass,
   removeStudentFromClass,
+  addClassSubject,
+  removeClassSubject,
+  setStudentSubjectParticipation,
   type ClassWithStudents,
   type UpdateClassInput,
 } from "../services/api";
@@ -34,6 +37,11 @@ export default function ClassDetails() {
   const [studentNames, setStudentNames] = useState("");
   const [addingStudents, setAddingStudents] = useState(false);
   const [addResult, setAddResult] = useState<{ created: number; existing: number } | null>(null);
+
+  // Subject management state
+  const [showAddSubject, setShowAddSubject] = useState(false);
+  const [newSubjectName, setNewSubjectName] = useState("");
+  const [addingSubject, setAddingSubject] = useState(false);
 
   const loadClass = async () => {
     if (!classId) return;
@@ -103,6 +111,57 @@ export default function ClassDetails() {
       console.error("Failed to remove student:", err);
       showError("Failed to remove student. Please try again.");
     }
+  };
+
+  // Subject management handlers
+  const handleAddSubject = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!classId || !newSubjectName.trim()) return;
+
+    setAddingSubject(true);
+    try {
+      await addClassSubject(classId, newSubjectName.trim());
+      setNewSubjectName("");
+      setShowAddSubject(false);
+      await loadClass();
+    } catch (err) {
+      console.error("Failed to add subject:", err);
+      showError("Failed to add subject. Please try again.");
+    } finally {
+      setAddingSubject(false);
+    }
+  };
+
+  const handleRemoveSubject = async (subject: string) => {
+    if (!classId) return;
+    if (!confirm(`Remove "${subject}" from this class? This will not affect existing assignments.`)) return;
+
+    try {
+      await removeClassSubject(classId, subject);
+      await loadClass();
+    } catch (err) {
+      console.error("Failed to remove subject:", err);
+      showError("Failed to remove subject. Please try again.");
+    }
+  };
+
+  const handleToggleParticipation = async (studentId: string, subject: string, currentlyExcluded: boolean) => {
+    if (!classId) return;
+
+    try {
+      // Toggle: if currently excluded, we want to include (excluded=false)
+      // if currently included (not excluded), we want to exclude (excluded=true)
+      await setStudentSubjectParticipation(classId, subject, studentId, !currentlyExcluded);
+      await loadClass();
+    } catch (err) {
+      console.error("Failed to update participation:", err);
+      showError("Failed to update participation. Please try again.");
+    }
+  };
+
+  // Helper to check if a student is excluded from a subject
+  const isStudentExcluded = (studentId: string, subject: string): boolean => {
+    return classData?.subjectExclusions?.[subject]?.includes(studentId) ?? false;
   };
 
   if (loading) {
@@ -385,6 +444,189 @@ export default function ClassDetails() {
           </div>
         </div>
       )}
+
+      {/* Subject Participation Section */}
+      <div style={{ marginTop: "32px" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px" }}>
+          <h2 style={{ color: "white", margin: 0 }}>
+            Subject Participation
+          </h2>
+          <button
+            className="btn btn-primary"
+            onClick={() => setShowAddSubject(!showAddSubject)}
+          >
+            + Add Subject
+          </button>
+        </div>
+
+        {/* Add Subject Form */}
+        {showAddSubject && (
+          <div className="card" style={{ marginBottom: "16px" }}>
+            <form onSubmit={handleAddSubject} style={{ display: "flex", gap: "12px", alignItems: "flex-end" }}>
+              <div style={{ flex: 1 }}>
+                <label style={{ display: "block", marginBottom: "4px", fontWeight: 600 }}>
+                  Subject Name
+                </label>
+                <input
+                  type="text"
+                  value={newSubjectName}
+                  onChange={(e) => setNewSubjectName(e.target.value)}
+                  placeholder="e.g., Reading, Math, Science"
+                  style={{
+                    width: "100%",
+                    padding: "12px",
+                    fontSize: "1rem",
+                    borderRadius: "8px",
+                    border: "2px solid #e0e0e0",
+                  }}
+                  autoFocus
+                />
+              </div>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => {
+                  setShowAddSubject(false);
+                  setNewSubjectName("");
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                className="btn btn-primary"
+                disabled={!newSubjectName.trim() || addingSubject}
+              >
+                {addingSubject ? "Adding..." : "Add"}
+              </button>
+            </form>
+          </div>
+        )}
+
+        {/* No subjects message */}
+        {(!classData.subjects || classData.subjects.length === 0) ? (
+          <div className="card" style={{ textAlign: "center", padding: "32px" }}>
+            <p style={{ color: "#666", marginBottom: "8px" }}>
+              No subjects defined for this class yet.
+            </p>
+            <p style={{ color: "#999", fontSize: "0.9rem", margin: 0 }}>
+              Add subjects to control which students participate in each subject area.
+            </p>
+          </div>
+        ) : classData.students.length === 0 ? (
+          <div className="card" style={{ textAlign: "center", padding: "32px" }}>
+            <p style={{ color: "#666", margin: 0 }}>
+              Add students to configure subject participation.
+            </p>
+          </div>
+        ) : (
+          /* Subject × Student Grid */
+          <div className="card" style={{ overflow: "auto" }}>
+            <p style={{ color: "#666", fontSize: "0.85rem", marginBottom: "16px" }}>
+              All students participate in all subjects by default. Uncheck to exclude a student from receiving assignments for that subject.
+            </p>
+            <table style={{ width: "100%", borderCollapse: "collapse", minWidth: "400px" }}>
+              <thead>
+                <tr>
+                  <th
+                    style={{
+                      textAlign: "left",
+                      padding: "12px",
+                      borderBottom: "2px solid #e0e0e0",
+                      background: "#f5f5f5",
+                      position: "sticky",
+                      left: 0,
+                      zIndex: 1,
+                    }}
+                  >
+                    Student
+                  </th>
+                  {classData.subjects.map((subject) => (
+                    <th
+                      key={subject}
+                      style={{
+                        textAlign: "center",
+                        padding: "12px",
+                        borderBottom: "2px solid #e0e0e0",
+                        background: "#f5f5f5",
+                        minWidth: "100px",
+                      }}
+                    >
+                      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "4px" }}>
+                        <span>{subject}</span>
+                        <button
+                          onClick={() => handleRemoveSubject(subject)}
+                          style={{
+                            background: "none",
+                            border: "none",
+                            cursor: "pointer",
+                            color: "#999",
+                            fontSize: "0.7rem",
+                            padding: "2px 4px",
+                          }}
+                          onMouseEnter={(e) => { e.currentTarget.style.color = "#d32f2f"; }}
+                          onMouseLeave={(e) => { e.currentTarget.style.color = "#999"; }}
+                          title={`Remove ${subject}`}
+                        >
+                          ✕ remove
+                        </button>
+                      </div>
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {classData.students.map((student, index) => (
+                  <tr
+                    key={student.id}
+                    style={{ background: index % 2 === 0 ? "white" : "#fafafa" }}
+                  >
+                    <td
+                      style={{
+                        padding: "12px",
+                        borderBottom: "1px solid #e0e0e0",
+                        fontWeight: 500,
+                        position: "sticky",
+                        left: 0,
+                        background: index % 2 === 0 ? "white" : "#fafafa",
+                        zIndex: 1,
+                      }}
+                    >
+                      {student.name}
+                    </td>
+                    {classData.subjects.map((subject) => {
+                      const excluded = isStudentExcluded(student.id, subject);
+                      return (
+                        <td
+                          key={subject}
+                          style={{
+                            textAlign: "center",
+                            padding: "12px",
+                            borderBottom: "1px solid #e0e0e0",
+                          }}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={!excluded}
+                            onChange={() => handleToggleParticipation(student.id, subject, excluded)}
+                            style={{
+                              width: "20px",
+                              height: "20px",
+                              cursor: "pointer",
+                              accentColor: "#667eea",
+                            }}
+                            title={excluded ? `Add ${student.name} to ${subject}` : `Remove ${student.name} from ${subject}`}
+                          />
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
 
       {/* Actions Footer */}
       <div

@@ -16,6 +16,7 @@ export interface LessonSummary {
   gradeLevel?: string;
   promptCount: number;
   standards?: string[];
+  subject?: string;
 }
 
 export interface Prompt {
@@ -34,6 +35,7 @@ export interface Lesson {
   gradeLevel?: string;
   prompts: Prompt[];
   standards?: string[];
+  subject?: string;
 }
 
 export interface Standard {
@@ -157,6 +159,7 @@ export async function createOrFindStudent(name: string): Promise<{ student: Stud
 
 export interface StudentLessonSummary extends LessonSummary {
   attempts: number;
+  assignedAt?: string;
 }
 
 export interface StudentLessonsResponse {
@@ -190,6 +193,10 @@ export async function getArchivedLessons(): Promise<ArchivedLessonSummary[]> {
   return fetchJson(`${API_BASE}/lessons/archived/list`);
 }
 
+export async function getUnassignedLessons(): Promise<LessonSummary[]> {
+  return fetchJson(`${API_BASE}/lessons/unassigned`);
+}
+
 export async function archiveLesson(id: string): Promise<{ success: boolean; message: string }> {
   return fetchJson(`${API_BASE}/lessons/${id}/archive`, {
     method: "POST",
@@ -199,6 +206,16 @@ export async function archiveLesson(id: string): Promise<{ success: boolean; mes
 export async function unarchiveLesson(id: string): Promise<{ success: boolean; message: string }> {
   return fetchJson(`${API_BASE}/lessons/${id}/unarchive`, {
     method: "POST",
+  });
+}
+
+export async function updateLessonSubject(
+  lessonId: string,
+  subject: string | null
+): Promise<{ success: boolean; lesson: { id: string; title: string; subject?: string } }> {
+  return fetchJson(`${API_BASE}/lessons/${lessonId}/subject`, {
+    method: "PATCH",
+    body: JSON.stringify({ subject }),
   });
 }
 
@@ -455,6 +472,7 @@ export interface ComputedAssignmentState {
   activeReasons: ActiveReason[];
   totalStudents: number;
   completedCount: number;
+  inProgressCount: number;
   distribution: {
     strong: number;
     developing: number;
@@ -671,6 +689,7 @@ export interface ClassSummary {
   schoolYear?: string;
   period?: string;
   subject?: string;
+  subjects?: string[];
   studentCount: number;
   createdAt: string;
   archivedAt?: string;
@@ -843,6 +862,70 @@ export async function removeStudentFromClass(classId: string, studentId: string)
   return fetchJson(`${API_BASE}/classes/${classId}/students/${studentId}`, {
     method: "DELETE",
   });
+}
+
+// ============================================
+// Subject Management API Functions
+// ============================================
+
+/**
+ * Update the subjects list for a class.
+ */
+export async function updateClassSubjects(classId: string, subjects: string[]): Promise<Class> {
+  return fetchJson(`${API_BASE}/classes/${classId}/subjects`, {
+    method: "PUT",
+    body: JSON.stringify({ subjects }),
+  });
+}
+
+/**
+ * Add a subject to a class.
+ */
+export async function addClassSubject(classId: string, subject: string): Promise<Class> {
+  return fetchJson(`${API_BASE}/classes/${classId}/subjects`, {
+    method: "POST",
+    body: JSON.stringify({ subject }),
+  });
+}
+
+/**
+ * Remove a subject from a class.
+ */
+export async function removeClassSubject(classId: string, subject: string): Promise<Class> {
+  return fetchJson(`${API_BASE}/classes/${classId}/subjects/${encodeURIComponent(subject)}`, {
+    method: "DELETE",
+  });
+}
+
+/**
+ * Set a student's participation in a subject.
+ * excluded = true means student does NOT participate.
+ */
+export async function setStudentSubjectParticipation(
+  classId: string,
+  subject: string,
+  studentId: string,
+  excluded: boolean
+): Promise<Class> {
+  return fetchJson(`${API_BASE}/classes/${classId}/subjects/${encodeURIComponent(subject)}/participation`, {
+    method: "PUT",
+    body: JSON.stringify({ studentId, excluded }),
+  });
+}
+
+/**
+ * Get students who participate in a specific subject.
+ */
+export async function getStudentsForSubject(
+  classId: string,
+  subject: string
+): Promise<{
+  subject: string;
+  totalStudents: number;
+  participatingCount: number;
+  students: { id: string; name: string }[];
+}> {
+  return fetchJson(`${API_BASE}/classes/${classId}/subjects/${encodeURIComponent(subject)}/students`);
 }
 
 // ============================================
@@ -1065,25 +1148,60 @@ export async function getStudentCoachingInsights(studentId: string): Promise<Coa
 // Recommendations API ("What Should I Do Next?")
 // ============================================
 
+/**
+ * Insight types aligned with Educational Support Intelligence specification:
+ * - challenge_opportunity: Student shows readiness for extension/deeper learning
+ * - celebrate_progress: Notable improvement or achievement worth recognizing
+ * - check_in: Student may benefit from teacher conversation or support
+ * - monitor: Situation worth watching but no immediate action needed
+ */
+export type InsightType =
+  | "challenge_opportunity"
+  | "celebrate_progress"
+  | "check_in"
+  | "monitor";
+
+// Legacy type for backward compatibility
 export type RecommendationType =
+  | InsightType
   | "individual-checkin"
   | "small-group"
   | "assignment-adjustment"
   | "enrichment"
   | "celebrate";
 
-export type ConfidenceLevel = "low" | "medium" | "high";
+export type PriorityLevel = "high" | "medium" | "low";
+export type ConfidenceScore = number; // 0.7 - 1.0
 export type RecommendationStatus = "active" | "reviewed" | "dismissed";
 export type FeedbackType = "helpful" | "not-helpful";
 
 export interface Recommendation {
   id: string;
+
+  // New insight type (primary classification)
+  insightType: InsightType;
+  // Legacy type for backward compatibility
   type: RecommendationType;
+
+  // Core content (new specification format)
+  summary: string;
+  evidence: string[];
+  suggestedTeacherActions: string[];
+
+  // Legacy display content (for backward compatibility)
   title: string;
   reason: string;
   suggestedAction: string;
-  confidence: ConfidenceLevel;
+
+  // Metadata (new specification)
+  priorityLevel: PriorityLevel;
+  confidenceScore: ConfidenceScore;
+
+  // Legacy metadata (for backward compatibility)
+  confidence: PriorityLevel;
   priority: number;
+
+  // Context
   studentIds: string[];
   assignmentId?: string;
   triggerData: {
@@ -1091,6 +1209,8 @@ export interface Recommendation {
     signals: Record<string, any>;
     generatedAt: string;
   };
+
+  // State management
   status: RecommendationStatus;
   createdAt: string;
   reviewedAt?: string;
@@ -1182,5 +1302,96 @@ export async function submitRecommendationFeedback(
   return fetchJson(`${API_BASE}/recommendations/${id}/feedback`, {
     method: "POST",
     body: JSON.stringify({ feedback, note }),
+  });
+}
+
+// ============================================
+// Teacher Action API Functions
+// ============================================
+
+export interface BadgeTypeInfo {
+  id: string;
+  name: string;
+  icon: string;
+  description: string;
+}
+
+export interface ReassignResult {
+  success: boolean;
+  action: "reassign";
+  studentId: string;
+  assignmentId: string;
+}
+
+export interface AwardBadgeResult {
+  success: boolean;
+  action: "award-badge";
+  badge: {
+    id: string;
+    type: string;
+    typeName: string;
+    message?: string;
+  };
+}
+
+export interface AddNoteResult {
+  success: boolean;
+  action: "add-note";
+  note: string;
+}
+
+/**
+ * Get available badge types for awarding.
+ */
+export async function getBadgeTypes(): Promise<{ badgeTypes: BadgeTypeInfo[] }> {
+  return fetchJson(`${API_BASE}/recommendations/badge-types`);
+}
+
+/**
+ * Reassign/push back assignment to student for retry.
+ * Marks the recommendation as reviewed.
+ */
+export async function reassignToStudent(
+  recommendationId: string,
+  studentId: string,
+  assignmentId: string,
+  teacherId?: string
+): Promise<ReassignResult> {
+  return fetchJson(`${API_BASE}/recommendations/${recommendationId}/actions/reassign`, {
+    method: "POST",
+    body: JSON.stringify({ studentId, assignmentId, teacherId }),
+  });
+}
+
+/**
+ * Award a badge to a student.
+ * Marks the recommendation as reviewed.
+ */
+export async function awardBadgeToStudent(
+  recommendationId: string,
+  studentId: string,
+  badgeType: string,
+  message?: string,
+  assignmentId?: string,
+  teacherId?: string
+): Promise<AwardBadgeResult> {
+  return fetchJson(`${API_BASE}/recommendations/${recommendationId}/actions/award-badge`, {
+    method: "POST",
+    body: JSON.stringify({ studentId, badgeType, message, assignmentId, teacherId }),
+  });
+}
+
+/**
+ * Add a teacher note to the insight.
+ * Marks the recommendation as reviewed.
+ */
+export async function addTeacherNoteToRecommendation(
+  recommendationId: string,
+  note: string,
+  teacherId?: string
+): Promise<AddNoteResult> {
+  return fetchJson(`${API_BASE}/recommendations/${recommendationId}/actions/add-note`, {
+    method: "POST",
+    body: JSON.stringify({ note, teacherId }),
   });
 }

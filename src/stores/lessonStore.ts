@@ -156,3 +156,31 @@ export function getArchivedLessons(): Lesson[] {
 
   return lessons;
 }
+
+/**
+ * Update the subject for a lesson
+ * Returns the updated lesson, or null if not found
+ */
+export function updateLessonSubject(id: string, subject: string | null): Lesson | null {
+  const filePath = path.join(LESSONS_DIR, `${id}.json`);
+
+  if (!fs.existsSync(filePath)) {
+    return null;
+  }
+
+  try {
+    const rawData = fs.readFileSync(filePath, "utf-8");
+    const lesson = JSON.parse(rawData) as Lesson;
+
+    if (subject === null || subject === "") {
+      delete lesson.subject;
+    } else {
+      lesson.subject = subject;
+    }
+
+    fs.writeFileSync(filePath, JSON.stringify(lesson, null, 2), "utf-8");
+    return lesson;
+  } catch {
+    return null;
+  }
+}

@@ -25,6 +25,11 @@ export default function StudentDashboard() {
   const [showCoachModal, setShowCoachModal] = useState(false);
   const [selectedTopics, setSelectedTopics] = useState<string[]>([]);
 
+  // Completed Work section collapsed state
+  const [completedExpanded, setCompletedExpanded] = useState(false);
+  // Track which individual assignments are expanded (by lessonId)
+  const [expandedAssignments, setExpandedAssignments] = useState<Set<string>>(new Set());
+
   useEffect(() => {
     if (!studentId) return;
 
@@ -36,7 +41,22 @@ export default function StudentDashboard() {
           getSessions(studentId, "completed"),
         ]);
         setStudent(studentData);
-        setLessons(studentLessonsData.lessons);
+
+        // Sort lessons: by assigned date (oldest first), then by subject (alphabetical)
+        const sortedLessons = [...studentLessonsData.lessons].sort((a, b) => {
+          // First sort by assigned date (oldest first)
+          const dateA = a.assignedAt ? new Date(a.assignedAt).getTime() : 0;
+          const dateB = b.assignedAt ? new Date(b.assignedAt).getTime() : 0;
+          if (dateA !== dateB) return dateA - dateB;
+
+          // Then sort by subject alphabetically (no subject goes last)
+          const subjectA = a.subject || "";
+          const subjectB = b.subject || "";
+          if (subjectA && !subjectB) return -1;
+          if (!subjectA && subjectB) return 1;
+          return subjectA.localeCompare(subjectB);
+        });
+        setLessons(sortedLessons);
         setSessions(sessionsData);
       } catch (err) {
         console.error("Failed to load dashboard:", err);
@@ -90,6 +110,18 @@ export default function StudentDashboard() {
     navigate(`/student/${studentId}/coach?mode=${mode}&topics=${topicsParam}&gradeLevel=${encodeURIComponent(gradeLevel)}`);
     setShowCoachModal(false);
     setSelectedTopics([]);
+  };
+
+  const toggleAssignmentExpanded = (lessonId: string) => {
+    setExpandedAssignments((prev) => {
+      const next = new Set(prev);
+      if (next.has(lessonId)) {
+        next.delete(lessonId);
+      } else {
+        next.add(lessonId);
+      }
+      return next;
+    });
   };
 
   if (loading) {
@@ -291,7 +323,7 @@ export default function StudentDashboard() {
           {lessons.map((lesson) => (
             <div key={lesson.id} className="card lesson-card" style={{ cursor: "default" }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-                <h3>{lesson.title}</h3>
+                <h3 style={{ margin: 0 }}>{lesson.title}</h3>
                 {lesson.attempts > 1 && (
                   <span
                     style={{
@@ -307,14 +339,26 @@ export default function StudentDashboard() {
                   </span>
                 )}
               </div>
-              <p>{lesson.description}</p>
-              <div style={{ display: "flex", gap: "8px", alignItems: "center", marginBottom: "16px" }}>
-                <span className={`difficulty-badge difficulty-${lesson.difficulty}`}>
-                  {lesson.difficulty}
-                </span>
-                <span style={{ color: "#666", fontSize: "0.9rem" }}>
-                  {lesson.promptCount} questions
-                </span>
+              <div style={{ display: "flex", gap: "8px", alignItems: "center", marginTop: "8px", marginBottom: "16px", flexWrap: "wrap" }}>
+                {lesson.subject && (
+                  <span
+                    style={{
+                      background: "#f0f0ff",
+                      color: "#667eea",
+                      padding: "4px 10px",
+                      borderRadius: "12px",
+                      fontSize: "0.8rem",
+                      fontWeight: 500,
+                    }}
+                  >
+                    {lesson.subject}
+                  </span>
+                )}
+                {lesson.assignedAt && (
+                  <span style={{ color: "#888", fontSize: "0.85rem" }}>
+                    Assigned {new Date(lesson.assignedAt).toLocaleDateString()}
+                  </span>
+                )}
               </div>
               <div style={{ display: "flex", gap: "12px" }}>
                 <button
@@ -356,9 +400,35 @@ export default function StudentDashboard() {
       {/* Completed Work - grouped by assignment */}
       {sessions.length > 0 && (
         <>
-          <h2 style={{ color: "white", marginTop: "32px", marginBottom: "16px" }}>
-            Completed Work
-          </h2>
+          <button
+            onClick={() => setCompletedExpanded(!completedExpanded)}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "8px",
+              background: "none",
+              border: "none",
+              color: "white",
+              cursor: "pointer",
+              padding: "0",
+              marginTop: "32px",
+              marginBottom: "16px",
+              fontSize: "1.5rem",
+              fontWeight: 600,
+            }}
+          >
+            <span
+              style={{
+                display: "inline-block",
+                transition: "transform 0.2s",
+                transform: completedExpanded ? "rotate(90deg)" : "rotate(0deg)",
+              }}
+            >
+              ▶
+            </span>
+            Completed Work ({sessions.length})
+          </button>
+          {completedExpanded && (
           <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
             {(() => {
               // Group sessions by lessonId
@@ -381,77 +451,105 @@ export default function StudentDashboard() {
               return Array.from(sessionsByLesson.entries()).map(([lessonId, lessonSessions]) => {
                 const latestSession = lessonSessions[0];
                 const totalAttempts = lessonSessions.length;
+                const isExpanded = expandedAssignments.has(lessonId);
 
                 return (
-                  <div key={lessonId} className="card">
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                  <div key={lessonId} className="card" style={{ padding: 0, overflow: "hidden" }}>
+                    {/* Clickable header - always visible */}
+                    <button
+                      onClick={() => toggleAssignmentExpanded(lessonId)}
+                      style={{
+                        width: "100%",
+                        display: "flex",
+                        justifyContent: "space-between",
+                        alignItems: "center",
+                        padding: "16px 20px",
+                        background: "none",
+                        border: "none",
+                        cursor: "pointer",
+                        textAlign: "left",
+                      }}
+                    >
                       <div style={{ flex: 1 }}>
                         <h3 style={{ margin: 0, color: "#667eea" }}>{latestSession.lessonTitle}</h3>
                         <p style={{ color: "#666", fontSize: "0.85rem", margin: "4px 0 0 0" }}>
                           {totalAttempts > 1
-                            ? `${totalAttempts} attempts`
+                            ? `${totalAttempts} attempts • Last completed ${new Date(latestSession.completedAt || latestSession.startedAt).toLocaleDateString()}`
                             : `Completed ${new Date(latestSession.completedAt || latestSession.startedAt).toLocaleDateString()}`}
                         </p>
                       </div>
-                    </div>
+                      <span
+                        style={{
+                          color: "#999",
+                          fontSize: "0.9rem",
+                          transition: "transform 0.2s",
+                          transform: isExpanded ? "rotate(90deg)" : "rotate(0deg)",
+                        }}
+                      >
+                        ▶
+                      </span>
+                    </button>
 
-                    {/* Teacher Feedback by Attempt */}
-                    <div style={{ marginTop: "12px", display: "flex", flexDirection: "column", gap: "8px" }}>
-                      {lessonSessions.map((session, index) => {
-                        const attemptNumber = totalAttempts - index;
-                        const hasNotes = !!session.educatorNotes;
+                    {/* Expandable content - Teacher Feedback by Attempt */}
+                    {isExpanded && (
+                      <div style={{ padding: "0 20px 16px 20px", display: "flex", flexDirection: "column", gap: "8px" }}>
+                        {lessonSessions.map((session, index) => {
+                          const attemptNumber = totalAttempts - index;
+                          const hasNotes = !!session.educatorNotes;
 
-                        return (
-                          <div
-                            key={session.id}
-                            style={{
-                              padding: "12px",
-                              background: hasNotes ? "#e8f5e9" : "#f5f5f5",
-                              borderRadius: "8px",
-                              borderLeft: hasNotes ? "3px solid #4caf50" : "3px solid #ccc",
-                            }}
-                          >
-                            <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "4px" }}>
-                              {totalAttempts > 1 && (
-                                <span
-                                  style={{
-                                    fontSize: "0.75rem",
-                                    fontWeight: 600,
-                                    color: "#667eea",
-                                    background: "#e8eaf6",
-                                    padding: "2px 6px",
-                                    borderRadius: "4px",
-                                  }}
-                                >
-                                  Attempt {attemptNumber}
-                                </span>
-                              )}
-                              <span style={{ fontSize: "0.75rem", color: "#999" }}>
-                                {new Date(session.completedAt || session.startedAt).toLocaleDateString()}
-                              </span>
-                              <span style={{ fontSize: "0.8rem", marginLeft: "auto" }}>
-                                {hasNotes ? "📝" : "⏳"}
-                              </span>
-                            </div>
-                            <p
+                          return (
+                            <div
+                              key={session.id}
                               style={{
-                                margin: 0,
-                                fontSize: "0.9rem",
-                                color: hasNotes ? "#333" : "#999",
-                                fontStyle: hasNotes ? "normal" : "italic",
+                                padding: "12px",
+                                background: hasNotes ? "#e8f5e9" : "#f5f5f5",
+                                borderRadius: "8px",
+                                borderLeft: hasNotes ? "3px solid #4caf50" : "3px solid #ccc",
                               }}
                             >
-                              {session.educatorNotes || "Not reviewed yet"}
-                            </p>
-                          </div>
-                        );
-                      })}
-                    </div>
+                              <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "4px" }}>
+                                {totalAttempts > 1 && (
+                                  <span
+                                    style={{
+                                      fontSize: "0.75rem",
+                                      fontWeight: 600,
+                                      color: "#667eea",
+                                      background: "#e8eaf6",
+                                      padding: "2px 6px",
+                                      borderRadius: "4px",
+                                    }}
+                                  >
+                                    Attempt {attemptNumber}
+                                  </span>
+                                )}
+                                <span style={{ fontSize: "0.75rem", color: "#999" }}>
+                                  {new Date(session.completedAt || session.startedAt).toLocaleDateString()}
+                                </span>
+                                <span style={{ fontSize: "0.8rem", marginLeft: "auto" }}>
+                                  {hasNotes ? "📝" : "⏳"}
+                                </span>
+                              </div>
+                              <p
+                                style={{
+                                  margin: 0,
+                                  fontSize: "0.9rem",
+                                  color: hasNotes ? "#333" : "#999",
+                                  fontStyle: hasNotes ? "normal" : "italic",
+                                }}
+                              >
+                                {session.educatorNotes || "Not reviewed yet"}
+                              </p>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
                 );
               });
             })()}
           </div>
+          )}
         </>
       )}
     </div>

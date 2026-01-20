@@ -1,0 +1,38 @@
+{
+  "id": "exploring-the-last-unicorn",
+  "title": "Exploring The Last Unicorn",
+  "description": "In this lesson, students will dive into the story of 'The Last Unicorn' to understand what happens, explore the feelings and motivations of the characters, and make inferences from the text.",
+  "difficulty": "intermediate",
+  "gradeLevel": "2nd grade",
+  "standards": [
+    "RL.2.1",
+    "RL.2.3"
+  ],
+  "prompts": [
+    {
+      "id": "q1",
+      "type": "explain",
+      "input": "How do you think Jack feels when he hears about the unicorn? Explain why you think he feels that way.",
+      "hints": [
+        "Think about how he reacts when Annie tells him about the unicorn.",
+        "Remember to look for clues in the text about his feelings."
+      ],
+      "standards": [
+        "RL.2.3"
+      ]
+    },
+    {
+      "id": "q2",
+      "type": "explain",
+      "input": "Why do you think Annie is so excited about the unicorn and the adventure to New York City? Describe her motivations.",
+      "hints": [
+        "Consider what she says about the unicorn and her past experiences.",
+        "Look for parts in the text that show her enthusiasm."
+      ],
+      "standards": [
+        "RL.2.3"
+      ]
+    }
+  ],
+  "subject": "Language Arts"
+}

@@ -16,6 +16,7 @@ import {
   type CoachMessage,
 } from "../services/api";
 import { useVoice } from "../hooks/useVoice";
+import ModeToggle from "../components/ModeToggle";
 
 type SessionMode = "voice" | "type";
 type VoiceState = "idle" | "speaking" | "listening" | "processing";
@@ -23,10 +24,13 @@ type VoiceState = "idle" | "speaking" | "listening" | "processing";
 export default function CoachSession() {
   const { studentId } = useParams<{ studentId: string }>();
   const [searchParams] = useSearchParams();
-  const mode = (searchParams.get("mode") as SessionMode) || "type";
+  const initialMode = (searchParams.get("mode") as SessionMode) || "type";
   const topicsParam = searchParams.get("topics");
   const topics = topicsParam ? JSON.parse(decodeURIComponent(topicsParam)) : [];
   const gradeLevel = searchParams.get("gradeLevel") ? decodeURIComponent(searchParams.get("gradeLevel")!) : undefined;
+
+  // Mode state - can be toggled during the session
+  const [mode, setMode] = useState<SessionMode>(initialMode);
 
   const [student, setStudent] = useState<Student | null>(null);
   const [loading, setLoading] = useState(true);
@@ -55,6 +59,7 @@ export default function CoachSession() {
     startRecording,
     stopRecording,
     speak,
+    cancelRecording,
   } = useVoice();
 
   // Save the coach session to the backend
@@ -273,6 +278,27 @@ export default function CoachSession() {
     }
   };
 
+  // Handler for toggling between voice and text mode
+  const handleModeToggle = (newMode: SessionMode) => {
+    if (newMode === mode) return;
+
+    // Cancel any ongoing voice activity when switching to text mode
+    if (newMode === "type" && isRecording) {
+      cancelRecording();
+    }
+
+    setMode(newMode);
+
+    // If switching to voice mode and session is active, start listening
+    if (newMode === "voice" && sessionStarted && voiceAvailable && !sessionEnded && !isProcessing) {
+      // Start listening for next input
+      setTimeout(async () => {
+        setVoiceState("listening");
+        await startRecording();
+      }, 300);
+    }
+  };
+
   if (loading) {
     return (
       <div className="loading">
@@ -299,9 +325,17 @@ export default function CoachSession() {
   if (!sessionStarted) {
     return (
       <div className="container">
-        <Link to={`/student/${studentId}`} className="back-btn">
-          ← Back to Dashboard
-        </Link>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
+          <Link to={`/student/${studentId}`} className="back-btn" style={{ margin: 0 }}>
+            ← Back to Dashboard
+          </Link>
+          {voiceAvailable && (
+            <ModeToggle
+              mode={mode}
+              onToggle={handleModeToggle}
+            />
+          )}
+        </div>
 
         <div className="header">
           <h1>Ask Coach</h1>
@@ -336,9 +370,18 @@ export default function CoachSession() {
 
   return (
     <div className="container">
-      <Link to={`/student/${studentId}`} className="back-btn">
-        ← Back to Dashboard
-      </Link>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
+        <Link to={`/student/${studentId}`} className="back-btn" style={{ margin: 0 }}>
+          ← Back to Dashboard
+        </Link>
+        {voiceAvailable && (
+          <ModeToggle
+            mode={mode}
+            onToggle={handleModeToggle}
+            disabled={voiceState === "processing" || isProcessing}
+          />
+        )}
+      </div>
 
       <div className="header">
         <h1>Ask Coach</h1>

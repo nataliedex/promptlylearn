@@ -41,6 +41,8 @@ describe("StudentStore", () => {
       const student: Student = {
         id: "student-123",
         name: "Alice",
+        classes: [],
+        assignments: [],
         createdAt: new Date("2024-01-15"),
       };
 

@@ -1,0 +1,51 @@
+{
+  "id": "understanding-soccer-on-a-sunday",
+  "title": "Understanding 'Soccer on a Sunday'",
+  "description": "In this lesson, students will explore the characters' feelings and motivations in 'Soccer on a Sunday'. They will learn to identify important events in the story and predict outcomes based on the characters' actions.",
+  "difficulty": "beginner",
+  "gradeLevel": "2nd grade",
+  "standards": [
+    "RL.2.1",
+    "RL.2.2",
+    "RL.2.3"
+  ],
+  "prompts": [
+    {
+      "id": "q1",
+      "type": "explain",
+      "input": "How do you think the main character feels about playing soccer? Why do you think they feel that way?",
+      "hints": [
+        "Think about what the character says and does in the story.",
+        "Consider how their feelings might change throughout the story."
+      ],
+      "standards": [
+        "RL.2.3"
+      ]
+    },
+    {
+      "id": "q2",
+      "type": "explain",
+      "input": "What is an important event that happens in the story, and how does it affect the characters? Why is this event important?",
+      "hints": [
+        "Look for a moment that changes something for the characters.",
+        "Ask yourself how the characters react to this event."
+      ],
+      "standards": [
+        "RL.2.2"
+      ]
+    },
+    {
+      "id": "q3",
+      "type": "explain",
+      "input": "What do you think will happen next in the story? How did you come to that conclusion?",
+      "hints": [
+        "Use clues from the story to help you predict what might happen.",
+        "Think about the characters' actions and what they might lead to."
+      ],
+      "standards": [
+        "RL.2.1"
+      ]
+    }
+  ],
+  "subject": "Language Arts"
+}
