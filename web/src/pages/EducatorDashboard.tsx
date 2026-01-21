@@ -30,11 +30,13 @@ import {
   assignLessonToClass,
   getRecommendations,
   refreshRecommendations,
-  markRecommendationReviewed,
   dismissRecommendation,
   submitRecommendationFeedback,
   getUnassignedLessons,
   updateLessonSubject,
+  getTeacherTodos,
+  getTeacherTodoCounts,
+  getDashboardAttentionState,
   type ComputedAssignmentState,
   type AssignmentDashboardData,
   type ClassSummary,
@@ -44,8 +46,15 @@ import {
   type Recommendation,
   type FeedbackType,
   type LessonSummary,
+  type TeacherTodo,
+  type TeacherTodoCounts,
+  type StudentAttentionStatus,
+  type DashboardAttentionState,
 } from "../services/api";
 import RecommendationPanel from "../components/RecommendationPanel";
+import TeacherTodosPanel from "../components/TeacherTodosPanel";
+import PendingRecommendationsPanel from "../components/PendingRecommendationsPanel";
+import ArchivedRecommendationsPanel from "../components/ArchivedRecommendationsPanel";
 import { useToast } from "../components/Toast";
 
 // Type for assignments grouped by class
@@ -71,7 +80,12 @@ export default function EducatorDashboard() {
   const [assignmentClassMap, setAssignmentClassMap] = useState<Map<string, string[]>>(new Map());
   const [coachingActivity, setCoachingActivity] = useState<StudentCoachingActivity[]>([]);
   const [recommendations, setRecommendations] = useState<Recommendation[]>([]);
+  const [pendingRecommendations, setPendingRecommendations] = useState<Recommendation[]>([]);
+  const [dismissedRecommendations, setDismissedRecommendations] = useState<Recommendation[]>([]);
   const [recommendationsLoading, setRecommendationsLoading] = useState(false);
+  const [teacherTodos, setTeacherTodos] = useState<TeacherTodo[]>([]);
+  const [todoCounts, setTodoCounts] = useState<TeacherTodoCounts>({ total: 0, open: 0, done: 0 });
+  const [attentionState, setAttentionState] = useState<DashboardAttentionState | null>(null);
   const [unassignedLessons, setUnassignedLessons] = useState<LessonSummary[]>([]);
   const [lessonSubjects, setLessonSubjects] = useState<Map<string, string | undefined>>(new Map());
   const [loading, setLoading] = useState(true);
@@ -168,11 +182,42 @@ export default function EducatorDashboard() {
       // Load recommendations (refresh to get latest)
       try {
         await refreshRecommendations();
-        const recsData = await getRecommendations({ includeReviewed: true, limit: 10 });
+        // Load active recommendations for "What Should I Do Next?"
+        const recsData = await getRecommendations({ status: "active", limit: 10 });
         setRecommendations(recsData.recommendations);
+
+        // Load pending recommendations separately for the collapsed panel
+        const pendingData = await getRecommendations({ status: "pending", limit: 20 });
+        setPendingRecommendations(pendingData.recommendations);
+
+        // Load dismissed recommendations for the archived panel
+        const dismissedData = await getRecommendations({ status: "dismissed", limit: 20 });
+        setDismissedRecommendations(dismissedData.recommendations);
       } catch (recErr) {
         console.log("Recommendations not available:", recErr);
         // Not critical - dashboard still works without recommendations
+      }
+
+      // Load teacher todos
+      try {
+        const [todosData, countsData] = await Promise.all([
+          getTeacherTodos({ status: "open" }),
+          getTeacherTodoCounts(),
+        ]);
+        setTeacherTodos(todosData.todos);
+        setTodoCounts(countsData);
+      } catch (todoErr) {
+        console.log("Teacher todos not available:", todoErr);
+        // Not critical - dashboard still works without todos
+      }
+
+      // Load attention state (single source of truth for "needs attention")
+      try {
+        const attention = await getDashboardAttentionState();
+        setAttentionState(attention);
+      } catch (attErr) {
+        console.log("Attention state not available:", attErr);
+        // Not critical - can fall back to session-based calculation
       }
     } catch (err) {
       console.error("Failed to load educator dashboard:", err);
@@ -215,21 +260,18 @@ export default function EducatorDashboard() {
   };
 
   // Recommendation handlers
-  const handleReviewRecommendation = async (id: string) => {
-    try {
-      await markRecommendationReviewed(id);
-      setRecommendations((prev) =>
-        prev.map((r) => (r.id === id ? { ...r, status: "reviewed" as const, reviewedAt: new Date().toISOString() } : r))
-      );
-    } catch (err) {
-      console.error("Failed to mark recommendation reviewed:", err);
-    }
-  };
-
   const handleDismissRecommendation = async (id: string) => {
     try {
-      await dismissRecommendation(id);
+      const result = await dismissRecommendation(id);
+      // Remove from active recommendations
       setRecommendations((prev) => prev.filter((r) => r.id !== id));
+      // Add to dismissed (archived) with updated status
+      if (result.recommendation) {
+        setDismissedRecommendations((prev) => [result.recommendation, ...prev]);
+      }
+      // Refresh attention state (cascading update)
+      const attention = await getDashboardAttentionState();
+      setAttentionState(attention);
     } catch (err) {
       console.error("Failed to dismiss recommendation:", err);
     }
@@ -250,12 +292,46 @@ export default function EducatorDashboard() {
     setRecommendationsLoading(true);
     try {
       await refreshRecommendations();
-      const recsData = await getRecommendations({ includeReviewed: true, limit: 10 });
+      // Refresh active recommendations
+      const recsData = await getRecommendations({ status: "active", limit: 10 });
       setRecommendations(recsData.recommendations);
+
+      // Also refresh pending
+      const pendingData = await getRecommendations({ status: "pending", limit: 20 });
+      setPendingRecommendations(pendingData.recommendations);
+
+      // And refresh dismissed (archived)
+      const dismissedData = await getRecommendations({ status: "dismissed", limit: 20 });
+      setDismissedRecommendations(dismissedData.recommendations);
+
+      // And refresh todos (in case actions created new ones)
+      const [todosData, countsData] = await Promise.all([
+        getTeacherTodos({ status: "open" }),
+        getTeacherTodoCounts(),
+      ]);
+      setTeacherTodos(todosData.todos);
+      setTodoCounts(countsData);
+
+      // Refresh attention state (single source of truth for "needs attention")
+      const attention = await getDashboardAttentionState();
+      setAttentionState(attention);
     } catch (err) {
       console.error("Failed to refresh recommendations:", err);
     } finally {
       setRecommendationsLoading(false);
+    }
+  };
+
+  const handleRefreshTodos = async () => {
+    try {
+      const [todosData, countsData] = await Promise.all([
+        getTeacherTodos({ status: "open" }),
+        getTeacherTodoCounts(),
+      ]);
+      setTeacherTodos(todosData.todos);
+      setTodoCounts(countsData);
+    } catch (err) {
+      console.error("Failed to refresh todos:", err);
     }
   };
 
@@ -297,19 +373,9 @@ export default function EducatorDashboard() {
 
   const { active, resolved, archivedCount } = dashboardData;
 
-  // Extract students needing attention from active assignments
-  const studentsNeedingAttention = active.flatMap(assignment =>
-    assignment.studentStatuses
-      .filter(s => s.needsSupport && !s.hasTeacherNote)
-      .map(s => ({
-        studentId: s.studentId,
-        studentName: s.studentName,
-        assignmentId: assignment.assignmentId,
-        assignmentTitle: assignment.title,
-        reason: getReasonDescription(s, assignment),
-        hasTeacherNote: s.hasTeacherNote,
-      }))
-  );
+  // Use attention state (single source of truth) for students needing attention
+  // This is derived from recommendations with status "active"
+  const studentsNeedingAttention: StudentAttentionStatus[] = attentionState?.studentsNeedingAttention || [];
 
   // Group assignments by class
   const groupAssignmentsByClass = (assignments: ComputedAssignmentState[]): ClassAssignmentGroup[] => {
@@ -389,15 +455,36 @@ export default function EducatorDashboard() {
         </div>
       </div>
 
-      {/* What Should I Do Next? - Recommendations */}
+      {/* What Should I Do Next? - Active Recommendations */}
       <RecommendationPanel
         recommendations={recommendations}
         students={allStudents}
-        onReview={handleReviewRecommendation}
         onDismiss={handleDismissRecommendation}
         onFeedback={handleRecommendationFeedback}
         onRefresh={handleRefreshRecommendations}
         loading={recommendationsLoading}
+      />
+
+      {/* Pending Recommendations - Awaiting student action (collapsed) */}
+      <PendingRecommendationsPanel
+        recommendations={pendingRecommendations}
+        onNavigate={(studentId, assignmentId) =>
+          assignmentId
+            ? navigate(`/educator/assignment/${assignmentId}/student/${studentId}`)
+            : navigate(`/educator/student/${studentId}`)
+        }
+      />
+
+      {/* Teacher To-Dos - Soft actions from checklists (collapsed) */}
+      <TeacherTodosPanel
+        todos={teacherTodos}
+        counts={todoCounts}
+        onUpdate={handleRefreshTodos}
+      />
+
+      {/* Archived - Dismissed recommendations (collapsed) */}
+      <ArchivedRecommendationsPanel
+        recommendations={dismissedRecommendations}
       />
 
       {/* Primary: Students Needing Attention */}
@@ -421,7 +508,7 @@ export default function EducatorDashboard() {
             <div>
               <h3 style={{ margin: 0, color: "#2e7d32" }}>All students on track</h3>
               <p style={{ margin: 0, color: "#666", marginTop: "4px" }}>
-                No students are flagged for review right now.
+                No students need immediate attention or check-ins right now.
               </p>
             </div>
           </div>
@@ -492,22 +579,29 @@ export default function EducatorDashboard() {
                   gap: "16px",
                 }}
               >
-                {group.assignments.map((assignment) => (
-                  <AssignmentCard
-                    key={`${group.classId}-${assignment.assignmentId}`}
-                    assignment={assignment}
-                    subject={lessonSubjects.get(assignment.assignmentId)}
-                    availableSubjects={[...new Set(classes.flatMap(c => c.subjects || []))]}
-                    onNavigate={() => navigate(`/educator/assignment/${assignment.assignmentId}`)}
-                    onArchive={() => handleArchiveAssignment(assignment.assignmentId, assignment.title)}
-                    onAddStudent={() => setAddStudentModal({
-                      isOpen: true,
-                      assignmentId: assignment.assignmentId,
-                      assignmentTitle: assignment.title,
-                    })}
-                    onSubjectChange={(subject) => handleAssignmentSubjectChange(assignment.assignmentId, subject)}
-                  />
-                ))}
+                {group.assignments.map((assignment) => {
+                  // Get attention count from attention state (single source of truth)
+                  const assignmentSummary = attentionState?.assignmentSummaries.find(
+                    (s) => s.assignmentId === assignment.assignmentId
+                  );
+                  return (
+                    <AssignmentCard
+                      key={`${group.classId}-${assignment.assignmentId}`}
+                      assignment={assignment}
+                      subject={lessonSubjects.get(assignment.assignmentId)}
+                      availableSubjects={[...new Set(classes.flatMap(c => c.subjects || []))]}
+                      attentionCount={assignmentSummary?.needingAttentionCount}
+                      onNavigate={() => navigate(`/educator/assignment/${assignment.assignmentId}`)}
+                      onArchive={() => handleArchiveAssignment(assignment.assignmentId, assignment.title)}
+                      onAddStudent={() => setAddStudentModal({
+                        isOpen: true,
+                        assignmentId: assignment.assignmentId,
+                        assignmentTitle: assignment.title,
+                      })}
+                      onSubjectChange={(subject) => handleAssignmentSubjectChange(assignment.assignmentId, subject)}
+                    />
+                  );
+                })}
               </div>
             </div>
           ))}
@@ -609,54 +703,27 @@ export default function EducatorDashboard() {
 }
 
 // ============================================
-// Helper Functions
-// ============================================
-
-function getReasonDescription(
-  student: { understanding: string; hintsUsed: number; score: number },
-  assignment: ComputedAssignmentState
-): string {
-  if (student.understanding === "needs-support") {
-    return "Needs support with understanding";
-  }
-  if (student.hintsUsed > assignment.totalStudents * 0.5) {
-    return "Used significant coach help";
-  }
-  if (student.score < 40) {
-    return "Low score on assignment";
-  }
-  return "May need follow-up";
-}
-
-// ============================================
 // Needs Attention Section
 // ============================================
 
-interface StudentAttentionItem {
-  studentId: string;
-  studentName: string;
-  assignmentId: string;
-  assignmentTitle: string;
-  reason: string;
-  hasTeacherNote: boolean;
-}
-
 interface NeedsAttentionSectionProps {
-  students: StudentAttentionItem[];
+  students: StudentAttentionStatus[];
   onNavigate: (studentId: string, assignmentId: string) => void;
 }
 
 function NeedsAttentionSection({ students, onNavigate }: NeedsAttentionSectionProps) {
+  const [isExpanded, setIsExpanded] = useState(false);
+
   // Group by student to avoid showing same student multiple times
   const uniqueStudents = students.reduce((acc, student) => {
     if (!acc.find((s) => s.studentId === student.studentId)) {
       acc.push(student);
     }
     return acc;
-  }, [] as StudentAttentionItem[]);
+  }, [] as StudentAttentionStatus[]);
 
-  // Show max 5 on dashboard
-  const displayStudents = uniqueStudents.slice(0, 5);
+  // Show max 5 on dashboard, or all if expanded
+  const displayStudents = isExpanded ? uniqueStudents : uniqueStudents.slice(0, 5);
   const hasMore = uniqueStudents.length > 5;
 
   return (
@@ -669,10 +736,10 @@ function NeedsAttentionSection({ students, onNavigate }: NeedsAttentionSectionPr
     >
       <div style={{ marginBottom: "16px" }}>
         <h3 style={{ margin: 0, color: "#e65100" }}>
-          {uniqueStudents.length} student{uniqueStudents.length !== 1 ? "s" : ""} may need your attention
+          {uniqueStudents.length} student{uniqueStudents.length !== 1 ? "s" : ""} need attention today
         </h3>
         <p style={{ margin: 0, color: "#666", marginTop: "4px" }}>
-          Click on a student to review their work and add notes
+          Students who may need a check-in or additional support
         </p>
       </div>
 
@@ -702,24 +769,25 @@ function NeedsAttentionSection({ students, onNavigate }: NeedsAttentionSectionPr
           >
             <div style={{ display: "flex", alignItems: "center", gap: "16px" }}>
               <span style={{ fontWeight: 600, color: "#333" }}>{student.studentName}</span>
-              <span style={{ color: "#666", fontSize: "0.9rem" }}>{student.assignmentTitle}</span>
-              {student.hasTeacherNote && (
-                <span title="Has your notes" style={{ fontSize: "0.85rem" }}>📝</span>
+              {student.assignmentTitle && (
+                <span style={{ color: "#666", fontSize: "0.9rem" }}>{student.assignmentTitle}</span>
               )}
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-              <span
-                style={{
-                  fontSize: "0.85rem",
-                  color: "#e65100",
-                  maxWidth: "200px",
-                  whiteSpace: "nowrap",
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                }}
-              >
-                {student.reason}
-              </span>
+              {student.attentionReason && (
+                <span
+                  style={{
+                    fontSize: "0.85rem",
+                    color: "#e65100",
+                    maxWidth: "200px",
+                    whiteSpace: "nowrap",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                  }}
+                >
+                  {student.attentionReason}
+                </span>
+              )}
               <span style={{ color: "#ff9800" }}>→</span>
             </div>
           </div>
@@ -727,9 +795,32 @@ function NeedsAttentionSection({ students, onNavigate }: NeedsAttentionSectionPr
       </div>
 
       {hasMore && (
-        <p style={{ margin: 0, marginTop: "12px", color: "#666", fontSize: "0.9rem", textAlign: "center" }}>
-          +{uniqueStudents.length - 5} more students across assignments
-        </p>
+        <button
+          onClick={() => setIsExpanded(!isExpanded)}
+          style={{
+            display: "block",
+            width: "100%",
+            marginTop: "12px",
+            padding: "8px 16px",
+            background: "transparent",
+            border: "1px solid #ffcc80",
+            borderRadius: "6px",
+            color: "#e65100",
+            fontSize: "0.9rem",
+            cursor: "pointer",
+            transition: "background 0.2s",
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.background = "#fff8e1";
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.background = "transparent";
+          }}
+        >
+          {isExpanded
+            ? "Show less"
+            : `Show ${uniqueStudents.length - 5} more student${uniqueStudents.length - 5 !== 1 ? "s" : ""}`}
+        </button>
       )}
     </div>
   );
@@ -743,14 +834,18 @@ interface AssignmentCardProps {
   assignment: ComputedAssignmentState;
   subject?: string;
   availableSubjects: string[];
+  attentionCount?: number;  // From attention state - overrides session-based count
   onNavigate: () => void;
   onArchive: () => void;
   onAddStudent: () => void;
   onSubjectChange: (subject: string | null) => Promise<void>;
 }
 
-function AssignmentCard({ assignment, subject, availableSubjects, onNavigate, onArchive, onAddStudent, onSubjectChange }: AssignmentCardProps) {
+function AssignmentCard({ assignment, subject, availableSubjects, attentionCount, onNavigate, onArchive, onAddStudent, onSubjectChange }: AssignmentCardProps) {
   const { title, totalStudents, completedCount, inProgressCount, distribution, studentsNeedingSupport, studentStatuses, assignmentId } = assignment;
+
+  // Use attention state count if available (single source of truth), otherwise fall back to session-based count
+  const effectiveNeedingAttention = attentionCount !== undefined ? attentionCount : studentsNeedingSupport;
   const [editingSubject, setEditingSubject] = useState(false);
   const [subjectValue, setSubjectValue] = useState(subject || "");
   const [originalValue, setOriginalValue] = useState(subject || "");
@@ -1006,8 +1101,8 @@ function AssignmentCard({ assignment, subject, availableSubjects, onNavigate, on
         </div>
       )}
 
-      {/* Needs Attention indicator - only show if not reviewed */}
-      {studentsNeedingSupport > 0 && !isFullyReviewed && (
+      {/* Needs Attention indicator - uses attention state (single source of truth) */}
+      {effectiveNeedingAttention > 0 && (
         <div
           style={{
             marginTop: "12px",
@@ -1018,7 +1113,7 @@ function AssignmentCard({ assignment, subject, availableSubjects, onNavigate, on
             color: "#e65100",
           }}
         >
-          {studentsNeedingSupport} student{studentsNeedingSupport !== 1 ? "s" : ""} may need attention
+          {effectiveNeedingAttention} student{effectiveNeedingAttention !== 1 ? "s" : ""} may need attention
         </div>
       )}
     </div>
@@ -1125,14 +1220,18 @@ interface CoachingActivitySectionProps {
 }
 
 function CoachingActivitySection({ activities, onNavigate }: CoachingActivitySectionProps) {
+  const [isExpanded, setIsExpanded] = useState(false);
+
   // Show support-seeking students prominently
   const supportSeeking = activities.filter((a) => a.insight.intentLabel === "support-seeking");
   const others = activities.filter((a) => a.insight.intentLabel !== "support-seeking");
 
-  // Show max 5 total
-  const displaySupport = supportSeeking.slice(0, 3);
-  const displayOthers = others.slice(0, Math.max(0, 5 - displaySupport.length));
-  const displayActivities = [...displaySupport, ...displayOthers];
+  // When collapsed: show max 5 total (support-seeking first)
+  // When expanded: show all
+  const sortedActivities = [...supportSeeking, ...others];
+  const displayActivities = isExpanded
+    ? sortedActivities
+    : [...supportSeeking.slice(0, 3), ...others.slice(0, Math.max(0, 5 - Math.min(3, supportSeeking.length)))];
   const hasMore = activities.length > 5;
 
   return (
@@ -1223,9 +1322,32 @@ function CoachingActivitySection({ activities, onNavigate }: CoachingActivitySec
       </div>
 
       {hasMore && (
-        <p style={{ margin: 0, marginTop: "12px", color: "#666", fontSize: "0.9rem", textAlign: "center" }}>
-          +{activities.length - 5} more students with coach activity
-        </p>
+        <button
+          onClick={() => setIsExpanded(!isExpanded)}
+          style={{
+            display: "block",
+            width: "100%",
+            marginTop: "12px",
+            padding: "8px 16px",
+            background: "transparent",
+            border: "1px solid #ce93d8",
+            borderRadius: "6px",
+            color: "#7b1fa2",
+            fontSize: "0.9rem",
+            cursor: "pointer",
+            transition: "background 0.2s",
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.background = "#f3e5f5";
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.background = "transparent";
+          }}
+        >
+          {isExpanded
+            ? "Show less"
+            : `Show ${activities.length - 5} more student${activities.length - 5 !== 1 ? "s" : ""}`}
+        </button>
       )}
 
       {displayActivities.length > 0 && displayActivities.some((a) => a.insight.recentTopics.length > 0) && (

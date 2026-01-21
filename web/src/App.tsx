@@ -16,6 +16,7 @@ import ClassManagement from "./pages/ClassManagement";
 import ClassDetails from "./pages/ClassDetails";
 import AssignLesson from "./pages/AssignLesson";
 import CoachSession from "./pages/CoachSession";
+import TeacherTodosPrint from "./pages/TeacherTodosPrint";
 import { ToastProvider } from "./components/Toast";
 import "./App.css";
 
@@ -43,6 +44,7 @@ function App() {
           <Route path="/educator/class/:classId" element={<ClassDetails />} />
           <Route path="/educator/class/:classId/assign-lesson" element={<AssignLesson />} />
           <Route path="/educator/assign-lesson" element={<AssignLesson />} />
+          <Route path="/educator/todos/print" element={<TeacherTodosPrint />} />
           </Routes>
         </div>
       </BrowserRouter>

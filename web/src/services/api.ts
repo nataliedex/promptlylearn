@@ -1172,7 +1172,9 @@ export type RecommendationType =
 
 export type PriorityLevel = "high" | "medium" | "low";
 export type ConfidenceScore = number; // 0.7 - 1.0
-export type RecommendationStatus = "active" | "reviewed" | "dismissed";
+export type RecommendationStatus = "active" | "reviewed" | "dismissed" | "pending" | "resolved";
+
+export type ResolutionStatus = "completed" | "pending" | "follow_up_needed";
 export type FeedbackType = "helpful" | "not-helpful";
 
 export interface Recommendation {
@@ -1217,12 +1219,118 @@ export interface Recommendation {
   reviewedBy?: string;
   feedback?: FeedbackType;
   feedbackNote?: string;
+
+  // Resolution tracking (for action outcome system)
+  outcomeId?: string;
+  resolutionStatus?: ResolutionStatus;
+  resolvedAt?: string;
+
+  // Checklist action tracking
+  submittedActions?: {
+    actionKey: string;
+    label: string;
+    submittedAt: string;
+    submittedBy: string;
+  }[];
 }
 
 export interface RecommendationStats {
   totalActive: number;
+  totalPending: number;
+  totalResolved: number;
   reviewedToday: number;
   feedbackRate: number;
+}
+
+// ============================================
+// Attention-Now Helper (Client-side)
+// ============================================
+
+/**
+ * Rule names that indicate a student needs IMMEDIATE attention (intervention/check-in).
+ */
+const ATTENTION_NOW_RULE_NAMES = [
+  "needs-support",
+  "check-in-suggested",
+  "group-support",
+];
+
+/**
+ * Insight types that should NEVER be included in attention count.
+ */
+const EXCLUDED_ATTENTION_INSIGHT_TYPES = [
+  "celebrate_progress",
+  "challenge_opportunity",
+  "monitor",
+];
+
+/**
+ * Rule names that should NEVER be included in attention count.
+ */
+const EXCLUDED_ATTENTION_RULE_NAMES = [
+  "notable-improvement",
+  "ready-for-challenge",
+  "watch-progress",
+];
+
+/**
+ * Check if a recommendation requires immediate teacher attention.
+ * This is the canonical filter for the "X students need attention today" section.
+ *
+ * EXCLUDES: Celebrate Progress, Challenge Opportunity, Monitor, etc.
+ * INCLUDES: Needs Support, Check-in Suggested, elevated Developing
+ *
+ * @param rec - The recommendation to check
+ * @returns true if this recommendation requires teacher attention NOW
+ */
+export function isAttentionNowRecommendation(rec: Recommendation): boolean {
+  // Must have active status
+  if (rec.status !== "active") {
+    return false;
+  }
+
+  const ruleName = rec.triggerData?.ruleName || "";
+  const insightType = rec.insightType;
+
+  // EXCLUDE: Celebration and enrichment categories (by insight type)
+  if (EXCLUDED_ATTENTION_INSIGHT_TYPES.includes(insightType)) {
+    return false;
+  }
+
+  // EXCLUDE: Specific non-attention rule names
+  if (EXCLUDED_ATTENTION_RULE_NAMES.includes(ruleName)) {
+    return false;
+  }
+
+  // INCLUDE: Direct attention-requiring rules
+  if (ATTENTION_NOW_RULE_NAMES.includes(ruleName)) {
+    return true;
+  }
+
+  // CONDITIONAL: Developing is only included if elevated
+  if (ruleName === "developing") {
+    const signals = rec.triggerData?.signals || {};
+    // Check for elevation indicators
+    if (signals.isElevated === true || signals.escalatedFromDeveloping === true) {
+      return true;
+    }
+    const hintUsageRate = signals.hintUsageRate as number | undefined;
+    if (hintUsageRate !== undefined && hintUsageRate > 0.5) {
+      return true;
+    }
+    const helpRequestCount = signals.helpRequestCount as number | undefined;
+    if (helpRequestCount !== undefined && helpRequestCount >= 3) {
+      return true;
+    }
+    return false;
+  }
+
+  // Fallback: check_in insight type with non-excluded rules
+  if (insightType === "check_in") {
+    return true;
+  }
+
+  return false;
 }
 
 export interface RecommendationsResponse {
@@ -1238,17 +1346,24 @@ export interface RefreshRecommendationsResponse {
 }
 
 /**
- * Get active recommendations for the educator dashboard.
+ * Get recommendations for the educator dashboard with optional status filtering.
+ *
+ * @param options.status - "active" | "pending" | "resolved" | "all" (default: "active")
+ * @param options.limit - Max number of recommendations to return
+ * @param options.assignmentId - Filter by assignment
+ * @param options.includeReviewed - (legacy) If true, same as status="all"
  */
 export async function getRecommendations(options?: {
   limit?: number;
   assignmentId?: string;
   includeReviewed?: boolean;
+  status?: "active" | "pending" | "resolved" | "reviewed" | "all";
 }): Promise<RecommendationsResponse> {
   const params = new URLSearchParams();
   if (options?.limit) params.set("limit", options.limit.toString());
   if (options?.assignmentId) params.set("assignmentId", options.assignmentId);
   if (options?.includeReviewed) params.set("includeReviewed", "true");
+  if (options?.status) params.set("status", options.status);
 
   const queryString = params.toString();
   const url = queryString
@@ -1394,4 +1509,551 @@ export async function addTeacherNoteToRecommendation(
     method: "POST",
     body: JSON.stringify({ note, teacherId }),
   });
+}
+
+// ============================================
+// Checklist Action Types
+// ============================================
+
+/**
+ * Stable action keys for the checklist system.
+ *
+ * SYSTEM ACTIONS (execute backend logic):
+ * - assign_practice: Assign practice to student(s)
+ * - reassign_student: Reassign assignment to student
+ * - award_badge: Award a badge to student
+ * - add_note: Add a teacher note
+ *
+ * SOFT ACTIONS (logged but no system mutation):
+ * - run_small_group_review: Schedule a group review session
+ * - review_responses: Review student responses
+ * - prepare_targeted_practice: Prepare targeted practice
+ * - check_in_1to1: Have a 1-on-1 conversation
+ * - discuss_extension: Discuss extension activities
+ * - explore_peer_tutoring: Explore peer tutoring
+ * - acknowledge_progress: Acknowledge student progress
+ */
+export type ChecklistActionKey =
+  | "assign_practice"
+  | "reassign_student"
+  | "award_badge"
+  | "add_note"
+  | "run_small_group_review"
+  | "review_responses"
+  | "prepare_targeted_practice"
+  | "check_in_1to1"
+  | "discuss_extension"
+  | "explore_peer_tutoring"
+  | "acknowledge_progress";
+
+/**
+ * Configuration for displaying checklist actions in the UI
+ */
+export interface ChecklistActionConfig {
+  key: ChecklistActionKey;
+  label: string;
+  description?: string;
+  isSystemAction: boolean;
+  requiresBadgeType?: boolean;
+  requiresNoteText?: boolean;
+  createsPendingState?: boolean;
+}
+
+/**
+ * All available checklist actions with their display configurations
+ */
+export const CHECKLIST_ACTIONS: Record<ChecklistActionKey, ChecklistActionConfig> = {
+  // System actions
+  assign_practice: {
+    key: "assign_practice",
+    label: "Assign additional practice",
+    description: "Push practice assignment to selected student(s)",
+    isSystemAction: true,
+    createsPendingState: true,
+  },
+  reassign_student: {
+    key: "reassign_student",
+    label: "Reassign for another attempt",
+    description: "Allow student to retry the assignment",
+    isSystemAction: true,
+    createsPendingState: true,
+  },
+  award_badge: {
+    key: "award_badge",
+    label: "Award a badge",
+    description: "Recognize student achievement with a badge",
+    isSystemAction: true,
+    requiresBadgeType: true,
+  },
+  add_note: {
+    key: "add_note",
+    label: "Add a teacher note",
+    description: "Record a private note about this student",
+    isSystemAction: true,
+    requiresNoteText: true,
+  },
+  // Soft actions
+  run_small_group_review: {
+    key: "run_small_group_review",
+    label: "Schedule a small group review session",
+    isSystemAction: false,
+  },
+  review_responses: {
+    key: "review_responses",
+    label: "Review their responses",
+    isSystemAction: false,
+  },
+  prepare_targeted_practice: {
+    key: "prepare_targeted_practice",
+    label: "Prepare targeted practice activities",
+    isSystemAction: false,
+  },
+  check_in_1to1: {
+    key: "check_in_1to1",
+    label: "Have a 1-on-1 conversation",
+    isSystemAction: false,
+  },
+  discuss_extension: {
+    key: "discuss_extension",
+    label: "Discuss extension activities",
+    isSystemAction: false,
+  },
+  explore_peer_tutoring: {
+    key: "explore_peer_tutoring",
+    label: "Explore peer tutoring opportunities",
+    isSystemAction: false,
+  },
+  acknowledge_progress: {
+    key: "acknowledge_progress",
+    label: "Acknowledge their progress",
+    isSystemAction: false,
+  },
+};
+
+/**
+ * Get checklist actions available for a given recommendation category
+ */
+export function getChecklistActionsForCategory(
+  categoryKey: string,
+  options: {
+    hasAssignmentId: boolean;
+    isGrouped: boolean;
+    studentCount: number;
+  }
+): ChecklistActionKey[] {
+  const actions: ChecklistActionKey[] = [];
+
+  switch (categoryKey) {
+    case "needs-support":
+      if (options.isGrouped) {
+        actions.push("assign_practice");
+        actions.push("run_small_group_review");
+        actions.push("review_responses");
+        actions.push("prepare_targeted_practice");
+      } else {
+        if (options.hasAssignmentId) {
+          actions.push("reassign_student");
+        }
+        actions.push("review_responses");
+        actions.push("check_in_1to1");
+        actions.push("add_note");
+      }
+      break;
+
+    case "group-review":
+      actions.push("assign_practice");
+      actions.push("run_small_group_review");
+      actions.push("review_responses");
+      actions.push("prepare_targeted_practice");
+      break;
+
+    case "developing":
+      actions.push("check_in_1to1");
+      actions.push("prepare_targeted_practice");
+      actions.push("add_note");
+      break;
+
+    case "check-in-suggested":
+      actions.push("check_in_1to1");
+      if (options.hasAssignmentId) {
+        actions.push("reassign_student");
+      }
+      actions.push("add_note");
+      break;
+
+    case "celebrate-progress":
+      // Only award badge option for celebration - message is optional
+      actions.push("award_badge");
+      break;
+
+    case "challenge-opportunity":
+      actions.push("discuss_extension");
+      actions.push("explore_peer_tutoring");
+      actions.push("award_badge");
+      actions.push("add_note");
+      break;
+
+    case "administrative":
+      actions.push("review_responses");
+      actions.push("add_note");
+      break;
+
+    default:
+      actions.push("review_responses");
+      actions.push("add_note");
+  }
+
+  return actions;
+}
+
+/**
+ * Request payload for submitting checklist actions
+ */
+export interface SubmitChecklistRequest {
+  selectedActionKeys: ChecklistActionKey[];
+  noteText?: string;
+  badgeType?: string;
+  badgeMessage?: string;
+  teacherId?: string;
+}
+
+/**
+ * A single recorded checklist action entry
+ */
+export interface ChecklistActionEntry {
+  id: string;
+  recommendationId: string;
+  actionKey: ChecklistActionKey;
+  label: string;
+  isSystemAction: boolean;
+  executedAt: string;
+  executedBy: string;
+  metadata?: {
+    noteText?: string;
+    badgeType?: string;
+    badgeMessage?: string;
+    affectedStudentIds?: string[];
+    affectedAssignmentId?: string;
+  };
+}
+
+/**
+ * Response from submitting checklist actions
+ */
+export interface SubmitChecklistResponse {
+  success: boolean;
+  recommendation: Recommendation;
+  actionEntries: ChecklistActionEntry[];
+  systemActionsExecuted: ChecklistActionKey[];
+  newStatus: RecommendationStatus;
+}
+
+/**
+ * Submit selected checklist actions for a recommendation.
+ * Executes system actions and logs all selected items.
+ */
+export async function submitChecklistActions(
+  recommendationId: string,
+  payload: SubmitChecklistRequest
+): Promise<SubmitChecklistResponse> {
+  return fetchJson(`${API_BASE}/recommendations/${recommendationId}/actions/submit-checklist`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+// ============================================
+// Teacher To-Do Types
+// ============================================
+
+export type TeacherTodoStatus = "open" | "done";
+
+/**
+ * A teacher to-do item created from soft checklist actions.
+ */
+export interface TeacherTodo {
+  id: string;
+  teacherId: string;
+  recommendationId: string;
+
+  // Action details
+  actionKey: ChecklistActionKey;
+  label: string;
+
+  // Context for display
+  classId?: string;
+  className?: string;
+  subject?: string;
+  assignmentId?: string;
+  assignmentTitle?: string;
+  studentIds?: string[];
+  studentNames?: string;
+
+  // Status tracking
+  status: TeacherTodoStatus;
+  createdAt: string;
+  doneAt?: string;
+}
+
+/**
+ * Todos grouped by class for display/printing
+ */
+export interface TodosByClass {
+  classId: string | null;
+  className: string;
+  subjects: TodosBySubject[];
+  todoCount: number;
+}
+
+/**
+ * Todos grouped by subject within a class
+ */
+export interface TodosBySubject {
+  subject: string | null;
+  assignments: TodosByAssignment[];
+  todoCount: number;
+}
+
+/**
+ * Todos grouped by assignment within a subject
+ */
+export interface TodosByAssignment {
+  assignmentId: string | null;
+  assignmentTitle: string | null;
+  todos: TeacherTodo[];
+}
+
+/**
+ * Response from getting teacher todos
+ */
+export interface GetTeacherTodosResponse {
+  todos: TeacherTodo[];
+  count: number;
+  openCount: number;
+  doneCount: number;
+  grouped?: TodosByClass[];
+}
+
+/**
+ * Response from creating teacher todos
+ */
+export interface CreateTeacherTodosResponse {
+  success: boolean;
+  todos: TeacherTodo[];
+  count: number;
+  totalOpen: number;
+}
+
+/**
+ * Teacher todo counts for badges/indicators
+ */
+export interface TeacherTodoCounts {
+  total: number;
+  open: number;
+  done: number;
+}
+
+// ============================================
+// Teacher To-Do API Functions
+// ============================================
+
+/**
+ * Get teacher todos with optional filtering.
+ */
+export async function getTeacherTodos(options?: {
+  status?: TeacherTodoStatus;
+  teacherId?: string;
+  classId?: string;
+  grouped?: boolean;
+}): Promise<GetTeacherTodosResponse> {
+  const params = new URLSearchParams();
+  if (options?.status) params.set("status", options.status);
+  if (options?.teacherId) params.set("teacherId", options.teacherId);
+  if (options?.classId) params.set("classId", options.classId);
+  if (options?.grouped) params.set("grouped", "true");
+
+  const queryString = params.toString();
+  const url = queryString
+    ? `${API_BASE}/teacher-todos?${queryString}`
+    : `${API_BASE}/teacher-todos`;
+
+  return fetchJson(url);
+}
+
+/**
+ * Get a single teacher todo by ID.
+ */
+export async function getTeacherTodo(id: string): Promise<{ todo: TeacherTodo }> {
+  return fetchJson(`${API_BASE}/teacher-todos/${id}`);
+}
+
+/**
+ * Mark a teacher todo as complete.
+ */
+export async function completeTeacherTodo(
+  id: string
+): Promise<{ success: boolean; todo: TeacherTodo; totalOpen: number }> {
+  return fetchJson(`${API_BASE}/teacher-todos/${id}/complete`, {
+    method: "POST",
+  });
+}
+
+/**
+ * Reopen a completed teacher todo.
+ */
+export async function reopenTeacherTodo(
+  id: string
+): Promise<{ success: boolean; todo: TeacherTodo; totalOpen: number }> {
+  return fetchJson(`${API_BASE}/teacher-todos/${id}/reopen`, {
+    method: "POST",
+  });
+}
+
+/**
+ * Delete a teacher todo.
+ */
+export async function deleteTeacherTodo(id: string): Promise<{ success: boolean }> {
+  return fetchJson(`${API_BASE}/teacher-todos/${id}`, {
+    method: "DELETE",
+  });
+}
+
+/**
+ * Get teacher todo counts for badges/indicators.
+ */
+export async function getTeacherTodoCounts(teacherId?: string): Promise<TeacherTodoCounts> {
+  const params = new URLSearchParams();
+  if (teacherId) params.set("teacherId", teacherId);
+
+  const queryString = params.toString();
+  const url = queryString
+    ? `${API_BASE}/teacher-todos/stats/counts?${queryString}`
+    : `${API_BASE}/teacher-todos/stats/counts`;
+
+  return fetchJson(url);
+}
+
+// ============================================
+// Attention State Types
+// ============================================
+
+/**
+ * Attention status for a single student on a specific assignment.
+ * This is the single source of truth for "needs attention" state.
+ */
+export interface StudentAttentionStatus {
+  studentId: string;
+  studentName: string;
+  assignmentId: string;
+  assignmentTitle?: string;
+  needsAttention: boolean;
+  attentionReason?: string;
+  activeRecommendationIds: string[];
+  pendingRecommendationIds: string[];
+  resolvedRecommendationIds: string[];
+}
+
+/**
+ * Summary of attention state for an assignment/lesson
+ */
+export interface AssignmentAttentionSummary {
+  assignmentId: string;
+  assignmentTitle?: string;
+  totalStudents: number;
+  needingAttentionCount: number;
+  pendingCount: number;
+  resolvedCount: number;
+  studentsNeedingAttention: StudentAttentionStatus[];
+  studentsPending: StudentAttentionStatus[];
+}
+
+/**
+ * Full attention state for dashboard
+ */
+export interface DashboardAttentionState {
+  studentsNeedingAttention: StudentAttentionStatus[];
+  totalNeedingAttention: number;
+  assignmentSummaries: AssignmentAttentionSummary[];
+  pendingCount: number;
+}
+
+/**
+ * Attention counts for dashboard badges
+ */
+export interface AttentionCounts {
+  totalNeedingAttention: number;
+  pendingCount: number;
+  byAssignment: Record<string, number>;
+}
+
+// ============================================
+// Attention State API Functions
+// ============================================
+
+/**
+ * Get full dashboard attention state.
+ * This is the single source of truth for all "needs attention" UI.
+ */
+export async function getDashboardAttentionState(): Promise<DashboardAttentionState> {
+  return fetchJson(`${API_BASE}/attention`);
+}
+
+/**
+ * Get students needing attention with optional filtering.
+ */
+export async function getStudentsNeedingAttention(options?: {
+  assignmentId?: string;
+  classId?: string;
+}): Promise<{ students: StudentAttentionStatus[]; count: number }> {
+  const params = new URLSearchParams();
+  if (options?.assignmentId) params.set("assignmentId", options.assignmentId);
+  if (options?.classId) params.set("classId", options.classId);
+
+  const queryString = params.toString();
+  const url = queryString
+    ? `${API_BASE}/attention/students?${queryString}`
+    : `${API_BASE}/attention/students`;
+
+  return fetchJson(url);
+}
+
+/**
+ * Get attention summary for a specific assignment.
+ */
+export async function getAssignmentAttentionSummary(
+  assignmentId: string
+): Promise<AssignmentAttentionSummary> {
+  return fetchJson(`${API_BASE}/attention/assignment/${assignmentId}`);
+}
+
+/**
+ * Get attention counts for dashboard badges.
+ */
+export async function getAttentionCounts(): Promise<AttentionCounts> {
+  return fetchJson(`${API_BASE}/attention/counts`);
+}
+
+/**
+ * Check if a specific student needs attention.
+ */
+export async function checkStudentAttention(
+  studentId: string,
+  assignmentId?: string
+): Promise<{
+  studentId: string;
+  needsAttention: boolean;
+  activeRecommendationCount: number;
+  pendingRecommendationCount: number;
+  activeRecommendationIds: string[];
+  pendingRecommendationIds: string[];
+}> {
+  const params = new URLSearchParams();
+  if (assignmentId) params.set("assignmentId", assignmentId);
+
+  const queryString = params.toString();
+  const url = queryString
+    ? `${API_BASE}/attention/student/${studentId}?${queryString}`
+    : `${API_BASE}/attention/student/${studentId}`;
+
+  return fetchJson(url);
 }

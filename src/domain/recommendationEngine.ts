@@ -22,8 +22,12 @@ import {
   StudentPerformanceData,
   AssignmentAggregateData,
   RECOMMENDATION_CONFIG,
+  mustRemainIndividual,
+  ruleAllowsGrouping,
+  GROUPING_RULES,
 } from "./recommendation";
 import { recommendationStore } from "../stores/recommendationStore";
+import { actionOutcomeStore } from "../stores/actionOutcomeStore";
 
 // ============================================
 // Priority Calculation
@@ -33,7 +37,8 @@ export function computePriority(
   type: RecommendationType,
   priorityLevel: PriorityLevel,
   createdAt: string,
-  studentCount: number
+  studentCount: number,
+  insightType?: InsightType
 ): number {
   const config = RECOMMENDATION_CONFIG;
   let priority = config.PRIORITY_BASE;
@@ -85,6 +90,12 @@ export function computePriority(
     priority += config.PRIORITY_LARGE_GROUP_BONUS;
   }
 
+  // Individual-only categories get a boost to ensure they surface
+  // (celebrate_progress, challenge_opportunity should never be suppressed)
+  if (insightType && GROUPING_RULES[insightType] === "individual_only") {
+    priority += config.PRIORITY_INDIVIDUAL_ONLY_BOOST;
+  }
+
   return Math.min(100, Math.max(1, priority));
 }
 
@@ -129,7 +140,13 @@ function createInsight(params: CreateInsightParams): Recommendation {
     reason: params.evidence.join("; "),
     suggestedAction: params.suggestedTeacherActions[0] || "",
     confidence: params.priorityLevel,
-    priority: computePriority(params.legacyType, params.priorityLevel, now, params.studentIds.length),
+    priority: computePriority(
+      params.legacyType,
+      params.priorityLevel,
+      now,
+      params.studentIds.length,
+      params.insightType
+    ),
 
     // Context
     studentIds: params.studentIds,
@@ -150,6 +167,17 @@ function createInsight(params: CreateInsightParams): Recommendation {
 // Rule 1: Check-in Insight (Student May Need Support)
 // ============================================
 
+/**
+ * Detect students who need support.
+ *
+ * Needs Support criteria (any of these triggers):
+ * - Score < 50% (NEEDS_SUPPORT_SCORE threshold)
+ * - Hint/coach usage > 50% (NEEDS_SUPPORT_HINT_THRESHOLD)
+ * - Support-seeking coach pattern with low score
+ *
+ * Note: The "OR" logic means heavy hint usage ALONE is enough to trigger,
+ * even if the score is above the threshold.
+ */
 function detectCheckInNeeds(students: StudentPerformanceData[]): Recommendation[] {
   const recommendations: Recommendation[] = [];
   const config = RECOMMENDATION_CONFIG;
@@ -157,6 +185,14 @@ function detectCheckInNeeds(students: StudentPerformanceData[]): Recommendation[
   for (const student of students) {
     // Skip if teacher already left a note
     if (student.hasTeacherNote) continue;
+
+    // Skip if there's a pending reassign for this student+assignment (smart duplicate prevention)
+    if (
+      student.assignmentId &&
+      recommendationStore.hasPendingForStudentAssignment(student.studentId, student.assignmentId)
+    ) {
+      continue;
+    }
 
     let triggered = false;
     let confidenceScore: ConfidenceScore = 0.75;
@@ -170,33 +206,56 @@ function detectCheckInNeeds(students: StudentPerformanceData[]): Recommendation[
       hasTeacherNote: student.hasTeacherNote,
     };
 
-    // Condition 1: Very low score
-    if (student.score < config.STRUGGLING_THRESHOLD) {
+    // Condition 1: Score below threshold (< 50%)
+    if (student.score < config.NEEDS_SUPPORT_SCORE) {
       triggered = true;
       confidenceScore = 0.9;
       priorityLevel = "high";
-      evidence.push(`Scored ${student.score}% on ${student.assignmentTitle}`);
+      evidence.push(`Scored ${Math.round(student.score)}% on ${student.assignmentTitle}`);
     }
 
-    // Condition 2: Heavy hint usage with below-developing score
-    if (
-      student.hintUsageRate > config.HEAVY_HINT_USAGE &&
-      student.score < config.DEVELOPING_THRESHOLD
-    ) {
+    // Condition 2: Heavy hint/coach usage (> 50%) - triggers even with passing score
+    // This is the key change: hint usage alone is sufficient for "Needs Support"
+    if (student.hintUsageRate > config.NEEDS_SUPPORT_HINT_THRESHOLD) {
       triggered = true;
       confidenceScore = Math.max(confidenceScore, 0.85);
       priorityLevel = "high";
       evidence.push(`Used hints on ${Math.round(student.hintUsageRate * 100)}% of questions`);
       if (!evidence.some(e => e.includes("Scored"))) {
-        evidence.push(`Scored ${student.score}% on ${student.assignmentTitle}`);
+        evidence.push(`Scored ${Math.round(student.score)}% on ${student.assignmentTitle}`);
       }
     }
 
-    // Condition 3: Support-seeking coach pattern with below-developing score
-    if (student.coachIntent === "support-seeking" && student.score < 50) {
+    // Condition 3: Support-seeking coach pattern with low score
+    if (student.coachIntent === "support-seeking" && student.score < config.NEEDS_SUPPORT_SCORE) {
       triggered = true;
       confidenceScore = Math.max(confidenceScore, 0.8);
       evidence.push("Coach conversations suggest seeking support");
+    }
+
+    // Condition 4: ESCALATION - Student in "Developing" range but with excessive help requests
+    // This catches students who would otherwise be "Developing" but have escalated need
+    const wouldBeDeveloping =
+      student.score >= config.NEEDS_SUPPORT_SCORE &&
+      student.score < config.DEVELOPING_UPPER &&
+      student.hintUsageRate >= config.DEVELOPING_HINT_MIN &&
+      student.hintUsageRate <= config.DEVELOPING_HINT_MAX;
+
+    if (
+      wouldBeDeveloping &&
+      student.helpRequestCount !== undefined &&
+      student.helpRequestCount >= config.ESCALATION_HELP_REQUESTS
+    ) {
+      triggered = true;
+      confidenceScore = Math.max(confidenceScore, 0.85);
+      priorityLevel = "high";
+      evidence.push(`${student.helpRequestCount} help requests in coach sessions`);
+      evidence.push("Pattern suggests escalated support need");
+      if (!evidence.some(e => e.includes("Scored"))) {
+        evidence.push(`Scored ${Math.round(student.score)}% on ${student.assignmentTitle}`);
+      }
+      signals.escalatedFromDeveloping = true;
+      signals.helpRequestCount = student.helpRequestCount;
     }
 
     // Only surface if meets minimum confidence threshold
@@ -209,7 +268,7 @@ function detectCheckInNeeds(students: StudentPerformanceData[]): Recommendation[
       const rec = createInsight({
         insightType: "check_in",
         legacyType: "individual-checkin",
-        summary: `${student.studentName} may benefit from a check-in`,
+        summary: `${student.studentName} may need support`,
         evidence,
         suggestedTeacherActions: [
           "Review their responses to understand where they encountered difficulty",
@@ -226,6 +285,118 @@ function detectCheckInNeeds(students: StudentPerformanceData[]): Recommendation[
 
       recommendations.push(rec);
     }
+  }
+
+  return recommendations;
+}
+
+// ============================================
+// Rule 1b: Developing (Student Making Progress but Needs Guidance)
+// ============================================
+
+/**
+ * Detect students who are developing - making progress but may need guidance.
+ *
+ * Developing criteria (ALL must be true):
+ * - Score between 50% and 79% (inclusive of 50, exclusive of 80)
+ * - Hint/coach usage between 25% and 50% (inclusive)
+ *
+ * This is an INDIVIDUAL-ONLY category - never grouped.
+ *
+ * Key distinction from "Needs Support":
+ * - Needs Support: score < 50% OR hint usage > 50%
+ * - Developing: score 50-79% AND hint usage 25-50%
+ *
+ * Students who don't meet either criteria are considered "on track" and
+ * won't generate a recommendation.
+ */
+function detectDeveloping(students: StudentPerformanceData[]): Recommendation[] {
+  const recommendations: Recommendation[] = [];
+  const config = RECOMMENDATION_CONFIG;
+
+  for (const student of students) {
+    // Skip if teacher already left a note
+    if (student.hasTeacherNote) continue;
+
+    // Skip if there's a pending reassign for this student+assignment
+    if (
+      student.assignmentId &&
+      recommendationStore.hasPendingForStudentAssignment(student.studentId, student.assignmentId)
+    ) {
+      continue;
+    }
+
+    // Check if student fits "Developing" criteria
+    // Score: >= 50% AND < 80%
+    const scoreInRange =
+      student.score >= config.NEEDS_SUPPORT_SCORE &&
+      student.score < config.DEVELOPING_UPPER;
+
+    // Hint usage: >= 25% AND <= 50%
+    const hintInRange =
+      student.hintUsageRate >= config.DEVELOPING_HINT_MIN &&
+      student.hintUsageRate <= config.DEVELOPING_HINT_MAX;
+
+    // Must meet BOTH criteria
+    if (!scoreInRange || !hintInRange) continue;
+
+    // Check for ESCALATION: if help request count exceeds threshold, skip
+    // (student will be picked up by detectCheckInNeeds as "needs-support" instead)
+    if (
+      student.helpRequestCount !== undefined &&
+      student.helpRequestCount >= config.ESCALATION_HELP_REQUESTS
+    ) {
+      continue;
+    }
+
+    // Check for duplicate
+    if (recommendationStore.exists("developing", [student.studentId], student.assignmentId)) {
+      continue;
+    }
+
+    // Also skip if student already has a "needs-support" recommendation
+    // (needs-support takes priority)
+    if (recommendationStore.exists("needs-support", [student.studentId], student.assignmentId)) {
+      continue;
+    }
+
+    const evidence: string[] = [
+      `Scored ${Math.round(student.score)}% on ${student.assignmentTitle}`,
+      `Used hints on ${Math.round(student.hintUsageRate * 100)}% of questions`,
+      "Showing progress but may benefit from targeted guidance",
+    ];
+
+    const signals: Record<string, any> = {
+      studentName: student.studentName,
+      score: student.score,
+      hintUsageRate: student.hintUsageRate,
+      coachIntent: student.coachIntent,
+      hasTeacherNote: student.hasTeacherNote,
+    };
+
+    // Developing is medium priority with moderate confidence
+    const confidenceScore: ConfidenceScore = 0.78;
+    const priorityLevel: PriorityLevel = "medium";
+
+    const rec = createInsight({
+      insightType: "check_in",
+      legacyType: "individual-checkin",
+      summary: `${student.studentName} is developing understanding`,
+      evidence,
+      suggestedTeacherActions: [
+        "Check in to see what concepts are still unclear",
+        "Consider targeted practice on specific areas",
+        "Pair with a peer for collaborative learning",
+      ],
+      priorityLevel,
+      confidenceScore,
+      studentIds: [student.studentId],
+      assignmentId: student.assignmentId,
+      ruleName: "developing", // Individual-only rule
+      signals,
+    });
+
+    recommendations.push(rec);
   }
 
   return recommendations;
@@ -322,7 +493,7 @@ function detectChallengeOpportunities(students: StudentPerformanceData[]): Recom
       student.hintUsageRate < config.MINIMAL_HINT_USAGE
     ) {
       triggered = true;
-      evidence.push(`Scored ${student.score}% on ${student.assignmentTitle}`);
+      evidence.push(`Scored ${Math.round(student.score)}% on ${student.assignmentTitle}`);
       evidence.push(`Used hints on only ${Math.round(student.hintUsageRate * 100)}% of questions`);
 
       // Boost confidence if also enrichment-seeking
@@ -388,9 +559,17 @@ function detectCelebrateProgress(students: StudentPerformanceData[]): Recommenda
 
     // Significant improvement AND decent final score
     if (improvement >= config.SIGNIFICANT_IMPROVEMENT && student.score >= config.DEVELOPING_THRESHOLD) {
-      // Check for duplicate
+      // Check for duplicate recommendation
       if (
         recommendationStore.exists("notable-improvement", [student.studentId], student.assignmentId)
+      ) {
+        continue;
+      }
+
+      // Skip if already celebrated with a badge (smart duplicate prevention)
+      if (
+        student.assignmentId &&
+        actionOutcomeStore.hasCompletedBadgeForAssignment(student.studentId, student.assignmentId)
       ) {
         continue;
       }
@@ -403,7 +582,7 @@ function detectCelebrateProgress(students: StudentPerformanceData[]): Recommenda
         legacyType: "celebrate",
         summary: `${student.studentName} showed notable improvement`,
         evidence: [
-          `Improved from ${student.previousScore}% to ${student.score}% (+${improvement} points)`,
+          `Improved from ${Math.round(student.previousScore!)}% to ${Math.round(student.score)}% (+${Math.round(improvement)} points)`,
           `Assignment: ${student.assignmentTitle}`,
         ],
         suggestedTeacherActions: [
@@ -492,22 +671,76 @@ function detectMonitorSituations(aggregates: AssignmentAggregateData[]): Recomme
 }
 
 // ============================================
-// One Insight Per Student Per Assignment
+// Grouping Enforcement and Deduplication
 // ============================================
 
 /**
+ * Validates that grouped recommendations follow the grouping rules.
+ * Returns recommendations with invalid groupings converted to individual ones.
+ */
+function enforceGroupingRules(recommendations: Recommendation[]): Recommendation[] {
+  const result: Recommendation[] = [];
+
+  for (const rec of recommendations) {
+    const isGrouped = rec.studentIds.length > 1;
+    const ruleName = rec.triggerData.ruleName;
+
+    if (isGrouped) {
+      // Check if this recommendation type/rule allows grouping
+      if (mustRemainIndividual(rec.insightType, ruleName)) {
+        // This should not be grouped - split into individual recommendations
+        // (This is a safety check; rules should not create grouped items for these types)
+        console.warn(
+          `Warning: Recommendation ${rec.id} with type "${rec.insightType}" and rule "${ruleName}" ` +
+          `should not be grouped. Keeping as-is but this indicates a rule implementation issue.`
+        );
+      }
+    }
+
+    result.push(rec);
+  }
+
+  return result;
+}
+
+/**
  * Apply the one-insight-per-student-per-assignment constraint.
- * When multiple insights exist for the same student on the same assignment,
- * keep only the highest priority one.
+ *
+ * IMPORTANT: This constraint only applies to GROUPABLE categories.
+ * Individual-only categories (celebrate_progress, challenge_opportunity) are NEVER filtered.
+ *
+ * Rules:
+ * 1. celebrate_progress and challenge_opportunity ALWAYS surface (never deduplicated)
+ * 2. For groupable categories (check_in, monitor), apply one-per-student-per-assignment
+ * 3. When choosing between groupable insights, use priority order
  */
 function applyOneInsightConstraint(recommendations: Recommendation[]): Recommendation[] {
   const config = RECOMMENDATION_CONFIG;
   const priorityOrder = config.INSIGHT_PRIORITY_ORDER;
 
-  // Group by student+assignment
-  const byStudentAssignment = new Map<string, Recommendation[]>();
+  // Separate individual-only (always kept) from groupable (may be deduplicated)
+  const alwaysKept: Recommendation[] = [];
+  const groupableRecs: Recommendation[] = [];
 
   for (const rec of recommendations) {
+    // Individual-only categories are NEVER filtered out
+    if (GROUPING_RULES[rec.insightType] === "individual_only") {
+      alwaysKept.push(rec);
+    } else {
+      groupableRecs.push(rec);
+    }
+  }
+
+  // For groupable recommendations, apply one-insight-per-student-per-assignment
+  const byStudentAssignment = new Map<string, Recommendation[]>();
+
+  for (const rec of groupableRecs) {
+    // Assignment-level recommendations (no students) are always kept
+    if (rec.studentIds.length === 0) {
+      alwaysKept.push(rec);
+      continue;
+    }
+
     for (const studentId of rec.studentIds) {
       const key = `${studentId}:${rec.assignmentId || "no-assignment"}`;
       if (!byStudentAssignment.has(key)) {
@@ -517,12 +750,12 @@ function applyOneInsightConstraint(recommendations: Recommendation[]): Recommend
     }
   }
 
-  // For each student+assignment, keep only the highest priority insight
-  const keptIds = new Set<string>();
+  // For each student+assignment, keep only the highest priority GROUPABLE insight
+  const keptGroupableIds = new Set<string>();
 
   for (const [, recs] of byStudentAssignment) {
     if (recs.length === 1) {
-      keptIds.add(recs[0].id);
+      keptGroupableIds.add(recs[0].id);
     } else {
       // Sort by insight type priority (higher index = higher priority)
       recs.sort((a, b) => {
@@ -535,14 +768,48 @@ function applyOneInsightConstraint(recommendations: Recommendation[]): Recommend
         return bPriority - aPriority;
       });
       // Keep the highest priority one
-      keptIds.add(recs[0].id);
+      keptGroupableIds.add(recs[0].id);
     }
   }
 
-  // Return only kept recommendations (plus any assignment-level ones with no students)
-  return recommendations.filter(
-    rec => keptIds.has(rec.id) || rec.studentIds.length === 0
-  );
+  // Combine: always-kept + deduplicated groupable
+  const keptGroupable = groupableRecs.filter(rec => keptGroupableIds.has(rec.id));
+
+  return [...alwaysKept, ...keptGroupable];
+}
+
+/**
+ * Limit grouped recommendations to prevent them from crowding out individual items.
+ * Prioritizes high-priority individuals over low-priority groups.
+ */
+function applyGroupedLimit(recommendations: Recommendation[]): Recommendation[] {
+  const config = RECOMMENDATION_CONFIG;
+
+  // Separate grouped (multi-student) from individual (single student or assignment-level)
+  const grouped: Recommendation[] = [];
+  const individual: Recommendation[] = [];
+
+  for (const rec of recommendations) {
+    if (rec.studentIds.length > 1) {
+      grouped.push(rec);
+    } else {
+      individual.push(rec);
+    }
+  }
+
+  // Sort grouped by priority (highest first)
+  grouped.sort((a, b) => b.priority - a.priority);
+
+  // Limit grouped recommendations
+  const limitedGrouped = grouped.slice(0, config.MAX_GROUPED_RECOMMENDATIONS);
+
+  // Combine: all individuals + limited groups
+  const combined = [...individual, ...limitedGrouped];
+
+  // Sort final result by priority
+  combined.sort((a, b) => b.priority - a.priority);
+
+  return combined;
 }
 
 // ============================================
@@ -560,7 +827,9 @@ export interface GenerateRecommendationsResult {
  *
  * Key principles:
  * - Conservative approach: Only surface insights with strong evidence (confidence >= 0.7)
- * - One insight per student per assignment (prioritize highest value)
+ * - One insight per student per assignment for GROUPABLE categories only
+ * - Individual-only categories (celebrate, challenge) ALWAYS surface
+ * - Grouped recommendations are limited to prevent crowding out individuals
  * - Teacher-actionable, non-judgmental language
  *
  * @param students - Individual student performance data
@@ -571,36 +840,42 @@ export function generateRecommendations(
   students: StudentPerformanceData[],
   aggregates: AssignmentAggregateData[]
 ): GenerateRecommendationsResult {
-  const allRecommendations: Recommendation[] = [];
-
   // Run all detection rules
-  const checkIns = detectCheckInNeeds(students);
+  const checkIns = detectCheckInNeeds(students);          // Needs Support
+  const developing = detectDeveloping(students);          // Developing
   const groupCheckIns = detectGroupCheckIn(students, aggregates);
   const challenges = detectChallengeOpportunities(students);
   const celebrations = detectCelebrateProgress(students);
   const monitors = detectMonitorSituations(aggregates);
 
-  const beforeConstraint = [
+  const rawRecommendations = [
     ...checkIns,
+    ...developing,
     ...groupCheckIns,
     ...challenges,
     ...celebrations,
     ...monitors,
   ];
 
-  // Apply one-insight-per-student-per-assignment constraint
-  const afterConstraint = applyOneInsightConstraint(beforeConstraint);
-  allRecommendations.push(...afterConstraint);
+  // Step 1: Enforce grouping rules (validate that grouped items are allowed)
+  const afterGroupingEnforcement = enforceGroupingRules(rawRecommendations);
+
+  // Step 2: Apply one-insight-per-student-per-assignment (only for GROUPABLE categories)
+  // Individual-only categories (celebrate_progress, challenge_opportunity) are NEVER filtered
+  const afterDeduplication = applyOneInsightConstraint(afterGroupingEnforcement);
+
+  // Step 3: Limit grouped recommendations to prevent crowding out individual items
+  const finalRecommendations = applyGroupedLimit(afterDeduplication);
 
   // Save all new recommendations
-  if (allRecommendations.length > 0) {
-    recommendationStore.saveMany(allRecommendations);
+  if (finalRecommendations.length > 0) {
+    recommendationStore.saveMany(finalRecommendations);
   }
 
   return {
-    generated: allRecommendations,
+    generated: finalRecommendations,
     skippedDuplicates: 0, // Duplicates are filtered within each rule
-    filteredByConstraint: beforeConstraint.length - afterConstraint.length,
+    filteredByConstraint: rawRecommendations.length - finalRecommendations.length,
   };
 }
 

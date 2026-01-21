@@ -12,13 +12,18 @@
 import { useState, useEffect, useMemo } from "react";
 import {
   type Recommendation,
-  type InsightType,
   type FeedbackType,
   type BadgeTypeInfo,
+  type RecommendationStats,
+  type ChecklistActionKey,
+  type SubmitChecklistResponse,
   getBadgeTypes,
   reassignToStudent,
   awardBadgeToStudent,
   addTeacherNoteToRecommendation,
+  submitChecklistActions,
+  CHECKLIST_ACTIONS,
+  getChecklistActionsForCategory,
 } from "../services/api";
 
 // ============================================
@@ -33,16 +38,16 @@ function formatSignals(signals: Record<string, unknown>): string[] {
 
     switch (key) {
       case "score":
-        lines.push(`Score: ${value}%`);
+        lines.push(`Score: ${Math.round(value as number)}%`);
         break;
       case "previousScore":
-        lines.push(`Previous score: ${value}%`);
+        lines.push(`Previous score: ${Math.round(value as number)}%`);
         break;
       case "currentScore":
-        lines.push(`Current score: ${value}%`);
+        lines.push(`Current score: ${Math.round(value as number)}%`);
         break;
       case "improvement":
-        lines.push(`Improvement: +${value}%`);
+        lines.push(`Improvement: +${Math.round(value as number)}%`);
         break;
       case "averageScore":
         lines.push(`Class average: ${Math.round(value as number)}%`);
@@ -72,13 +77,21 @@ function formatSignals(signals: Record<string, unknown>): string[] {
         lines.push(`Class: ${value}`);
         break;
       case "completionRate":
-        lines.push(`Completion rate: ${value}%`);
+        lines.push(`Completion rate: ${Math.round(value as number)}%`);
         break;
       case "completedCount":
         lines.push(`Completed: ${value} students`);
         break;
       case "daysSinceAssigned":
         lines.push(`Days since assigned: ${value}`);
+        break;
+      case "helpRequestCount":
+        lines.push(`Help requests: ${value}`);
+        break;
+      case "escalatedFromDeveloping":
+        if (value) {
+          lines.push("⚠️ Escalated from Developing due to repeated help requests");
+        }
         break;
       default:
         // Fallback for any other signals
@@ -90,150 +103,154 @@ function formatSignals(signals: Record<string, unknown>): string[] {
 }
 
 // ============================================
-// Color and Icon Mapping for New Insight Types
+// Category Configuration
 // ============================================
 
-const INSIGHT_CONFIG: Record<
-  InsightType,
-  { color: string; bgColor: string; icon: string; label: string }
-> = {
-  check_in: {
-    color: "#c62828",
-    bgColor: "#ffebee",
-    icon: "💬",
-    label: "Check-in",
-  },
-  challenge_opportunity: {
-    color: "#2e7d32",
-    bgColor: "#e8f5e9",
-    icon: "🚀",
-    label: "Challenge",
-  },
-  celebrate_progress: {
+/**
+ * Display categories for the "What Should I Do Next?" panel
+ *
+ * Categories are determined by a combination of insight type AND rule name:
+ * - INDIVIDUAL-ONLY: Celebrate Progress, Challenge Opportunity, Check-in Suggested, Developing
+ * - GROUPABLE: Needs Support, Group Review, Administrative/Monitor
+ */
+
+interface CategoryConfig {
+  color: string;
+  bgColor: string;
+  icon: string;
+  label: string;
+  isGroupable: boolean;
+  subLabel?: string;  // Optional secondary descriptor shown below category tag
+}
+
+const CATEGORY_CONFIG: Record<string, CategoryConfig> = {
+  // INDIVIDUAL-ONLY CATEGORIES (never grouped)
+  "celebrate-progress": {
     color: "#1565c0",
     bgColor: "#e3f2fd",
     icon: "🎉",
-    label: "Celebrate",
+    label: "Celebrate Progress",
+    isGroupable: false,
   },
-  monitor: {
-    color: "#f9a825",
-    bgColor: "#fffde7",
-    icon: "👁️",
-    label: "Monitor",
+  "challenge-opportunity": {
+    color: "#2e7d32",
+    bgColor: "#e8f5e9",
+    icon: "🚀",
+    label: "Challenge Opportunity",
+    isGroupable: false,
   },
-};
+  "check-in-suggested": {
+    color: "#7b1fa2",
+    bgColor: "#f3e5f5",
+    icon: "💬",
+    label: "Check-in Suggested",
+    isGroupable: false,
+  },
+  "developing": {
+    color: "#00838f",
+    bgColor: "#e0f7fa",
+    icon: "📈",
+    label: "Developing",
+    isGroupable: false,
+    subLabel: "Making progress • Monitoring recommended",
+  },
 
-// Legacy type config for backward compatibility
-const LEGACY_TYPE_CONFIG: Record<
-  string,
-  { color: string; bgColor: string; icon: string; label: string }
-> = {
-  "individual-checkin": {
+  // GROUPABLE CATEGORIES (can have multiple students)
+  "needs-support": {
     color: "#c62828",
     bgColor: "#ffebee",
-    icon: "💬",
-    label: "Check-in",
+    icon: "🆘",
+    label: "Needs Support",
+    isGroupable: true,
+    subLabel: "Action recommended",
   },
-  "small-group": {
+  "group-review": {
     color: "#ef6c00",
     bgColor: "#fff3e0",
     icon: "👥",
-    label: "Group",
+    label: "Group Review",
+    isGroupable: true,
   },
-  "assignment-adjustment": {
+  "administrative": {
     color: "#f9a825",
     bgColor: "#fffde7",
-    icon: "👁️",
-    label: "Assignment",
-  },
-  enrichment: {
-    color: "#2e7d32",
-    bgColor: "#e8f5e9",
-    icon: "🚀",
-    label: "Enrichment",
-  },
-  celebrate: {
-    color: "#1565c0",
-    bgColor: "#e3f2fd",
-    icon: "🎉",
-    label: "Celebrate",
+    icon: "📋",
+    label: "Administrative",
+    isGroupable: true,
   },
 };
 
+// Fallback config for unknown categories
+const DEFAULT_CONFIG: CategoryConfig = {
+  color: "#666",
+  bgColor: "#f5f5f5",
+  icon: "📌",
+  label: "Recommendation",
+  isGroupable: false,
+};
+
 /**
- * Get config for a recommendation, preferring new insight type
+ * Determine the display category based on insight type and rule name
  */
-function getConfig(rec: Recommendation) {
-  // Use new insight type if available
-  if (rec.insightType && INSIGHT_CONFIG[rec.insightType]) {
-    return INSIGHT_CONFIG[rec.insightType];
+function getCategoryKey(rec: Recommendation): string {
+  const ruleName = rec.triggerData?.ruleName || "";
+  // Type union allows both new InsightType and legacy RecommendationType values
+  const insightType: string = rec.insightType || rec.type;
+  const isGrouped = rec.studentIds.length > 1;
+
+  // Check rule name first for more specific categorization
+  switch (ruleName) {
+    case "notable-improvement":
+      return "celebrate-progress";
+    case "ready-for-challenge":
+      return "challenge-opportunity";
+    case "check-in-suggested":
+      return "check-in-suggested";
+    case "developing":
+      return "developing";
+    case "group-support":
+      return "group-review";
+    case "needs-support":
+      // If grouped, show as Group Review; if single, show as Needs Support
+      return isGrouped ? "group-review" : "needs-support";
+    case "watch-progress":
+      return "administrative";
   }
-  // Fall back to legacy type
-  return LEGACY_TYPE_CONFIG[rec.type] || INSIGHT_CONFIG.check_in;
+
+  // Fall back to insight type
+  switch (insightType) {
+    case "celebrate_progress":
+    case "celebrate":
+      return "celebrate-progress";
+    case "challenge_opportunity":
+    case "enrichment":
+      return "challenge-opportunity";
+    case "monitor":
+    case "assignment-adjustment":
+      return "administrative";
+    case "check_in":
+    case "individual-checkin":
+      // Determine based on grouping
+      if (isGrouped) return "group-review";
+      return "needs-support";
+    case "small-group":
+      return "group-review";
+  }
+
+  return "needs-support"; // Default fallback
 }
 
 /**
- * Get available actions based on insight type
+ * Get display configuration for a recommendation
  */
-function getAvailableActions(rec: Recommendation): Array<{
-  id: string;
-  label: string;
-  icon: string;
-  color: string;
-  bgColor: string;
-}> {
-  const actions: Array<{
-    id: string;
-    label: string;
-    icon: string;
-    color: string;
-    bgColor: string;
-  }> = [];
+function getCategoryConfig(rec: Recommendation): CategoryConfig {
+  const key = getCategoryKey(rec);
+  return CATEGORY_CONFIG[key] || DEFAULT_CONFIG;
+}
 
-  // Use string type to allow both new and legacy type values
-  const insightType: string = rec.insightType || rec.type;
-
-  // Check-in and struggling students can be reassigned
-  if (
-    (insightType === "check_in" || insightType === "individual-checkin") &&
-    rec.assignmentId &&
-    rec.studentIds.length > 0
-  ) {
-    actions.push({
-      id: "reassign",
-      label: "Reassign",
-      icon: "🔄",
-      color: "#ef6c00",
-      bgColor: "#fff3e0",
-    });
-  }
-
-  // All types can have notes added
-  actions.push({
-    id: "add-note",
-    label: "Add Note",
-    icon: "📝",
-    color: "#5c6bc0",
-    bgColor: "#e8eaf6",
-  });
-
-  // Celebrate progress and challenge opportunity can award badges
-  if (
-    insightType === "celebrate_progress" ||
-    insightType === "celebrate" ||
-    insightType === "challenge_opportunity" ||
-    insightType === "enrichment"
-  ) {
-    actions.push({
-      id: "award-badge",
-      label: "Award Badge",
-      icon: "🏆",
-      color: "#7b1fa2",
-      bgColor: "#f3e5f5",
-    });
-  }
-
-  return actions;
+// Legacy compatibility - keep old function signature
+function getConfig(rec: Recommendation) {
+  return getCategoryConfig(rec);
 }
 
 // ============================================
@@ -592,7 +609,6 @@ interface RecommendationCardProps {
   recommendation: Recommendation;
   badgeTypes: BadgeTypeInfo[];
   studentMap: Map<string, string>;
-  onReview: (id: string) => void;
   onDismiss: (id: string) => void;
   onFeedback: (id: string, feedback: FeedbackType) => void;
   onAction: (id: string, action: string, result: unknown) => void;
@@ -602,7 +618,6 @@ function RecommendationCard({
   recommendation,
   badgeTypes,
   studentMap,
-  onReview,
   onDismiss,
   onFeedback,
   onAction,
@@ -612,11 +627,81 @@ function RecommendationCard({
   const [showBadgeModal, setShowBadgeModal] = useState(false);
   const [showNoteModal, setShowNoteModal] = useState(false);
   const [showReassignConfirm, setShowReassignConfirm] = useState(false);
-  const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [showAssignPracticeConfirm, setShowAssignPracticeConfirm] = useState(false);
+  // Note: modalActionLoading was used for button-based modals, now checklist uses isSubmitting
+  const [_modalActionLoading, setModalActionLoading] = useState<string | null>(null);
+
+  // Checklist state
+  const [selectedActions, setSelectedActions] = useState<Set<ChecklistActionKey>>(new Set());
+  const [noteText, setNoteText] = useState("");
+  const [selectedBadgeType, setSelectedBadgeType] = useState<string>("");
+  const [badgeMessage, setBadgeMessage] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const config = getConfig(recommendation);
   const isReviewed = recommendation.status === "reviewed";
-  const availableActions = getAvailableActions(recommendation);
+  const isResolved = recommendation.status === "resolved";
+  const isPending = recommendation.status === "pending";
+  const isActionable = !isReviewed && !isResolved && !isPending;
+
+  // Get category key for checklist actions
+  const categoryKey = getCategoryKey(recommendation);
+
+  // Get available checklist actions for this category
+  const checklistActionKeys = useMemo(() => {
+    return getChecklistActionsForCategory(categoryKey, {
+      hasAssignmentId: !!recommendation.assignmentId,
+      isGrouped: recommendation.studentIds.length > 1,
+      studentCount: recommendation.studentIds.length,
+    });
+  }, [categoryKey, recommendation.assignmentId, recommendation.studentIds.length]);
+
+  // Check if submit is valid
+  const canSubmit = selectedActions.size > 0 && !isSubmitting;
+  const needsBadgeType = selectedActions.has("award_badge") && !selectedBadgeType;
+  const needsNoteText = selectedActions.has("add_note") && !noteText.trim();
+  const isSubmitDisabled = !canSubmit || needsBadgeType || needsNoteText;
+
+  // Toggle a checklist action
+  const toggleAction = (actionKey: ChecklistActionKey) => {
+    setSelectedActions(prev => {
+      const next = new Set(prev);
+      if (next.has(actionKey)) {
+        next.delete(actionKey);
+      } else {
+        next.add(actionKey);
+      }
+      return next;
+    });
+  };
+
+  // Handle checklist submission
+  const handleChecklistSubmit = async () => {
+    if (isSubmitDisabled) return;
+
+    setIsSubmitting(true);
+    try {
+      const result: SubmitChecklistResponse = await submitChecklistActions(recommendation.id, {
+        selectedActionKeys: Array.from(selectedActions),
+        noteText: selectedActions.has("add_note") ? noteText : undefined,
+        badgeType: selectedActions.has("award_badge") ? selectedBadgeType : undefined,
+        badgeMessage: selectedActions.has("award_badge") && badgeMessage ? badgeMessage : undefined,
+      });
+
+      // Notify parent of the action
+      onAction(recommendation.id, "checklist-submit", result);
+
+      // Clear form state
+      setSelectedActions(new Set());
+      setNoteText("");
+      setSelectedBadgeType("");
+      setBadgeMessage("");
+    } catch (error) {
+      console.error("Failed to submit checklist actions:", error);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
 
   // Use new format fields if available, fall back to legacy
   const displayTitle = recommendation.summary || recommendation.title;
@@ -656,7 +741,7 @@ function RecommendationCard({
   const handleReassign = async () => {
     if (!recommendation.assignmentId || recommendation.studentIds.length === 0) return;
 
-    setActionLoading("reassign");
+    setModalActionLoading("reassign");
     try {
       // Reassign for the first student (in multi-student scenarios, could loop)
       const result = await reassignToStudent(
@@ -668,7 +753,7 @@ function RecommendationCard({
     } catch (error) {
       console.error("Failed to reassign:", error);
     } finally {
-      setActionLoading(null);
+      setModalActionLoading(null);
       setShowReassignConfirm(false);
     }
   };
@@ -676,7 +761,7 @@ function RecommendationCard({
   const handleAwardBadge = async (badgeType: string, message: string) => {
     if (recommendation.studentIds.length === 0) return;
 
-    setActionLoading("award-badge");
+    setModalActionLoading("award-badge");
     try {
       const result = await awardBadgeToStudent(
         recommendation.id,
@@ -689,21 +774,39 @@ function RecommendationCard({
     } catch (error) {
       console.error("Failed to award badge:", error);
     } finally {
-      setActionLoading(null);
+      setModalActionLoading(null);
       setShowBadgeModal(false);
     }
   };
 
   const handleAddNote = async (note: string) => {
-    setActionLoading("add-note");
+    setModalActionLoading("add-note");
     try {
       const result = await addTeacherNoteToRecommendation(recommendation.id, note);
       onAction(recommendation.id, "add-note", result);
     } catch (error) {
       console.error("Failed to add note:", error);
     } finally {
-      setActionLoading(null);
+      setModalActionLoading(null);
       setShowNoteModal(false);
+    }
+  };
+
+  const handleAssignPractice = async () => {
+    // For now, this marks the recommendation as reviewed
+    // In a full implementation, this would open an assignment picker
+    setModalActionLoading("assign-practice");
+    try {
+      // Mark as reviewed (placeholder for actual assignment logic)
+      onAction(recommendation.id, "assign-practice", {
+        studentIds: recommendation.studentIds,
+        assignmentId: recommendation.assignmentId,
+      });
+    } catch (error) {
+      console.error("Failed to assign practice:", error);
+    } finally {
+      setModalActionLoading(null);
+      setShowAssignPracticeConfirm(false);
     }
   };
 
@@ -725,7 +828,7 @@ function RecommendationCard({
         <div style={{ display: "flex", alignItems: "flex-start", gap: "12px" }}>
           <span style={{ fontSize: "1.5rem" }}>{config.icon}</span>
           <div style={{ flex: 1 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "4px" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "4px", flexWrap: "wrap" }}>
               <span
                 style={{
                   fontSize: "0.7rem",
@@ -740,6 +843,36 @@ function RecommendationCard({
               >
                 {config.label}
               </span>
+              {config.subLabel && (
+                <span
+                  style={{
+                    fontSize: "0.7rem",
+                    color: "#666",
+                    fontStyle: "italic",
+                  }}
+                >
+                  {config.subLabel}
+                </span>
+              )}
+              {/* Group indicator for multi-student recommendations */}
+              {recommendation.studentIds.length > 1 && (
+                <span
+                  style={{
+                    fontSize: "0.7rem",
+                    fontWeight: 600,
+                    color: "#5c6bc0",
+                    background: "#e8eaf6",
+                    padding: "2px 8px",
+                    borderRadius: "4px",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "4px",
+                  }}
+                >
+                  <span style={{ fontSize: "0.8rem" }}>👥</span>
+                  {recommendation.studentIds.length} students
+                </span>
+              )}
               {recommendation.priorityLevel === "high" && (
                 <span
                   style={{
@@ -754,7 +887,35 @@ function RecommendationCard({
                   High Priority
                 </span>
               )}
-              {isReviewed && (
+              {recommendation.status === "pending" && (
+                <span
+                  style={{
+                    fontSize: "0.7rem",
+                    fontWeight: 600,
+                    color: "#ef6c00",
+                    background: "#fff3e0",
+                    padding: "2px 8px",
+                    borderRadius: "4px",
+                    border: "1px solid #ef6c00",
+                  }}
+                >
+                  Awaiting student action
+                </span>
+              )}
+              {recommendation.status === "resolved" && (
+                <span
+                  style={{
+                    fontSize: "0.75rem",
+                    background: "#e8f5e9",
+                    color: "#2e7d32",
+                    padding: "2px 8px",
+                    borderRadius: "4px",
+                  }}
+                >
+                  Resolved
+                </span>
+              )}
+              {isReviewed && recommendation.status === "reviewed" && (
                 <span
                   style={{
                     fontSize: "0.75rem",
@@ -783,7 +944,7 @@ function RecommendationCard({
           </ul>
         </div>
 
-        {/* Suggested Actions */}
+        {/* Suggested Actions Checklist */}
         <div
           style={{
             marginTop: "12px",
@@ -794,59 +955,199 @@ function RecommendationCard({
           }}
         >
           <div style={{ fontSize: "0.85rem", fontWeight: 600, color: "#667eea", marginBottom: "8px" }}>
-            Suggested actions:
+            {isActionable ? "Select actions to take:" : "Suggested actions:"}
           </div>
-          <ul style={{ margin: 0, paddingLeft: "16px", color: "#555", fontSize: "0.9rem" }}>
-            {displayActions.map((action, i) => (
-              <li key={i} style={{ marginBottom: "4px" }}>{action}</li>
-            ))}
-          </ul>
+
+          {/* Show checklist for actionable recommendations */}
+          {isActionable ? (
+            <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+              {checklistActionKeys.map((actionKey) => {
+                const actionConfig = CHECKLIST_ACTIONS[actionKey];
+                const isChecked = selectedActions.has(actionKey);
+
+                return (
+                  <div key={actionKey}>
+                    <label
+                      style={{
+                        display: "flex",
+                        alignItems: "flex-start",
+                        gap: "8px",
+                        cursor: "pointer",
+                        fontSize: "0.9rem",
+                        color: "#333",
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={isChecked}
+                        onChange={() => toggleAction(actionKey)}
+                        style={{
+                          marginTop: "2px",
+                          cursor: "pointer",
+                          width: "16px",
+                          height: "16px",
+                        }}
+                      />
+                      <span>
+                        {actionConfig.label}
+                        {actionConfig.isSystemAction && (
+                          <span
+                            style={{
+                              marginLeft: "6px",
+                              fontSize: "0.75rem",
+                              color: "#667eea",
+                              background: "#e8eaf6",
+                              padding: "1px 6px",
+                              borderRadius: "3px",
+                            }}
+                          >
+                            System action
+                          </span>
+                        )}
+                      </span>
+                    </label>
+
+                    {/* Show badge selector inline when award_badge is checked */}
+                    {actionKey === "award_badge" && isChecked && (
+                      <div
+                        style={{
+                          marginTop: "8px",
+                          marginLeft: "24px",
+                          padding: "12px",
+                          background: "#fff",
+                          border: "1px solid #e0e0e0",
+                          borderRadius: "4px",
+                        }}
+                      >
+                        <div style={{ marginBottom: "8px" }}>
+                          <label style={{ display: "block", fontSize: "0.85rem", fontWeight: 500, marginBottom: "4px" }}>
+                            Badge type: <span style={{ color: "#c62828" }}>*</span>
+                          </label>
+                          <select
+                            value={selectedBadgeType}
+                            onChange={(e) => setSelectedBadgeType(e.target.value)}
+                            style={{
+                              width: "100%",
+                              padding: "8px",
+                              fontSize: "0.9rem",
+                              border: "1px solid #ccc",
+                              borderRadius: "4px",
+                            }}
+                          >
+                            <option value="">Select a badge...</option>
+                            {badgeTypes.map((bt) => (
+                              <option key={bt.id} value={bt.id}>
+                                {bt.icon} {bt.name}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <div>
+                          <label style={{ display: "block", fontSize: "0.85rem", fontWeight: 500, marginBottom: "4px" }}>
+                            Message (optional):
+                          </label>
+                          <input
+                            type="text"
+                            value={badgeMessage}
+                            onChange={(e) => setBadgeMessage(e.target.value)}
+                            placeholder="Great work on this assignment!"
+                            style={{
+                              width: "100%",
+                              padding: "8px",
+                              fontSize: "0.9rem",
+                              border: "1px solid #ccc",
+                              borderRadius: "4px",
+                              boxSizing: "border-box",
+                            }}
+                          />
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Show note input inline when add_note is checked */}
+                    {actionKey === "add_note" && isChecked && (
+                      <div
+                        style={{
+                          marginTop: "8px",
+                          marginLeft: "24px",
+                          padding: "12px",
+                          background: "#fff",
+                          border: "1px solid #e0e0e0",
+                          borderRadius: "4px",
+                        }}
+                      >
+                        <label style={{ display: "block", fontSize: "0.85rem", fontWeight: 500, marginBottom: "4px" }}>
+                          Note: <span style={{ color: "#c62828" }}>*</span>
+                        </label>
+                        <textarea
+                          value={noteText}
+                          onChange={(e) => setNoteText(e.target.value)}
+                          placeholder="Add your notes here..."
+                          rows={3}
+                          style={{
+                            width: "100%",
+                            padding: "8px",
+                            fontSize: "0.9rem",
+                            border: "1px solid #ccc",
+                            borderRadius: "4px",
+                            resize: "vertical",
+                            boxSizing: "border-box",
+                          }}
+                        />
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+
+              {/* Submit button */}
+              {selectedActions.size > 0 && (
+                <div style={{ marginTop: "12px", display: "flex", alignItems: "center", gap: "12px" }}>
+                  <button
+                    onClick={handleChecklistSubmit}
+                    disabled={isSubmitDisabled}
+                    style={{
+                      padding: "10px 20px",
+                      fontSize: "0.9rem",
+                      fontWeight: 600,
+                      background: isSubmitDisabled ? "#ccc" : "#667eea",
+                      color: "white",
+                      border: "none",
+                      borderRadius: "6px",
+                      cursor: isSubmitDisabled ? "not-allowed" : "pointer",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "8px",
+                    }}
+                  >
+                    {isSubmitting ? (
+                      <>Submitting...</>
+                    ) : (
+                      <>
+                        Submit {selectedActions.size} action{selectedActions.size > 1 ? "s" : ""}
+                      </>
+                    )}
+                  </button>
+                  {(needsBadgeType || needsNoteText) && (
+                    <span style={{ fontSize: "0.85rem", color: "#c62828" }}>
+                      {needsBadgeType && "Please select a badge type. "}
+                      {needsNoteText && "Please enter a note."}
+                    </span>
+                  )}
+                </div>
+              )}
+            </div>
+          ) : (
+            /* Show read-only list for non-actionable states */
+            <ul style={{ margin: 0, paddingLeft: "16px", color: "#555", fontSize: "0.9rem" }}>
+              {displayActions.map((action, i) => (
+                <li key={i} style={{ marginBottom: "4px" }}>{action}</li>
+              ))}
+            </ul>
+          )}
         </div>
 
-        {/* Action Buttons - NEW */}
-        {!isReviewed && availableActions.length > 0 && (
-          <div
-            style={{
-              marginTop: "12px",
-              paddingLeft: "36px",
-              display: "flex",
-              flexWrap: "wrap",
-              gap: "8px",
-            }}
-          >
-            {availableActions.map((action) => (
-              <button
-                key={action.id}
-                onClick={() => {
-                  if (action.id === "reassign") setShowReassignConfirm(true);
-                  else if (action.id === "award-badge") setShowBadgeModal(true);
-                  else if (action.id === "add-note") setShowNoteModal(true);
-                }}
-                disabled={actionLoading !== null}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "6px",
-                  padding: "8px 14px",
-                  fontSize: "0.85rem",
-                  fontWeight: 500,
-                  background: action.bgColor,
-                  color: action.color,
-                  border: `1px solid ${action.color}`,
-                  borderRadius: "6px",
-                  cursor: actionLoading ? "wait" : "pointer",
-                  opacity: actionLoading && actionLoading !== action.id ? 0.6 : 1,
-                  transition: "all 0.2s",
-                }}
-              >
-                <span>{action.icon}</span>
-                {actionLoading === action.id ? "..." : action.label}
-              </button>
-            ))}
-          </div>
-        )}
-
-        {/* Primary Actions (Mark Reviewed, Dismiss) */}
+        {/* Secondary Actions (Dismiss only - checklist submission is primary review path) */}
         <div
           style={{
             marginTop: "12px",
@@ -857,40 +1158,26 @@ function RecommendationCard({
             flexWrap: "wrap",
           }}
         >
-          {!isReviewed && (
-            <>
-              <button
-                onClick={() => onReview(recommendation.id)}
-                style={{
-                  padding: "6px 12px",
-                  fontSize: "0.85rem",
-                  background: config.color,
-                  color: "white",
-                  border: "none",
-                  borderRadius: "4px",
-                  cursor: "pointer",
-                }}
-              >
-                Mark Reviewed
-              </button>
-              <button
-                onClick={() => onDismiss(recommendation.id)}
-                style={{
-                  padding: "6px 12px",
-                  fontSize: "0.85rem",
-                  background: "transparent",
-                  color: "#666",
-                  border: "1px solid #ccc",
-                  borderRadius: "4px",
-                  cursor: "pointer",
-                }}
-              >
-                Dismiss
-              </button>
-            </>
+          {/* Dismiss button - only show for active recommendations */}
+          {isActionable && (
+            <button
+              onClick={() => onDismiss(recommendation.id)}
+              style={{
+                padding: "6px 12px",
+                fontSize: "0.85rem",
+                background: "transparent",
+                color: "#666",
+                border: "1px solid #ccc",
+                borderRadius: "4px",
+                cursor: "pointer",
+              }}
+            >
+              Dismiss
+            </button>
           )}
 
-          {isReviewed && !recommendation.feedback && (
+          {/* Feedback prompt - show after actions submitted (resolved/pending) or reviewed */}
+          {(isResolved || isPending || isReviewed) && !recommendation.feedback && (
             <button
               onClick={() => setShowFeedback(!showFeedback)}
               style={{
@@ -1039,6 +1326,30 @@ function RecommendationCard({
                 ))}
               </ul>
             </div>
+
+            {/* Teacher selected actions section */}
+            {recommendation.submittedActions && recommendation.submittedActions.length > 0 && (
+              <div style={{ marginTop: "12px", paddingTop: "12px", borderTop: "1px solid #e0e0e0" }}>
+                <strong>Teacher actions taken:</strong>
+                <ul
+                  style={{
+                    margin: "8px 0 0 0",
+                    paddingLeft: "20px",
+                    listStyle: "none",
+                  }}
+                >
+                  {recommendation.submittedActions.map((action, i) => (
+                    <li key={i} style={{ marginBottom: "4px", display: "flex", alignItems: "center", gap: "8px" }}>
+                      <span style={{ color: "#2e7d32" }}>✓</span>
+                      <span>{action.label}</span>
+                      <span style={{ fontSize: "0.8rem", color: "#999" }}>
+                        ({new Date(action.submittedAt).toLocaleDateString()})
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -1071,6 +1382,17 @@ function RecommendationCard({
           onCancel={() => setShowReassignConfirm(false)}
         />
       )}
+
+      {showAssignPracticeConfirm && (
+        <ConfirmationModal
+          title="Assign Practice"
+          message={`This will assign additional practice to ${recommendation.studentIds.length} student${recommendation.studentIds.length > 1 ? "s" : ""} (${studentName}). You can select the practice material after confirming.`}
+          confirmLabel="Assign Practice"
+          confirmColor="#1565c0"
+          onConfirm={handleAssignPractice}
+          onCancel={() => setShowAssignPracticeConfirm(false)}
+        />
+      )}
     </>
   );
 }
@@ -1084,27 +1406,34 @@ interface StudentInfo {
   name: string;
 }
 
+export type RecommendationFilter = "active" | "pending" | "resolved";
+
 interface RecommendationPanelProps {
   recommendations: Recommendation[];
   students?: StudentInfo[];
-  onReview: (id: string) => void;
+  stats?: RecommendationStats;
   onDismiss: (id: string) => void;
   onFeedback: (id: string, feedback: FeedbackType) => void;
   onRefresh: () => void;
+  onFilterChange?: (filter: RecommendationFilter) => void;
   loading?: boolean;
+  currentFilter?: RecommendationFilter;
 }
 
 export default function RecommendationPanel({
   recommendations,
   students = [],
-  onReview,
+  stats,
   onDismiss,
   onFeedback,
   onRefresh,
+  onFilterChange,
   loading = false,
+  currentFilter = "active",
 }: RecommendationPanelProps) {
   const [showReviewed, setShowReviewed] = useState(false);
   const [badgeTypes, setBadgeTypes] = useState<BadgeTypeInfo[]>([]);
+  const [filter, setFilter] = useState<RecommendationFilter>(currentFilter);
 
   // Load badge types on mount
   useEffect(() => {
@@ -1112,6 +1441,17 @@ export default function RecommendationPanel({
       .then((data) => setBadgeTypes(data.badgeTypes))
       .catch((err) => console.error("Failed to load badge types:", err));
   }, []);
+
+  // Sync external filter changes
+  useEffect(() => {
+    setFilter(currentFilter);
+  }, [currentFilter]);
+
+  // Handle filter change
+  const handleFilterChange = (newFilter: RecommendationFilter) => {
+    setFilter(newFilter);
+    onFilterChange?.(newFilter);
+  };
 
   // Build student lookup map
   const studentMap = useMemo(() => {
@@ -1122,8 +1462,10 @@ export default function RecommendationPanel({
     return map;
   }, [students]);
 
+  // For backward compatibility: filter locally when no external filtering
   const activeRecs = recommendations.filter((r) => r.status === "active");
   const reviewedRecs = recommendations.filter((r) => r.status === "reviewed");
+  const hasFilterTabs = !!(stats || onFilterChange);
 
   // Handler for when an action is taken (updates recommendation status)
   const handleAction = (id: string, action: string, result: unknown) => {
@@ -1133,8 +1475,23 @@ export default function RecommendationPanel({
     onRefresh();
   };
 
-  // Nothing to show
-  if (activeRecs.length === 0 && reviewedRecs.length === 0) {
+  // Get message for empty state based on current filter
+  const getEmptyMessage = () => {
+    if (!hasFilterTabs) {
+      return "No recommendations right now. Your students are doing great!";
+    }
+    switch (filter) {
+      case "pending":
+        return "No pending recommendations. Students haven't been reassigned recently.";
+      case "resolved":
+        return "No resolved recommendations yet. Actions you take will appear here.";
+      default:
+        return "No active recommendations right now. Your students are doing great!";
+    }
+  };
+
+  // Nothing to show (and no filter tabs)
+  if (!hasFilterTabs && activeRecs.length === 0 && reviewedRecs.length === 0) {
     return (
       <div
         className="card"
@@ -1148,7 +1505,7 @@ export default function RecommendationPanel({
           <div>
             <h2 style={{ margin: 0, color: "#333", fontSize: "1.2rem" }}>What Should I Do Next?</h2>
             <p style={{ margin: "8px 0 0 0", color: "#666" }}>
-              No recommendations right now. Your students are doing great!
+              {getEmptyMessage()}
             </p>
           </div>
           <button
@@ -1192,7 +1549,7 @@ export default function RecommendationPanel({
         <div>
           <h2 style={{ margin: 0, color: "#333", fontSize: "1.2rem" }}>What Should I Do Next?</h2>
           <p style={{ margin: "4px 0 0 0", color: "#666", fontSize: "0.9rem" }}>
-            {activeRecs.length} recommendation{activeRecs.length !== 1 ? "s" : ""} based on student
+            {recommendations.length} recommendation{recommendations.length !== 1 ? "s" : ""} based on student
             activity
           </p>
         </div>
@@ -1213,22 +1570,78 @@ export default function RecommendationPanel({
         </button>
       </div>
 
-      {/* Active Recommendations */}
-      {activeRecs.map((rec) => (
-        <RecommendationCard
-          key={rec.id}
-          recommendation={rec}
-          badgeTypes={badgeTypes}
-          studentMap={studentMap}
-          onReview={onReview}
-          onDismiss={onDismiss}
-          onFeedback={onFeedback}
-          onAction={handleAction}
-        />
-      ))}
+      {/* Filter Tabs */}
+      {(stats || onFilterChange) && (
+        <div style={{ display: "flex", gap: "8px", marginBottom: "16px" }}>
+          <button
+            onClick={() => handleFilterChange("active")}
+            style={{
+              padding: "6px 12px",
+              fontSize: "0.85rem",
+              fontWeight: filter === "active" ? 600 : 400,
+              background: filter === "active" ? "#667eea" : "transparent",
+              color: filter === "active" ? "white" : "#666",
+              border: filter === "active" ? "none" : "1px solid #ddd",
+              borderRadius: "4px",
+              cursor: "pointer",
+            }}
+          >
+            Active {stats ? `(${stats.totalActive})` : ""}
+          </button>
+          <button
+            onClick={() => handleFilterChange("pending")}
+            style={{
+              padding: "6px 12px",
+              fontSize: "0.85rem",
+              fontWeight: filter === "pending" ? 600 : 400,
+              background: filter === "pending" ? "#ef6c00" : "transparent",
+              color: filter === "pending" ? "white" : "#666",
+              border: filter === "pending" ? "none" : "1px solid #ddd",
+              borderRadius: "4px",
+              cursor: "pointer",
+            }}
+          >
+            Pending {stats ? `(${stats.totalPending})` : ""}
+          </button>
+          <button
+            onClick={() => handleFilterChange("resolved")}
+            style={{
+              padding: "6px 12px",
+              fontSize: "0.85rem",
+              fontWeight: filter === "resolved" ? 600 : 400,
+              background: filter === "resolved" ? "#2e7d32" : "transparent",
+              color: filter === "resolved" ? "white" : "#666",
+              border: filter === "resolved" ? "none" : "1px solid #ddd",
+              borderRadius: "4px",
+              cursor: "pointer",
+            }}
+          >
+            Resolved {stats ? `(${stats.totalResolved})` : ""}
+          </button>
+        </div>
+      )}
 
-      {/* Show Reviewed Toggle */}
-      {reviewedRecs.length > 0 && (
+      {/* Recommendations List */}
+      {recommendations.length > 0 ? (
+        recommendations.map((rec) => (
+          <RecommendationCard
+            key={rec.id}
+            recommendation={rec}
+            badgeTypes={badgeTypes}
+            studentMap={studentMap}
+            onDismiss={onDismiss}
+            onFeedback={onFeedback}
+            onAction={handleAction}
+          />
+        ))
+      ) : (
+        <p style={{ color: "#666", fontStyle: "italic", textAlign: "center", padding: "20px" }}>
+          {getEmptyMessage()}
+        </p>
+      )}
+
+      {/* Show Reviewed Toggle - only when filter tabs are not present */}
+      {!hasFilterTabs && reviewedRecs.length > 0 && (
         <>
           <button
             onClick={() => setShowReviewed(!showReviewed)}
@@ -1266,7 +1679,6 @@ export default function RecommendationPanel({
                   recommendation={rec}
                   badgeTypes={badgeTypes}
                   studentMap={studentMap}
-                  onReview={onReview}
                   onDismiss={onDismiss}
                   onFeedback={onFeedback}
                   onAction={handleAction}

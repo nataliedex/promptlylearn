@@ -6,6 +6,7 @@ import {
   FeedbackType,
   RECOMMENDATION_CONFIG,
 } from "../domain/recommendation";
+import type { ResolutionStatus } from "../domain/actionOutcome";
 
 const DATA_FILE = path.join(__dirname, "../../data/recommendations.json");
 
@@ -216,6 +217,70 @@ export class RecommendationStore {
   }
 
   // ============================================
+  // Resolution State Management
+  // ============================================
+
+  /**
+   * Mark a recommendation as resolved with an outcome
+   */
+  markResolved(
+    id: string,
+    outcomeId: string,
+    resolutionStatus: ResolutionStatus
+  ): Recommendation | null {
+    const rec = this.load(id);
+    if (!rec) return null;
+
+    rec.status = "resolved";
+    rec.outcomeId = outcomeId;
+    rec.resolutionStatus = resolutionStatus;
+    rec.resolvedAt = new Date().toISOString();
+    rec.reviewedAt = rec.reviewedAt || new Date().toISOString();
+
+    this.save(rec);
+    return rec;
+  }
+
+  /**
+   * Mark a recommendation as pending (awaiting student action)
+   */
+  markPending(id: string, outcomeId: string): Recommendation | null {
+    const rec = this.load(id);
+    if (!rec) return null;
+
+    rec.status = "pending";
+    rec.outcomeId = outcomeId;
+    rec.resolutionStatus = "pending";
+    rec.reviewedAt = new Date().toISOString();
+
+    this.save(rec);
+    return rec;
+  }
+
+  /**
+   * Get recommendations by resolution status
+   */
+  getByResolution(status: ResolutionStatus): Recommendation[] {
+    const data = this.loadAll();
+    return data.recommendations
+      .filter((r) => r.resolutionStatus === status)
+      .sort((a, b) => b.priority - a.priority);
+  }
+
+  /**
+   * Check if there's a pending recommendation for a student+assignment combo
+   */
+  hasPendingForStudentAssignment(studentId: string, assignmentId: string): boolean {
+    const data = this.loadAll();
+    return data.recommendations.some(
+      (r) =>
+        r.status === "pending" &&
+        r.studentIds.includes(studentId) &&
+        r.assignmentId === assignmentId
+    );
+  }
+
+  // ============================================
   // Maintenance Operations
   // ============================================
 
@@ -263,13 +328,22 @@ export class RecommendationStore {
   /**
    * Check if a recommendation already exists (to avoid duplicates)
    * Matches on rule name + student IDs + assignment ID
+   * Checks active, pending, resolved, and dismissed statuses to prevent regeneration
+   * after a teacher has already addressed or dismissed the recommendation.
    */
   exists(ruleName: string, studentIds: string[], assignmentId?: string): boolean {
     const data = this.loadAll();
     const sortedStudentIds = [...studentIds].sort().join(",");
 
+    // Statuses that should prevent regeneration
+    // - active: already showing
+    // - pending: awaiting student action
+    // - resolved: teacher took action
+    // - dismissed: teacher chose to archive/ignore
+    const preventRegenerationStatuses: RecommendationStatus[] = ["active", "pending", "resolved", "dismissed"];
+
     return data.recommendations.some((r) => {
-      if (r.status !== "active") return false;
+      if (!preventRegenerationStatuses.includes(r.status)) return false;
       if (r.triggerData.ruleName !== ruleName) return false;
       if (r.assignmentId !== assignmentId) return false;
 
@@ -285,23 +359,33 @@ export class RecommendationStore {
   /**
    * Get recommendation statistics for dashboard
    */
-  getStats(): { totalActive: number; reviewedToday: number; feedbackRate: number } {
+  getStats(): {
+    totalActive: number;
+    totalPending: number;
+    totalResolved: number;
+    reviewedToday: number;
+    feedbackRate: number;
+  } {
     const data = this.loadAll();
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
     const active = data.recommendations.filter((r) => r.status === "active");
+    const pending = data.recommendations.filter((r) => r.status === "pending");
+    const resolved = data.recommendations.filter((r) => r.status === "resolved");
     const reviewedToday = data.recommendations.filter((r) => {
-      if (r.status !== "reviewed" || !r.reviewedAt) return false;
+      if (!["reviewed", "resolved", "pending"].includes(r.status) || !r.reviewedAt) return false;
       return new Date(r.reviewedAt) >= today;
     });
 
-    const reviewed = data.recommendations.filter((r) => r.status === "reviewed");
+    const reviewed = data.recommendations.filter((r) => r.status === "reviewed" || r.status === "resolved");
     const withFeedback = reviewed.filter((r) => r.feedback);
     const feedbackRate = reviewed.length > 0 ? (withFeedback.length / reviewed.length) * 100 : 0;
 
     return {
       totalActive: active.length,
+      totalPending: pending.length,
+      totalResolved: resolved.length,
       reviewedToday: reviewedToday.length,
       feedbackRate: Math.round(feedbackRate),
     };

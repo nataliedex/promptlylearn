@@ -6,6 +6,7 @@
 
 import { Router } from "express";
 import { recommendationStore, RecommendationStore } from "../../stores/recommendationStore";
+import { actionOutcomeStore } from "../../stores/actionOutcomeStore";
 import {
   refreshRecommendations,
   generateRecommendations,
@@ -18,6 +19,13 @@ import {
   BadgeType,
   isBadgeType,
   getBadgeTypeName,
+  RecommendationStatus,
+  ChecklistActionKey,
+  CHECKLIST_ACTIONS,
+  isValidChecklistActionKey,
+  ChecklistActionEntry,
+  SubmitChecklistRequest,
+  SubmitChecklistResponse,
 } from "../../domain/recommendation";
 import { SessionStore } from "../../stores/sessionStore";
 import { StudentStore } from "../../stores/studentStore";
@@ -30,6 +38,9 @@ import {
   awardBadge,
   addTeacherNote,
 } from "../../stores/actionHandlers";
+import { teacherSettingsStore } from "../../stores/teacherSettingsStore";
+import { teacherTodoStore } from "../../stores/teacherTodoStore";
+import { TeacherTodo } from "../../domain/teacherTodo";
 
 const router = Router();
 const sessionStore = new SessionStore();
@@ -90,15 +101,17 @@ function gatherStudentPerformanceData(): StudentPerformanceData[] {
     // Check for teacher note
     const hasTeacherNote = !!latestSession.educatorNotes;
 
-    // Get previous score if available
-    const previousScore = previousSession?.evaluation?.totalScore;
+    // Get previous score if available (rounded to whole number)
+    const previousScore = previousSession?.evaluation?.totalScore !== undefined
+      ? Math.round(previousSession.evaluation.totalScore)
+      : undefined;
 
     students.push({
       studentId: student.id,
       studentName: student.name,
       assignmentId: lesson.id,
       assignmentTitle: lesson.title,
-      score: latestSession.evaluation?.totalScore || 0,
+      score: Math.round(latestSession.evaluation?.totalScore || 0),
       hintUsageRate,
       coachIntent,
       hasTeacherNote,
@@ -192,15 +205,38 @@ function gatherAssignmentAggregates(): AssignmentAggregateData[] {
 
 /**
  * GET /api/recommendations
- * Returns active recommendations sorted by priority
+ * Returns recommendations sorted by priority with optional status filtering
+ *
+ * Query params:
+ * - status: "active" | "pending" | "resolved" | "all" (default: "active")
+ * - limit: number (default: MAX_ACTIVE_RECOMMENDATIONS)
+ * - assignmentId: string (optional filter)
+ * - includeReviewed: "true" (legacy, same as status=all)
  */
 router.get("/", (req, res) => {
   try {
-    const { limit, assignmentId, includeReviewed } = req.query;
+    const { limit, assignmentId, includeReviewed, status } = req.query;
 
-    let recommendations = includeReviewed === "true"
-      ? [...recommendationStore.getActive(), ...recommendationStore.getByStatus("reviewed")]
-      : recommendationStore.getActive();
+    let recommendations: ReturnType<typeof recommendationStore.getActive>;
+
+    // Handle status filtering
+    const statusFilter = status as RecommendationStatus | "all" | undefined;
+
+    if (statusFilter === "all" || includeReviewed === "true") {
+      // Return all recommendations
+      recommendations = recommendationStore.getAll();
+    } else if (statusFilter === "pending") {
+      recommendations = recommendationStore.getByStatus("pending");
+    } else if (statusFilter === "resolved") {
+      recommendations = recommendationStore.getByStatus("resolved");
+    } else if (statusFilter === "reviewed") {
+      recommendations = recommendationStore.getByStatus("reviewed");
+    } else if (statusFilter === "dismissed") {
+      recommendations = recommendationStore.getByStatus("dismissed");
+    } else {
+      // Default: active only
+      recommendations = recommendationStore.getActive();
+    }
 
     // Filter by assignment if specified
     if (assignmentId && typeof assignmentId === "string") {
@@ -376,17 +412,36 @@ router.post("/:id/actions/reassign", (req, res) => {
       return res.status(400).json({ error: "studentId and assignmentId are required" });
     }
 
+    // Get recommendation for previous score tracking
+    const recommendation = recommendationStore.load(id);
+    const previousScore = recommendation?.triggerData?.signals?.score;
+
     // Push assignment back
     pushAssignmentBack(studentId, assignmentId);
 
-    // Mark the recommendation as reviewed
-    recommendationStore.markReviewed(id, teacherId);
+    // Create outcome with pending status (awaiting student retry)
+    const outcome = actionOutcomeStore.save({
+      recommendationId: id,
+      actionType: "reassign",
+      actedBy: teacherId,
+      affectedStudentIds: [studentId],
+      affectedAssignmentId: assignmentId,
+      resolutionStatus: "pending",
+      metadata: {
+        previousScore: typeof previousScore === "number" ? previousScore : undefined,
+      },
+    });
+
+    // Mark the recommendation as pending
+    recommendationStore.markPending(id, outcome.id);
 
     res.json({
       success: true,
       action: "reassign",
       studentId,
       assignmentId,
+      outcomeId: outcome.id,
+      resolutionStatus: "pending",
     });
   } catch (error) {
     console.error("Error reassigning assignment:", error);
@@ -417,8 +472,22 @@ router.post("/:id/actions/award-badge", (req, res) => {
     // Award badge
     const badge = awardBadge(studentId, badgeType, assignmentId, teacherId, message);
 
-    // Mark the recommendation as reviewed
-    recommendationStore.markReviewed(id, teacherId);
+    // Create outcome with completed status (no follow-up needed)
+    const outcome = actionOutcomeStore.save({
+      recommendationId: id,
+      actionType: "award_badge",
+      actedBy: teacherId,
+      affectedStudentIds: [studentId],
+      affectedAssignmentId: assignmentId,
+      resolutionStatus: "completed",
+      metadata: {
+        badgeType,
+        badgeMessage: message,
+      },
+    });
+
+    // Mark the recommendation as resolved
+    recommendationStore.markResolved(id, outcome.id, "completed");
 
     res.json({
       success: true,
@@ -429,6 +498,8 @@ router.post("/:id/actions/award-badge", (req, res) => {
         typeName: getBadgeTypeName(badge.type),
         message: badge.message,
       },
+      outcomeId: outcome.id,
+      resolutionStatus: "completed",
     });
   } catch (error) {
     console.error("Error awarding badge:", error);
@@ -465,17 +536,392 @@ router.post("/:id/actions/add-note", (req, res) => {
       }
     }
 
-    // Mark the recommendation as reviewed with the note
-    recommendationStore.markReviewed(id, teacherId);
+    // Create outcome with follow_up_needed status (teacher may want to revisit)
+    const outcome = actionOutcomeStore.save({
+      recommendationId: id,
+      actionType: "add_note",
+      actedBy: teacherId,
+      affectedStudentIds: recommendation.studentIds,
+      affectedAssignmentId: recommendation.assignmentId,
+      resolutionStatus: "follow_up_needed",
+      metadata: {
+        noteText: note,
+      },
+    });
+
+    // Mark the recommendation as resolved with follow_up_needed
+    recommendationStore.markResolved(id, outcome.id, "follow_up_needed");
 
     res.json({
       success: true,
       action: "add-note",
       note,
+      outcomeId: outcome.id,
+      resolutionStatus: "follow_up_needed",
     });
   } catch (error) {
     console.error("Error adding note:", error);
     res.status(500).json({ error: "Failed to add note" });
+  }
+});
+
+// ============================================
+// Checklist Actions Endpoint
+// ============================================
+
+/**
+ * POST /api/recommendations/:id/actions/submit-checklist
+ * Submit selected checklist actions for a recommendation
+ *
+ * Request body:
+ * - selectedActionKeys: string[] (stable action keys)
+ * - noteText?: string (required if add_note is selected)
+ * - badgeType?: string (required if award_badge is selected)
+ * - badgeMessage?: string (optional message with badge)
+ *
+ * Response:
+ * - success: boolean
+ * - recommendation: Updated recommendation object
+ * - actionEntries: Array of recorded action entries
+ * - systemActionsExecuted: Array of system action keys that were executed
+ * - newStatus: The new recommendation status
+ */
+router.post("/:id/actions/submit-checklist", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const {
+      selectedActionKeys,
+      noteText,
+      badgeType,
+      badgeMessage,
+      teacherId = "educator",
+    } = req.body as SubmitChecklistRequest & { teacherId?: string };
+
+    // Validate recommendation exists
+    const recommendation = recommendationStore.load(id);
+    if (!recommendation) {
+      return res.status(404).json({ error: "Recommendation not found" });
+    }
+
+    // Validate selectedActionKeys is an array with at least one item
+    if (!Array.isArray(selectedActionKeys) || selectedActionKeys.length === 0) {
+      return res.status(400).json({
+        error: "selectedActionKeys must be a non-empty array",
+      });
+    }
+
+    // Validate all action keys
+    const invalidKeys = selectedActionKeys.filter(key => !isValidChecklistActionKey(key));
+    if (invalidKeys.length > 0) {
+      return res.status(400).json({
+        error: `Invalid action keys: ${invalidKeys.join(", ")}`,
+        validKeys: Object.keys(CHECKLIST_ACTIONS),
+      });
+    }
+
+    // Validate required fields for specific actions
+    if (selectedActionKeys.includes("add_note") && !noteText) {
+      return res.status(400).json({
+        error: "noteText is required when add_note is selected",
+      });
+    }
+
+    if (selectedActionKeys.includes("award_badge") && !badgeType) {
+      return res.status(400).json({
+        error: "badgeType is required when award_badge is selected",
+      });
+    }
+
+    if (badgeType && !isBadgeType(badgeType)) {
+      return res.status(400).json({
+        error: `Invalid badge type: ${badgeType}`,
+      });
+    }
+
+    const now = new Date().toISOString();
+    const actionEntries: ChecklistActionEntry[] = [];
+    const systemActionsExecuted: ChecklistActionKey[] = [];
+    let createsPendingState = false;
+
+    // Process each selected action
+    for (const actionKey of selectedActionKeys as ChecklistActionKey[]) {
+      const actionConfig = CHECKLIST_ACTIONS[actionKey];
+
+      // Create action entry
+      const entry: ChecklistActionEntry = {
+        id: `${id}-${actionKey}-${Date.now()}`,
+        recommendationId: id,
+        actionKey,
+        label: actionConfig.label,
+        isSystemAction: actionConfig.isSystemAction,
+        executedAt: now,
+        executedBy: teacherId,
+        metadata: {},
+      };
+
+      // Execute system actions
+      if (actionConfig.isSystemAction) {
+        switch (actionKey) {
+          case "reassign_student":
+            // Reassign to first student (single student recommendation)
+            if (recommendation.studentIds.length > 0 && recommendation.assignmentId) {
+              pushAssignmentBack(
+                recommendation.studentIds[0],
+                recommendation.assignmentId
+              );
+              entry.metadata = {
+                affectedStudentIds: [recommendation.studentIds[0]],
+                affectedAssignmentId: recommendation.assignmentId,
+              };
+              systemActionsExecuted.push(actionKey);
+              createsPendingState = true;
+            }
+            break;
+
+          case "assign_practice":
+            // For grouped recommendations, this would push practice to all students
+            // For now, mark as executed and create pending state
+            if (recommendation.studentIds.length > 0 && recommendation.assignmentId) {
+              // Push assignment back for all students in the group
+              for (const studentId of recommendation.studentIds) {
+                pushAssignmentBack(studentId, recommendation.assignmentId);
+              }
+              entry.metadata = {
+                affectedStudentIds: recommendation.studentIds,
+                affectedAssignmentId: recommendation.assignmentId,
+              };
+              systemActionsExecuted.push(actionKey);
+              createsPendingState = true;
+            }
+            break;
+
+          case "award_badge":
+            // Award badge to first student
+            if (recommendation.studentIds.length > 0 && badgeType) {
+              awardBadge(
+                recommendation.studentIds[0],
+                badgeType as BadgeType,
+                recommendation.assignmentId,
+                teacherId,
+                badgeMessage
+              );
+              entry.metadata = {
+                badgeType,
+                badgeMessage,
+                affectedStudentIds: [recommendation.studentIds[0]],
+              };
+              systemActionsExecuted.push(actionKey);
+            }
+            break;
+
+          case "add_note":
+            if (noteText) {
+              addTeacherNote(`rec-${id}`, noteText, teacherId);
+              entry.metadata = {
+                noteText,
+                affectedStudentIds: recommendation.studentIds,
+              };
+              systemActionsExecuted.push(actionKey);
+            }
+            break;
+        }
+      }
+
+      actionEntries.push(entry);
+    }
+
+    // ============================================
+    // Create Teacher To-Dos for soft actions
+    // ============================================
+    const softActionEntries = actionEntries.filter(e => !e.isSystemAction);
+    let createdTodos: TeacherTodo[] = [];
+
+    if (softActionEntries.length > 0) {
+      // Get context for the todos (student names, assignment title, class info)
+      const studentNames = recommendation.triggerData.signals.studentName as string
+        || recommendation.triggerData.signals.studentNames as string
+        || recommendation.studentIds.join(", ");
+      const assignmentTitle = recommendation.triggerData.signals.assignmentTitle as string
+        || undefined;
+      const className = recommendation.triggerData.signals.className as string
+        || undefined;
+
+      // Create todos for each soft action
+      const todoInputs = softActionEntries.map(entry => ({
+        teacherId,
+        recommendationId: id,
+        actionKey: entry.actionKey,
+        label: entry.label,
+        assignmentId: recommendation.assignmentId,
+        assignmentTitle,
+        studentIds: recommendation.studentIds,
+        studentNames,
+        className,
+      }));
+
+      createdTodos = teacherTodoStore.createMany(todoInputs);
+    }
+
+    // Determine new status
+    // - If system actions were executed -> "pending" (awaiting student action)
+    // - If only soft actions -> "resolved" (recommendation is handled, todos created)
+    let newStatus: RecommendationStatus;
+    if (createsPendingState) {
+      newStatus = "pending";
+    } else {
+      newStatus = "resolved";
+    }
+
+    // Update the recommendation with submitted actions
+    const submittedActions = actionEntries.map(entry => ({
+      actionKey: entry.actionKey,
+      label: entry.label,
+      submittedAt: entry.executedAt,
+      submittedBy: entry.executedBy,
+    }));
+
+    // Determine resolution status with proper typing
+    const resolutionStatus = createsPendingState ? "pending" as const : "completed" as const;
+
+    // Create action outcome
+    const outcome = actionOutcomeStore.save({
+      recommendationId: id,
+      actionType: systemActionsExecuted.length > 0 ? systemActionsExecuted[0] as any : "mark_reviewed",
+      actedBy: teacherId,
+      affectedStudentIds: recommendation.studentIds,
+      affectedAssignmentId: recommendation.assignmentId,
+      resolutionStatus,
+      metadata: {
+        noteText,
+        badgeType,
+        badgeMessage,
+      },
+    });
+
+    // Update recommendation status and store submitted actions
+    const updatedRecommendation: typeof recommendation = {
+      ...recommendation,
+      status: newStatus,
+      submittedActions: [
+        ...(recommendation.submittedActions || []),
+        ...submittedActions,
+      ],
+      outcomeId: outcome.id,
+      resolutionStatus,
+      resolvedAt: now,
+      reviewedAt: now,
+      reviewedBy: teacherId,
+    };
+
+    recommendationStore.save(updatedRecommendation);
+
+    const response: SubmitChecklistResponse & { createdTodos?: TeacherTodo[] } = {
+      success: true,
+      recommendation: updatedRecommendation,
+      actionEntries,
+      systemActionsExecuted,
+      newStatus,
+      createdTodos: createdTodos.length > 0 ? createdTodos : undefined,
+    };
+
+    res.json(response);
+  } catch (error) {
+    console.error("Error submitting checklist actions:", error);
+    res.status(500).json({ error: "Failed to submit checklist actions" });
+  }
+});
+
+// ============================================
+// Settings Endpoints
+// ============================================
+
+/**
+ * GET /api/recommendations/settings/thresholds
+ * Get current threshold settings (merged with defaults)
+ */
+router.get("/settings/thresholds", (req, res) => {
+  try {
+    const thresholds = teacherSettingsStore.getThresholds();
+    const defaults = teacherSettingsStore.getDefaults();
+    const rawSettings = teacherSettingsStore.getRawThresholds();
+
+    res.json({
+      current: thresholds,
+      defaults,
+      customized: rawSettings,
+      isCustomized: Object.keys(rawSettings).length > 0,
+    });
+  } catch (error) {
+    console.error("Error getting threshold settings:", error);
+    res.status(500).json({ error: "Failed to get threshold settings" });
+  }
+});
+
+/**
+ * PUT /api/recommendations/settings/thresholds
+ * Update threshold settings
+ */
+router.put("/settings/thresholds", (req, res) => {
+  try {
+    const { teacherId = "educator", ...thresholds } = req.body;
+
+    // Validate that at least one threshold is provided
+    const validKeys = [
+      "needsSupportScore",
+      "needsSupportHintThreshold",
+      "developingUpper",
+      "developingHintMin",
+      "developingHintMax",
+      "strongThreshold",
+      "escalationHelpRequests",
+    ];
+
+    const updates: Record<string, number> = {};
+    for (const key of validKeys) {
+      if (thresholds[key] !== undefined) {
+        updates[key] = thresholds[key];
+      }
+    }
+
+    if (Object.keys(updates).length === 0) {
+      return res.status(400).json({
+        error: "No valid threshold settings provided",
+        validKeys,
+      });
+    }
+
+    teacherSettingsStore.updateThresholds(updates, teacherId);
+
+    res.json({
+      success: true,
+      updated: updates,
+      current: teacherSettingsStore.getThresholds(),
+    });
+  } catch (error) {
+    console.error("Error updating threshold settings:", error);
+    const message = error instanceof Error ? error.message : "Failed to update threshold settings";
+    res.status(400).json({ error: message });
+  }
+});
+
+/**
+ * POST /api/recommendations/settings/thresholds/reset
+ * Reset threshold settings to defaults
+ */
+router.post("/settings/thresholds/reset", (req, res) => {
+  try {
+    const { teacherId = "educator" } = req.body;
+
+    teacherSettingsStore.resetThresholds(teacherId);
+
+    res.json({
+      success: true,
+      message: "Threshold settings reset to defaults",
+      current: teacherSettingsStore.getThresholds(),
+    });
+  } catch (error) {
+    console.error("Error resetting threshold settings:", error);
+    res.status(500).json({ error: "Failed to reset threshold settings" });
   }
 });
 
