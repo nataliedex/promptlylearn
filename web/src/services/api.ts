@@ -4,6 +4,8 @@ const API_BASE = "http://localhost:3001/api";
 export interface Student {
   id: string;
   name: string;
+  preferredName?: string;
+  pronouns?: string;
   notes?: string;
   createdAt: string;
 }
@@ -56,6 +58,7 @@ export interface PromptResponse {
   response: string;
   reflection?: string;
   hintUsed: boolean;
+  inputSource?: "typed" | "voice";
   audioBase64?: string;
   audioFormat?: string;
   educatorNote?: string;
@@ -150,6 +153,37 @@ export async function getStudent(id: string): Promise<Student> {
   return fetchJson(`${API_BASE}/students/${id}`);
 }
 
+/**
+ * Get all assignment records for a student with reviewState
+ */
+export interface StudentAssignmentRecord {
+  id: string;
+  lessonId: string;
+  lessonTitle: string;
+  subject?: string;
+  totalQuestions: number;
+  classId: string;
+  studentId: string;
+  assignedAt: string;
+  completedAt?: string;
+  attempts: number;
+  reviewState: ReviewState;
+  lastActionAt?: string;
+  todoIds?: string[];
+  badgeIds?: string[];
+  reviewedAt?: string;
+  reviewedBy?: string;
+}
+
+export async function getStudentAssignments(studentId: string): Promise<{
+  studentId: string;
+  studentName: string;
+  assignments: StudentAssignmentRecord[];
+  count: number;
+}> {
+  return fetchJson(`${API_BASE}/students/${studentId}/assignments`);
+}
+
 export async function createOrFindStudent(name: string): Promise<{ student: Student; isNew: boolean }> {
   return fetchJson(`${API_BASE}/students`, {
     method: "POST",
@@ -174,6 +208,112 @@ export interface StudentLessonsResponse {
  */
 export async function getStudentLessons(studentId: string): Promise<StudentLessonsResponse> {
   return fetchJson(`${API_BASE}/students/${studentId}/lessons`);
+}
+
+// ============================================
+// Student Badges & Notes
+// ============================================
+
+/**
+ * Badge types available in the system
+ */
+export type StudentBadgeType =
+  | "progress_star"
+  | "mastery_badge"
+  | "effort_award"
+  | "helper_badge"
+  | "persistence"
+  | "curiosity"
+  | "custom";
+
+/**
+ * Badge evidence for student-facing display
+ */
+export interface BadgeEvidence {
+  previousScore?: number;
+  currentScore?: number;
+  improvement?: number;
+  subjectAverageScore?: number;
+  subjectAssignmentCount?: number;
+  hintUsageRate?: number;
+}
+
+/**
+ * Student-facing badge structure
+ */
+export interface StudentBadge {
+  id: string;
+  badgeType: StudentBadgeType;
+  badgeTypeName: string;
+  subject?: string;
+  assignmentId?: string;
+  assignmentTitle?: string;
+  awardedAt: string;
+  awardedBy?: string;
+  reason?: string;
+  evidence?: BadgeEvidence;
+  celebratedAt?: string; // When the student was shown a celebration for this badge
+}
+
+/**
+ * Response from GET /students/:id/badges
+ */
+export interface StudentBadgesResponse {
+  studentId: string;
+  studentName: string;
+  badges: StudentBadge[];
+  count: number;
+}
+
+/**
+ * Student-facing note structure
+ */
+export interface StudentNote {
+  id: string;
+  createdAt: string;
+  teacherName: string;
+  subject?: string;
+  assignmentId?: string;
+  assignmentTitle?: string;
+  attemptNumber?: number;
+  noteText: string;
+  source: "session" | "recommendation";
+}
+
+/**
+ * Response from GET /students/:id/notes
+ */
+export interface StudentNotesResponse {
+  studentId: string;
+  studentName: string;
+  notes: StudentNote[];
+  count: number;
+}
+
+/**
+ * Get badges awarded to a specific student.
+ */
+export async function getStudentBadges(studentId: string): Promise<StudentBadgesResponse> {
+  return fetchJson(`${API_BASE}/students/${studentId}/badges`);
+}
+
+/**
+ * Mark a badge as celebrated (shown to student).
+ */
+export async function markBadgeCelebrated(
+  studentId: string,
+  badgeId: string
+): Promise<{ success: boolean; celebratedAt: string }> {
+  return fetchJson(`${API_BASE}/students/${studentId}/badges/${badgeId}/mark-celebrated`, {
+    method: "POST",
+  });
+}
+
+/**
+ * Get teacher notes for a specific student.
+ */
+export async function getStudentNotes(studentId: string): Promise<StudentNotesResponse> {
+  return fetchJson(`${API_BASE}/students/${studentId}/notes`);
 }
 
 // Lessons
@@ -206,6 +346,12 @@ export async function archiveLesson(id: string): Promise<{ success: boolean; mes
 export async function unarchiveLesson(id: string): Promise<{ success: boolean; message: string }> {
   return fetchJson(`${API_BASE}/lessons/${id}/unarchive`, {
     method: "POST",
+  });
+}
+
+export async function deleteLesson(id: string): Promise<{ success: boolean; message: string }> {
+  return fetchJson(`${API_BASE}/lessons/${id}`, {
+    method: "DELETE",
   });
 }
 
@@ -293,11 +439,19 @@ export async function generateLesson(params: LessonParams): Promise<Lesson> {
 export async function generateQuestion(
   lessonContext: string,
   existingQuestions: string[],
-  difficulty: string
+  difficulty: string,
+  options?: { focus?: string; subject?: string; gradeLevel?: string }
 ): Promise<Prompt> {
   return fetchJson(`${API_BASE}/lessons/generate-question`, {
     method: "POST",
-    body: JSON.stringify({ lessonContext, existingQuestions, difficulty }),
+    body: JSON.stringify({
+      lessonContext,
+      existingQuestions,
+      difficulty,
+      ...(options?.focus && { focus: options.focus }),
+      ...(options?.subject && { subject: options.subject }),
+      ...(options?.gradeLevel && { gradeLevel: options.gradeLevel }),
+    }),
   });
 }
 
@@ -348,6 +502,66 @@ export async function textToSpeech(text: string, voice: string = "nova"): Promis
     }
   }
   throw lastError;
+}
+
+/**
+ * Streaming TTS - Returns a ReadableStream for immediate playback
+ * Reduces perceived latency by starting playback before full audio is ready
+ */
+export async function textToSpeechStream(
+  text: string,
+  voice: string = "nova",
+  onFirstChunk?: (timeMs: number) => void
+): Promise<Response> {
+  const requestStart = performance.now();
+  console.log(`[TTS-Stream] Request starting, text length: ${text?.length}`);
+
+  const response = await fetch(`${API_BASE}/voice/speak/stream`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text, voice }),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ error: "Unknown error" }));
+    throw new Error(error.error || `TTS stream failed: ${response.status}`);
+  }
+
+  // Log timing from server headers if available
+  const apiTime = response.headers.get("X-TTS-Api-Time-Ms");
+  if (apiTime) {
+    console.log(`[TTS-Stream] Server API time: ${apiTime}ms`);
+  }
+
+  if (onFirstChunk) {
+    const timeToFirstChunk = performance.now() - requestStart;
+    console.log(`[TTS-Stream] Client time-to-first-response: ${timeToFirstChunk.toFixed(0)}ms`);
+    onFirstChunk(timeToFirstChunk);
+  }
+
+  return response;
+}
+
+// Voice Settings Types
+export type CoachVoiceMode = "default_coach_voice" | "teacher_voice";
+
+export interface VoiceSettings {
+  coachVoiceMode: CoachVoiceMode;
+  teacherVoiceId?: string;
+  teacherVoiceName?: string;
+  consentGiven?: boolean;
+  consentDate?: string;
+}
+
+export async function getVoiceSettings(): Promise<VoiceSettings> {
+  return fetchJson(`${API_BASE}/voice/settings`);
+}
+
+export async function updateVoiceSettings(settings: Partial<VoiceSettings>): Promise<VoiceSettings> {
+  return fetchJson(`${API_BASE}/voice/settings`, {
+    method: "POST",
+    body: JSON.stringify(settings),
+  });
 }
 
 // Standards
@@ -426,7 +640,8 @@ export async function sendCoachChat(
   topics: string[],
   message: string,
   conversationHistory: ConversationMessage[],
-  gradeLevel?: string
+  gradeLevel?: string,
+  enrichmentMode?: boolean
 ): Promise<CoachChatResponse> {
   return fetchJson(`${API_BASE}/coach/chat`, {
     method: "POST",
@@ -436,6 +651,7 @@ export async function sendCoachChat(
       message,
       conversationHistory,
       gradeLevel,
+      enrichmentMode,
     }),
   });
 }
@@ -482,6 +698,7 @@ export interface ComputedAssignmentState {
   studentsNeedingSupport: number;
   allStudentsComplete: boolean;
   allFlaggedReviewed: boolean;
+  assignedAt?: string; // ISO date string of earliest assignment
 }
 
 export interface TeacherSummary {
@@ -608,6 +825,121 @@ export async function restoreAssignment(assignmentId: string): Promise<Assignmen
 export type StudentActionStatus = "reviewed" | "reassigned" | "no-action-needed";
 
 /**
+ * TEACHER REVIEW STATE (teacher workflow)
+ * =========================================
+ * Each student-assignment pair has ONE teacher review state, DERIVED from underlying data:
+ * - not_started: Student has not submitted work yet (no submission to review)
+ * - pending_review: Student submitted, teacher hasn't reviewed
+ * - reviewed: Teacher reviewed, no follow-up scheduled
+ * - followup_scheduled: Teacher reviewed + at least one open follow-up
+ * - resolved: All follow-ups completed/dismissed
+ *
+ * IMPORTANT: On teacher-facing UIs:
+ * - "not_started" should display as "—" or be hidden (there's nothing to review)
+ * - "pending_review" should display as "Needs review" (not "Not started" or "Awaiting review")
+ */
+export type ReviewState =
+  | "not_started"
+  | "pending_review"
+  | "reviewed"
+  | "followup_scheduled"
+  | "resolved";
+
+/**
+ * TEACHER REVIEW labels - for teacher workflow status
+ * These indicate what ACTION the teacher needs to take, not student progress
+ */
+export const REVIEW_STATE_LABELS: Record<ReviewState, string> = {
+  not_started: "Not started",     // No submission to review
+  pending_review: "Needs review", // CHANGED from "Awaiting review"
+  reviewed: "Reviewed",
+  followup_scheduled: "Follow-up scheduled",
+  resolved: "Reviewed",
+};
+
+/**
+ * UI configuration for review state badges
+ */
+export const REVIEW_STATE_CONFIG: Record<ReviewState, { bg: string; color: string; icon: string }> = {
+  not_started: { bg: "#f1f5f9", color: "#94a3b8", icon: "" },   // Muted - nothing to do
+  pending_review: { bg: "#fff7ed", color: "#ea580c", icon: "" }, // Orange - action needed
+  reviewed: { bg: "#e8f5e9", color: "#166534", icon: "✓" },      // Green - done
+  followup_scheduled: { bg: "#fef3c7", color: "#b45309", icon: "📋" }, // Amber - has follow-up
+  resolved: { bg: "#e8f5e9", color: "#166534", icon: "✓" },      // Green - follow-ups complete
+};
+
+/**
+ * STUDENT PROGRESS STATUS (student fact)
+ * ======================================
+ * Describes what the STUDENT has done, independent of teacher review.
+ * Used for "Student Progress" column in tables.
+ */
+export type StudentProgressStatus =
+  | "not_submitted"  // Student hasn't submitted anything yet
+  | "in_progress"    // Student started but hasn't submitted (optional)
+  | "submitted"      // Student has submitted
+  | "resubmitted";   // Student resubmitted after reassignment
+
+export const STUDENT_PROGRESS_LABELS: Record<StudentProgressStatus, string> = {
+  not_submitted: "Not submitted",
+  in_progress: "In progress",
+  submitted: "Submitted",
+  resubmitted: "Resubmitted",
+};
+
+export const STUDENT_PROGRESS_CONFIG: Record<StudentProgressStatus, { bg: string; color: string }> = {
+  not_submitted: { bg: "#f1f5f9", color: "#64748b" },
+  in_progress: { bg: "#e0f2fe", color: "#0369a1" },
+  submitted: { bg: "#dcfce7", color: "#166534" },
+  resubmitted: { bg: "#dbeafe", color: "#2563eb" },
+};
+
+/**
+ * Derive student progress status from assignment data
+ */
+export function getStudentProgressStatus(
+  completedAt?: string,
+  attempts?: number
+): StudentProgressStatus {
+  if (!completedAt) {
+    return "not_submitted";
+  }
+  if (attempts && attempts > 1) {
+    return "resubmitted";
+  }
+  return "submitted";
+}
+
+/**
+ * Derive teacher review status label for display
+ * This is what should appear in "Teacher Review" columns
+ */
+export function getTeacherReviewLabel(reviewState: ReviewState): string {
+  return REVIEW_STATE_LABELS[reviewState];
+}
+
+/**
+ * Check if a review state indicates the submission has been seen by teacher
+ */
+export function isReviewedState(state: ReviewState): boolean {
+  return state !== "not_started" && state !== "pending_review";
+}
+
+/**
+ * Check if a review state has a follow-up
+ */
+export function hasFollowupState(state: ReviewState): boolean {
+  return state === "followup_scheduled";
+}
+
+/**
+ * Check if there's a submission that needs teacher attention
+ */
+export function needsTeacherReview(state: ReviewState): boolean {
+  return state === "pending_review";
+}
+
+/**
  * Assignment review status summary.
  */
 export interface AssignmentReviewStatus {
@@ -707,6 +1039,7 @@ export interface CreateClassInput {
   period?: string;
   subject?: string;
   studentIds?: string[];
+  teacherId?: string;
 }
 
 export interface UpdateClassInput {
@@ -728,7 +1061,12 @@ export interface StudentAssignment {
   // Completion tracking
   completedAt?: string;
   attempts: number;
-  // Review tracking
+  // Review tracking (canonical)
+  reviewState: ReviewState;
+  lastActionAt?: string;
+  todoIds?: string[];
+  badgeIds?: string[];
+  // Legacy review tracking (deprecated)
   reviewedAt?: string;
   reviewedBy?: string;
 }
@@ -793,7 +1131,10 @@ export async function getClass(classId: string): Promise<ClassWithStudents> {
 export async function createClass(input: CreateClassInput): Promise<Class> {
   return fetchJson(`${API_BASE}/classes`, {
     method: "POST",
-    body: JSON.stringify(input),
+    body: JSON.stringify({
+      ...input,
+      teacherId: input.teacherId || "default-teacher",
+    }),
   });
 }
 
@@ -969,7 +1310,22 @@ export interface AssignedStudentsResponse {
   lessonId: string;
   hasAssignments: boolean;
   studentIds: string[];
-  assignments: Record<string, { attempts: number; completedAt?: string; reviewedAt?: string }>;
+  assignments: Record<string, {
+    attempts: number;
+    completedAt?: string;
+    reviewedAt?: string;
+    reviewState: ReviewState;
+    lastActionAt?: string;
+    todoIds?: string[];
+    badgeIds?: string[];
+    /** @deprecated Use reviewState instead */
+    actionStatus?: StudentActionStatus;
+    /** @deprecated Use lastActionAt instead */
+    actionAt?: string;
+  }>;
+  classId?: string;
+  className?: string;
+  earliestAssignedAt?: string; // ISO date string of earliest assignment
   count: number;
 }
 
@@ -999,10 +1355,39 @@ export async function getStudentAssignment(
 export async function markStudentReviewed(
   lessonId: string,
   studentId: string
-): Promise<{ success: boolean; lessonId: string; studentId: string; reviewedAt: string }> {
+): Promise<{ success: boolean; lessonId: string; studentId: string; reviewedAt: string; reviewState: ReviewState }> {
   return fetchJson(`${API_BASE}/lessons/${lessonId}/students/${studentId}/review`, {
     method: "POST",
     body: JSON.stringify({}),
+  });
+}
+
+/**
+ * Unmark a student's assignment as reviewed (reset to pending_review).
+ * Used when teacher wants to undo the reviewed status.
+ */
+export async function unmarkStudentReviewed(
+  lessonId: string,
+  studentId: string
+): Promise<{ success: boolean; lessonId: string; studentId: string; reviewState: ReviewState }> {
+  return fetchJson(`${API_BASE}/lessons/${lessonId}/students/${studentId}/review-state`, {
+    method: "POST",
+    body: JSON.stringify({ reviewState: "pending_review" }),
+  });
+}
+
+/**
+ * Append a system note to the latest completed session for a student+assignment.
+ * Used after an undo window expires to finalize review notes.
+ */
+export async function appendSystemNote(
+  lessonId: string,
+  studentId: string,
+  note: string
+): Promise<{ success: boolean }> {
+  return fetchJson(`${API_BASE}/lessons/${lessonId}/students/${studentId}/append-note`, {
+    method: "POST",
+    body: JSON.stringify({ note }),
   });
 }
 
@@ -1013,7 +1398,7 @@ export async function markStudentReviewed(
 export async function pushAssignmentToStudent(
   lessonId: string,
   studentId: string
-): Promise<{ success: boolean; lessonId: string; studentId: string; attempts: number; message: string }> {
+): Promise<{ success: boolean; lessonId: string; studentId: string; attempts: number; reviewState: ReviewState; message: string }> {
   return fetchJson(`${API_BASE}/lessons/${lessonId}/students/${studentId}/push`, {
     method: "POST",
     body: JSON.stringify({}),
@@ -1027,11 +1412,12 @@ export async function undoReassignment(
   lessonId: string,
   studentId: string,
   previousCompletedAt?: string,
-  previousReviewedAt?: string
-): Promise<{ success: boolean; lessonId: string; studentId: string; attempts: number; completedAt?: string; reviewedAt?: string; message: string }> {
+  previousReviewedAt?: string,
+  previousReviewState?: ReviewState
+): Promise<{ success: boolean; lessonId: string; studentId: string; attempts: number; completedAt?: string; reviewedAt?: string; reviewState?: ReviewState; message: string }> {
   return fetchJson(`${API_BASE}/lessons/${lessonId}/students/${studentId}/undo-reassignment`, {
     method: "POST",
-    body: JSON.stringify({ previousCompletedAt, previousReviewedAt }),
+    body: JSON.stringify({ previousCompletedAt, previousReviewedAt, previousReviewState }),
   });
 }
 
@@ -1046,6 +1432,49 @@ export async function markAssignmentCompleted(
   return fetchJson(`${API_BASE}/lessons/${lessonId}/students/${studentId}/complete`, {
     method: "POST",
     body: JSON.stringify({}),
+  });
+}
+
+/**
+ * Submit review actions for a student's assignment.
+ * This is the main action endpoint for the student review page.
+ *
+ * Allows teachers to:
+ * - Award Badge (with type and optional message)
+ * - Create a teacher to-do
+ * - Mark as reviewed (always happens)
+ * - Resolve related recommendations (always happens)
+ */
+export interface SubmitReviewActionsRequest {
+  awardBadgeType?: string;
+  badgeMessage?: string;
+  createTodo?: boolean;
+  todoActionKey?: string;  // ChecklistActionKey like "check_in_1to1"
+  todoCustomLabel?: string; // Custom to-do text when todoActionKey is "custom"
+  recommendationId?: string; // Links created to-do back to the source recommendation
+  teacherId?: string;
+}
+
+export interface SubmitReviewActionsResponse {
+  success: boolean;
+  lessonId: string;
+  studentId: string;
+  reviewedAt: string;
+  reviewState: ReviewState;
+  badge?: { id: string; type: string };
+  todo?: { id: string; label: string };
+  reviewed: boolean;
+  resolvedRecommendations: number;
+}
+
+export async function submitReviewActions(
+  lessonId: string,
+  studentId: string,
+  actions: SubmitReviewActionsRequest
+): Promise<SubmitReviewActionsResponse> {
+  return fetchJson(`${API_BASE}/lessons/${lessonId}/students/${studentId}/review-actions`, {
+    method: "POST",
+    body: JSON.stringify(actions),
   });
 }
 
@@ -1145,7 +1574,7 @@ export async function getStudentCoachingInsights(studentId: string): Promise<Coa
 }
 
 // ============================================
-// Recommendations API ("What Should I Do Next?")
+// Recommendations API (Recommended Actions)
 // ============================================
 
 /**
@@ -1277,7 +1706,7 @@ const EXCLUDED_ATTENTION_RULE_NAMES = [
  * Check if a recommendation requires immediate teacher attention.
  * This is the canonical filter for the "X students need attention today" section.
  *
- * EXCLUDES: Celebrate Progress, Challenge Opportunity, Monitor, etc.
+ * EXCLUDES: Acknowledge Progress, Extend Learning, Monitor, etc.
  * INCLUDES: Needs Support, Check-in Suggested, elevated Developing
  *
  * @param rec - The recommendation to check
@@ -1356,12 +1785,14 @@ export interface RefreshRecommendationsResponse {
 export async function getRecommendations(options?: {
   limit?: number;
   assignmentId?: string;
+  studentId?: string;
   includeReviewed?: boolean;
   status?: "active" | "pending" | "resolved" | "reviewed" | "all";
 }): Promise<RecommendationsResponse> {
   const params = new URLSearchParams();
   if (options?.limit) params.set("limit", options.limit.toString());
   if (options?.assignmentId) params.set("assignmentId", options.assignmentId);
+  if (options?.studentId) params.set("studentId", options.studentId);
   if (options?.includeReviewed) params.set("includeReviewed", "true");
   if (options?.status) params.set("status", options.status);
 
@@ -1402,6 +1833,17 @@ export async function dismissRecommendation(
   id: string
 ): Promise<{ success: boolean; recommendation: Recommendation }> {
   return fetchJson(`${API_BASE}/recommendations/${id}/dismiss`, {
+    method: "POST",
+  });
+}
+
+/**
+ * Reactivate a recommendation (return to active status).
+ */
+export async function reactivateRecommendation(
+  id: string
+): Promise<{ success: boolean; recommendation: Recommendation }> {
+  return fetchJson(`${API_BASE}/recommendations/${id}/reactivate`, {
     method: "POST",
   });
 }
@@ -1479,7 +1921,7 @@ export async function reassignToStudent(
 }
 
 /**
- * Award a badge to a student.
+ * Award Badge to a student.
  * Marks the recommendation as reviewed.
  */
 export async function awardBadgeToStudent(
@@ -1521,16 +1963,16 @@ export async function addTeacherNoteToRecommendation(
  * SYSTEM ACTIONS (execute backend logic):
  * - assign_practice: Assign practice to student(s)
  * - reassign_student: Reassign assignment to student
- * - award_badge: Award a badge to student
+ * - award_badge: Award Badge
  * - add_note: Add a teacher note
  *
  * SOFT ACTIONS (logged but no system mutation):
  * - run_small_group_review: Schedule a group review session
  * - review_responses: Review student responses
  * - prepare_targeted_practice: Prepare targeted practice
- * - check_in_1to1: Have a 1-on-1 conversation
- * - discuss_extension: Discuss extension activities
- * - explore_peer_tutoring: Explore peer tutoring
+ * - check_in_1to1: Schedule Check-In
+ * - discuss_extension: Plan Extension Activity
+ * - explore_peer_tutoring: Consider Peer Support
  * - acknowledge_progress: Acknowledge student progress
  */
 export type ChecklistActionKey =
@@ -1544,7 +1986,8 @@ export type ChecklistActionKey =
   | "check_in_1to1"
   | "discuss_extension"
   | "explore_peer_tutoring"
-  | "acknowledge_progress";
+  | "acknowledge_progress"
+  | "invite_coaching_session";
 
 /**
  * Configuration for displaying checklist actions in the UI
@@ -1556,6 +1999,7 @@ export interface ChecklistActionConfig {
   isSystemAction: boolean;
   requiresBadgeType?: boolean;
   requiresNoteText?: boolean;
+  requiresCoachingDetails?: boolean;
   createsPendingState?: boolean;
 }
 
@@ -1580,7 +2024,7 @@ export const CHECKLIST_ACTIONS: Record<ChecklistActionKey, ChecklistActionConfig
   },
   award_badge: {
     key: "award_badge",
-    label: "Award a badge",
+    label: "Award Badge",
     description: "Recognize student achievement with a badge",
     isSystemAction: true,
     requiresBadgeType: true,
@@ -1610,23 +2054,30 @@ export const CHECKLIST_ACTIONS: Record<ChecklistActionKey, ChecklistActionConfig
   },
   check_in_1to1: {
     key: "check_in_1to1",
-    label: "Have a 1-on-1 conversation",
+    label: "Schedule Check-In",
     isSystemAction: false,
   },
   discuss_extension: {
     key: "discuss_extension",
-    label: "Discuss extension activities",
+    label: "Plan Extension Activity",
     isSystemAction: false,
   },
   explore_peer_tutoring: {
     key: "explore_peer_tutoring",
-    label: "Explore peer tutoring opportunities",
+    label: "Consider Peer Support",
     isSystemAction: false,
   },
   acknowledge_progress: {
     key: "acknowledge_progress",
     label: "Acknowledge their progress",
     isSystemAction: false,
+  },
+  invite_coaching_session: {
+    key: "invite_coaching_session",
+    label: "Invite to coaching session",
+    description: "Push a special coaching session invitation",
+    isSystemAction: true,
+    requiresCoachingDetails: true,
   },
 };
 
@@ -1687,6 +2138,7 @@ export function getChecklistActionsForCategory(
       break;
 
     case "challenge-opportunity":
+      actions.push("invite_coaching_session");
       actions.push("discuss_extension");
       actions.push("explore_peer_tutoring");
       actions.push("award_badge");
@@ -1715,6 +2167,9 @@ export interface SubmitChecklistRequest {
   badgeType?: string;
   badgeMessage?: string;
   teacherId?: string;
+  // Coaching session details (for invite_coaching_session action)
+  coachingTitle?: string;
+  coachingNote?: string;
 }
 
 /**
@@ -1766,11 +2221,19 @@ export async function submitChecklistActions(
 // Teacher To-Do Types
 // ============================================
 
-export type TeacherTodoStatus = "open" | "done";
+export type TeacherTodoStatus = "open" | "done" | "superseded";
 
 /**
  * A teacher to-do item created from soft checklist actions.
  */
+export type RecommendationCategory =
+  | "Needs Support"
+  | "Developing"
+  | "Ready for Challenge"
+  | "Celebrate Progress"
+  | "Group Support"
+  | "Monitor";
+
 export interface TeacherTodo {
   id: string;
   teacherId: string;
@@ -1779,6 +2242,7 @@ export interface TeacherTodo {
   // Action details
   actionKey: ChecklistActionKey;
   label: string;
+  category?: RecommendationCategory;
 
   // Context for display
   classId?: string;
@@ -1793,6 +2257,7 @@ export interface TeacherTodo {
   status: TeacherTodoStatus;
   createdAt: string;
   doneAt?: string;
+  supersededAt?: string;
 }
 
 /**
@@ -1821,6 +2286,140 @@ export interface TodosByAssignment {
   assignmentId: string | null;
   assignmentTitle: string | null;
   todos: TeacherTodo[];
+}
+
+/**
+ * A single todo with context for display
+ */
+export interface TodoWithContext {
+  todo: TeacherTodo;
+  contextLine: string; // e.g., "Math · Division Basics"
+}
+
+/**
+ * Todos grouped by student for the To-Do panel
+ */
+export interface TodosByStudent {
+  studentId: string;
+  studentName: string;
+  todos: TodoWithContext[];
+}
+
+/**
+ * Format an assignment ID as a readable title.
+ * Converts "exploring-the-ocean" to "Exploring the Ocean"
+ */
+function formatAssignmentId(id: string): string {
+  return id
+    .split("-")
+    .map((word, index) => {
+      // Capitalize first word and other important words
+      if (index === 0 || !["the", "a", "an", "and", "or", "of", "in", "on", "at", "to", "for"].includes(word)) {
+        return word.charAt(0).toUpperCase() + word.slice(1);
+      }
+      return word;
+    })
+    .join(" ");
+}
+
+/**
+ * Build a context line from todo fields.
+ * Format: "Subject · Assignment Title" (only includes fields that exist)
+ */
+export function buildTodoContextLine(todo: TeacherTodo): string {
+  const parts: string[] = [];
+
+  if (todo.subject) {
+    parts.push(todo.subject);
+  }
+
+  // Use assignmentTitle if available, otherwise format assignmentId
+  if (todo.assignmentTitle) {
+    parts.push(todo.assignmentTitle);
+  } else if (todo.assignmentId) {
+    parts.push(formatAssignmentId(todo.assignmentId));
+  }
+
+  return parts.join(" · ");
+}
+
+/**
+ * Group todos by student for the Teacher To-Do panel.
+ * For todos with multiple studentIds, creates a separate entry for each student.
+ */
+export function groupTodosByStudent(todos: TeacherTodo[]): TodosByStudent[] {
+  const studentMap = new Map<string, {
+    studentId: string;
+    studentName: string;
+    todos: TodoWithContext[];
+  }>();
+
+  for (const todo of todos) {
+    const contextLine = buildTodoContextLine(todo);
+
+    // If todo has studentIds, create entry per student
+    if (todo.studentIds && todo.studentIds.length > 0) {
+      // Parse studentNames (comma-separated) to match with studentIds
+      const names = todo.studentNames?.split(",").map(n => n.trim()) || [];
+
+      for (let i = 0; i < todo.studentIds.length; i++) {
+        const studentId = todo.studentIds[i];
+        const studentName = names[i] || studentId;
+
+        if (!studentMap.has(studentId)) {
+          studentMap.set(studentId, {
+            studentId,
+            studentName,
+            todos: [],
+          });
+        }
+
+        studentMap.get(studentId)!.todos.push({
+          todo,
+          contextLine,
+        });
+      }
+    } else if (todo.studentNames) {
+      // Fallback: use studentNames as key if no studentIds
+      const key = todo.studentNames;
+      if (!studentMap.has(key)) {
+        studentMap.set(key, {
+          studentId: key,
+          studentName: todo.studentNames,
+          todos: [],
+        });
+      }
+      studentMap.get(key)!.todos.push({
+        todo,
+        contextLine,
+      });
+    } else {
+      // No student info - put under "General"
+      const key = "__no_student__";
+      if (!studentMap.has(key)) {
+        studentMap.set(key, {
+          studentId: key,
+          studentName: "General",
+          todos: [],
+        });
+      }
+      studentMap.get(key)!.todos.push({
+        todo,
+        contextLine,
+      });
+    }
+  }
+
+  // Convert to array and sort by student name
+  const result = Array.from(studentMap.values());
+  result.sort((a, b) => {
+    // Put "General" at the end
+    if (a.studentName === "General") return 1;
+    if (b.studentName === "General") return -1;
+    return a.studentName.localeCompare(b.studentName);
+  });
+
+  return result;
 }
 
 /**
@@ -1911,10 +2510,37 @@ export async function reopenTeacherTodo(
 
 /**
  * Delete a teacher todo.
+ * @param id - The todo ID to delete
+ * @param reactivateRecommendation - If true, returns the associated recommendation to active status
  */
-export async function deleteTeacherTodo(id: string): Promise<{ success: boolean }> {
-  return fetchJson(`${API_BASE}/teacher-todos/${id}`, {
+export async function deleteTeacherTodo(
+  id: string,
+  reactivateRecommendation?: boolean
+): Promise<{ success: boolean; reactivatedRecommendation?: boolean }> {
+  const params = new URLSearchParams();
+  if (reactivateRecommendation) {
+    params.set("reactivateRecommendation", "true");
+  }
+
+  const queryString = params.toString();
+  const url = queryString
+    ? `${API_BASE}/teacher-todos/${id}?${queryString}`
+    : `${API_BASE}/teacher-todos/${id}`;
+
+  return fetchJson(url, {
     method: "DELETE",
+  });
+}
+
+/**
+ * Supersede a teacher todo (mark as inactive due to review reopen).
+ * The todo is retained for historical record but excluded from active views.
+ */
+export async function supersedeTeacherTodo(
+  id: string
+): Promise<{ success: boolean; todo: TeacherTodo; totalOpen: number }> {
+  return fetchJson(`${API_BASE}/teacher-todos/${id}/supersede`, {
+    method: "POST",
   });
 }
 
@@ -2056,4 +2682,184 @@ export async function checkStudentAttention(
     : `${API_BASE}/attention/student/${studentId}`;
 
   return fetchJson(url);
+}
+
+// ============================================
+// Coaching Invites Types (Teacher-Pushed Enrichment)
+// ============================================
+
+export type CoachingInviteStatus = "pending" | "started" | "completed" | "dismissed";
+export type CoachingMode = "enrichment" | "support" | "general";
+
+/**
+ * AI guardrails for a coaching session
+ */
+export interface CoachingGuardrails {
+  mode: CoachingMode;
+  difficultyDelta: number;
+  allowedTopics: string[];
+  disallowed: string[];
+}
+
+/**
+ * A teacher-pushed enrichment coaching session invitation
+ */
+export interface CoachingInvite {
+  id: string;
+  teacherId: string;
+  studentId: string;
+  classId?: string;
+  subject: string;
+  assignmentId?: string;
+  assignmentTitle?: string;
+  title: string;
+  teacherNote?: string;
+  guardrails: CoachingGuardrails;
+  status: CoachingInviteStatus;
+  createdAt: string;
+  startedAt?: string;
+  completedAt?: string;
+  lastActivityAt?: string;
+  dismissedAt?: string;
+  sourceRecommendationId?: string;
+  messageCount?: number;
+}
+
+/**
+ * Response from coaching invites endpoints
+ */
+export interface CoachingInvitesResponse {
+  invites: CoachingInvite[];
+  counts: {
+    pending: number;
+    started: number;
+    completed: number;
+    dismissed: number;
+    total: number;
+  };
+}
+
+/**
+ * Input for creating a coaching invite
+ */
+export interface CreateCoachingInviteInput {
+  teacherId?: string;
+  studentId: string;
+  classId?: string;
+  subject: string;
+  assignmentId?: string;
+  assignmentTitle?: string;
+  title: string;
+  teacherNote?: string;
+  sourceRecommendationId?: string;
+}
+
+// ============================================
+// Coaching Invites API Functions
+// ============================================
+
+/**
+ * Create a new coaching invite (teacher action).
+ */
+export async function createCoachingInvite(
+  input: CreateCoachingInviteInput
+): Promise<{ success: boolean; invite: CoachingInvite }> {
+  return fetchJson(`${API_BASE}/coaching-invites`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+/**
+ * Get coaching invites with optional filtering.
+ */
+export async function getCoachingInvites(options?: {
+  teacherId?: string;
+  studentId?: string;
+  status?: CoachingInviteStatus;
+}): Promise<CoachingInvitesResponse> {
+  const params = new URLSearchParams();
+  if (options?.teacherId) params.set("teacherId", options.teacherId);
+  if (options?.studentId) params.set("studentId", options.studentId);
+  if (options?.status) params.set("status", options.status);
+
+  const queryString = params.toString();
+  const url = queryString
+    ? `${API_BASE}/coaching-invites?${queryString}`
+    : `${API_BASE}/coaching-invites`;
+
+  return fetchJson(url);
+}
+
+/**
+ * Get a single coaching invite by ID.
+ */
+export async function getCoachingInvite(id: string): Promise<{ invite: CoachingInvite }> {
+  return fetchJson(`${API_BASE}/coaching-invites/${id}`);
+}
+
+/**
+ * Get coaching invites for a specific student.
+ */
+export async function getStudentCoachingInvites(
+  studentId: string,
+  status?: CoachingInviteStatus
+): Promise<CoachingInvitesResponse> {
+  const params = new URLSearchParams();
+  if (status) params.set("status", status);
+
+  const queryString = params.toString();
+  const url = queryString
+    ? `${API_BASE}/coaching-invites/student/${studentId}?${queryString}`
+    : `${API_BASE}/coaching-invites/student/${studentId}`;
+
+  return fetchJson(url);
+}
+
+/**
+ * Mark a coaching invite as started (student action).
+ */
+export async function startCoachingInvite(
+  inviteId: string
+): Promise<{ success: boolean; invite: CoachingInvite }> {
+  return fetchJson(`${API_BASE}/coaching-invites/${inviteId}/start`, {
+    method: "POST",
+  });
+}
+
+/**
+ * Mark a coaching invite as completed (student action).
+ */
+export async function completeCoachingInvite(
+  inviteId: string,
+  messageCount?: number
+): Promise<{ success: boolean; invite: CoachingInvite }> {
+  return fetchJson(`${API_BASE}/coaching-invites/${inviteId}/complete`, {
+    method: "POST",
+    body: JSON.stringify({ messageCount }),
+  });
+}
+
+/**
+ * Dismiss a coaching invite (student action).
+ */
+export async function dismissCoachingInvite(
+  inviteId: string
+): Promise<{ success: boolean; invite: CoachingInvite }> {
+  return fetchJson(`${API_BASE}/coaching-invites/${inviteId}/dismiss`, {
+    method: "POST",
+  });
+}
+
+/**
+ * Update activity on a coaching invite.
+ */
+export async function updateCoachingInviteActivity(
+  inviteId: string,
+  messageCount?: number
+): Promise<{ success: boolean; invite: CoachingInvite }> {
+  return fetchJson(`${API_BASE}/coaching-invites/${inviteId}/activity`, {
+    method: "POST",
+    body: JSON.stringify({ messageCount }),
+  });
 }

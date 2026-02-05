@@ -243,7 +243,8 @@ export async function generateLesson(params: LessonParams): Promise<Lesson | nul
 export async function generateSingleQuestion(
   lessonContext: string,
   existingQuestions: string[],
-  difficulty: string
+  difficulty: string,
+  options?: { focus?: string; subject?: string; gradeLevel?: string }
 ): Promise<Prompt | null> {
   const client = getClient();
 
@@ -251,25 +252,33 @@ export async function generateSingleQuestion(
     return null;
   }
 
+  const focusLine = options?.focus
+    ? `\nTeacher's requested focus: ${options.focus}\n`
+    : "";
+  const subjectLine = options?.subject ? `Subject: ${options.subject}` : "";
+  const gradeLine = options?.gradeLevel ? `Grade level: ${options.gradeLevel}` : "";
+  const metaLines = [subjectLine, gradeLine].filter(Boolean).join("\n");
+
   const prompt = `You are adding one more question to an existing lesson.
 
 Lesson context: ${lessonContext}
+${metaLines ? `${metaLines}\n` : ""}Difficulty: ${difficulty}
 
 Existing questions (don't repeat these):
 ${existingQuestions.map((q, i) => `${i + 1}. ${q}`).join("\n")}
+${focusLine}
+Generate ONE new open-ended question that:
+- Is different from the existing questions above
+- Matches the tone, style, and difficulty level of those existing questions
+- Fits the lesson context${options?.focus ? `\n- Focuses on: ${options.focus}` : ""}
+- Asks students to explain their thinking in their own words (not yes/no or fill-in-the-blank)
 
-Generate ONE new question that:
-- Is different from the existing questions
-- Fits the lesson context
-- Is appropriate for 2nd graders
-- Asks students to explain their thinking
-
-Difficulty: ${difficulty}
+Include exactly 2 helpful hints that guide the student toward a good answer without giving it away.
 
 Respond with JSON:
 {
   "input": "The question text",
-  "hints": ["First hint", "Second hint"]
+  "hints": ["First helpful hint", "Second helpful hint"]
 }`;
 
   try {

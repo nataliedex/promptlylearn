@@ -235,6 +235,22 @@ export class TeacherTodoStore {
   }
 
   /**
+   * Supersede a todo (mark as inactive due to review reopen)
+   */
+  supersede(id: string): TeacherTodo | null {
+    const data = this.loadData();
+    const todo = data.todos.find((t) => t.id === id);
+
+    if (!todo) return null;
+
+    todo.status = "superseded";
+    todo.supersededAt = new Date().toISOString();
+
+    this.writeData(data);
+    return todo;
+  }
+
+  /**
    * Delete a todo
    */
   delete(id: string): boolean {
@@ -249,11 +265,11 @@ export class TeacherTodoStore {
   }
 
   /**
-   * Get counts
+   * Get counts (excludes superseded todos)
    */
   getCounts(teacherId?: string): { total: number; open: number; done: number } {
     const data = this.loadData();
-    let todos = data.todos;
+    let todos = data.todos.filter((t) => t.status !== "superseded");
 
     if (teacherId) {
       todos = todos.filter((t) => t.teacherId === teacherId);

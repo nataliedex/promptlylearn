@@ -1,3 +1,236 @@
+/* ============================================
+   Design System Tokens
+   ============================================
+
+   Design Philosophy: Calm, Editorial, Teacher-First
+
+   Inspired by Anthropologie.com - approachable but not bubbly,
+   sophisticated but not cold. The UI should feel like a trusted
+   professional tool, not a playful app.
+
+   Core Principles:
+   1. Readability first - high contrast text on light surfaces
+   2. Color communicates meaning, not decoration
+   3. Gradients are atmosphere, never content surfaces
+   4. Restraint over vibrancy
+
+   ============================================ */
+
+:root {
+  /* ==========================================
+     TEXT COLORS - Hierarchy & Readability
+     ==========================================
+
+     Rules:
+     - Titles and questions ALWAYS use --text-primary
+     - Purple tones are NEVER used for body text
+     - Never place mid-contrast text directly on gradients
+     - All readable content sits on white/neutral surfaces
+  */
+
+  /* Text Primary - Lesson titles, question text, student names, main content */
+  --text-primary: #111827;
+
+  /* Text Secondary - Supporting text, explanations, metadata under titles */
+  --text-secondary: #4b5563;
+
+  /* Text Muted - Labels like "Description", "Questions", timestamps, helper text */
+  --text-muted: #9ca3af;
+
+  /* Text Disabled - Disabled buttons, inactive states */
+  --text-disabled: #d1d5db;
+
+  /* Text on Dark - For text on gradient backgrounds (headers, navigation) */
+  --text-on-dark: rgba(255, 255, 255, 0.95);
+  --text-on-dark-muted: rgba(255, 255, 255, 0.7);
+
+  /* Legacy aliases (for backward compatibility) */
+  --color-text-primary: var(--text-primary);
+  --color-text-secondary: var(--text-secondary);
+  --color-text-muted: var(--text-muted);
+
+  /* ==========================================
+     SURFACE TOKENS - Backgrounds & Cards
+     ==========================================
+
+     Rules:
+     - Gradients are for atmosphere ONLY
+     - All text content must sit on card or neutral surfaces
+     - White surfaces for primary content
+  */
+
+  /* Page Surface - The purple gradient (background atmosphere only) */
+  --surface-page: linear-gradient(135deg, #7c8fce 0%, #9178a8 100%);
+
+  /* Card Surface - Pure white, all readable content lives here */
+  --surface-card: #ffffff;
+
+  /* Muted Surface - Very light neutral for subtle grouping */
+  --surface-muted: #f9fafb;
+
+  /* Accent Surface - Light neutral for helper panels, grouped actions */
+  --surface-accent: #f3f4f6;
+
+  /* Elevated Surface - Slightly off-white for hover states */
+  --surface-elevated: #fafafa;
+
+  /* Accent Surface Tint - Very light accent color for selected/expanded states */
+  --surface-accent-tint: #f8f9ff;
+
+  /* Legacy aliases */
+  --color-surface: var(--surface-card);
+  --color-surface-elevated: var(--surface-elevated);
+  --gradient-primary: var(--surface-page);
+  --gradient-subtle: linear-gradient(135deg, #8b9ad4 0%, #a088b5 100%);
+
+  /* ==========================================
+     BORDER & DIVIDER TOKENS
+     ==========================================
+
+     Rules:
+     - Borders guide the eye, never draw attention
+     - Use subtle borders for card outlines
+     - Use muted borders for internal dividers
+  */
+
+  /* Subtle Border - Card outlines, section dividers */
+  --border-subtle: #e5e7eb;
+
+  /* Muted Border - Separators inside cards, tables */
+  --border-muted: #f3f4f6;
+
+  /* Focus Border - Input focus states */
+  --border-focus: #7c8fce;
+
+  /* Legacy aliases */
+  --color-border: var(--border-subtle);
+  --color-border-light: var(--border-muted);
+
+  /* ==========================================
+     ACCENT & BRAND COLORS
+     ==========================================
+
+     The primary purple is used sparingly for:
+     - Primary action buttons
+     - Active states
+     - Progress indicators
+  */
+
+  /* Primary Accent - Create Lesson, Save Changes, primary actions */
+  --accent-primary: #7c8fce;
+  --accent-primary-hover: #6b7bb8;
+  --accent-primary-light: #a8b5e0;
+
+  /* Secondary Accent - Alternative accent for variety */
+  --accent-secondary: #9178a8;
+  --accent-secondary-hover: #7d6694;
+
+  /* Legacy aliases */
+  --color-primary: var(--accent-primary);
+  --color-primary-dark: var(--accent-primary-hover);
+  --color-primary-light: var(--accent-primary-light);
+  --color-accent: var(--accent-secondary);
+  --color-accent-dark: var(--accent-secondary-hover);
+
+  /* ==========================================
+     SEMANTIC STATUS COLORS
+     ==========================================
+
+     Rules:
+     - Accent colors communicate meaning, not decoration
+     - Do not invent new accent colors outside this set
+     - Background colors should be calm and breathable, not saturated
+  */
+
+  /* Success - "Strong", "Completed", positive outcomes */
+  --status-success: #10b981;
+  --status-success-text: #065f46;
+  --status-success-bg: #ecfdf5;
+
+  /* Warning - "Developing", needs attention soon */
+  --status-warning: #f59e0b;
+  --status-warning-text: #92400e;
+  --status-warning-bg: #fffbeb;
+
+  /* Danger - "Needs Support", urgent states */
+  --status-danger: #ef4444;
+  --status-danger-text: #991b1b;
+  --status-danger-bg: #fef2f2;
+  --status-danger-border: #fecaca;
+
+  /* Info - Informational badges, links */
+  --status-info: #3b82f6;
+  --status-info-text: #1e40af;
+  --status-info-bg: #eff6ff;
+
+  /* Violet - Category chips, grade levels */
+  --status-violet: #8b5cf6;
+  --status-violet-text: #6d28d9;
+  --status-violet-bg: #f5f3ff;
+  --status-violet-bg-hover: #ede9fe;
+
+  /* Pending - Awaiting action states */
+  --status-pending: #f97316;
+  --status-pending-text: #c2410c;
+  --status-pending-bg: #fff7ed;
+
+  /* Legacy aliases */
+  --color-success: var(--status-success);
+  --color-success-bg: var(--status-success-bg);
+  --color-success-text: var(--status-success-text);
+  --color-warning: var(--status-warning);
+  --color-warning-bg: var(--status-warning-bg);
+  --color-warning-text: var(--status-warning-text);
+  --color-error: var(--status-danger);
+  --color-error-bg: var(--status-danger-bg);
+  --color-error-text: var(--status-danger-text);
+
+  /* Spacing */
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-md: 16px;
+  --space-lg: 24px;
+  --space-xl: 32px;
+  --space-2xl: 48px;
+
+  /* Border Radius - Soft rectangles, not pills */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
+
+  /* Shadows - Subtle, layered */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04);
+  --shadow-md: 0 2px 8px rgba(0, 0, 0, 0.06);
+  --shadow-lg: 0 4px 16px rgba(0, 0, 0, 0.08);
+  --shadow-xl: 0 8px 24px rgba(0, 0, 0, 0.1);
+
+  /* Typography */
+  --font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+  --font-size-xs: 0.75rem;
+  --font-size-sm: 0.875rem;
+  --font-size-base: 1rem;
+  --font-size-lg: 1.125rem;
+  --font-size-xl: 1.25rem;
+  --font-size-2xl: 1.5rem;
+  --font-size-3xl: 2rem;
+
+  --font-weight-normal: 400;
+  --font-weight-medium: 500;
+  --font-weight-semibold: 600;
+  --font-weight-bold: 700;
+
+  --line-height-tight: 1.25;
+  --line-height-normal: 1.5;
+  --line-height-relaxed: 1.625;
+
+  /* Transitions */
+  --transition-fast: 150ms ease;
+  --transition-normal: 200ms ease;
+  --transition-slow: 300ms ease;
+}
+
 * {
   box-sizing: border-box;
   margin: 0;
@@ -5,99 +238,170 @@
 }
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen,
-    Ubuntu, Cantarell, "Open Sans", "Helvetica Neue", sans-serif;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  font-family: var(--font-family);
+  background: var(--surface-page);
   min-height: 100vh;
+  color: var(--text-primary);
+  line-height: var(--line-height-normal);
 }
 
 .app {
   min-height: 100vh;
-  padding: 20px;
+  padding: var(--space-lg);
 }
 
-/* Cards */
+/* Cards - Soft rectangles with subtle shadows */
 .card {
-  background: white;
-  border-radius: 16px;
-  padding: 24px;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
-  margin-bottom: 16px;
+  background: var(--surface-card);
+  border-radius: var(--radius-lg);
+  padding: var(--space-lg);
+  box-shadow: var(--shadow-md);
+  margin-bottom: var(--space-md);
 }
 
-/* Buttons */
+/* Buttons - Clear hierarchy */
 .btn {
-  padding: 12px 24px;
+  padding: 10px 20px;
   border: none;
-  border-radius: 8px;
-  font-size: 16px;
-  font-weight: 600;
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
   cursor: pointer;
-  transition: all 0.2s ease;
+  transition: all var(--transition-normal);
+  letter-spacing: 0.01em;
 }
 
+/* Primary - Solid with gradient */
 .btn-primary {
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: var(--surface-page);
   color: white;
+  box-shadow: var(--shadow-sm);
 }
 
 .btn-primary:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-md);
 }
 
+/* Secondary - Outline style */
 .btn-secondary {
-  background: #f0f0f0;
-  color: #333;
+  background: transparent;
+  color: var(--accent-primary);
+  border: 1.5px solid var(--accent-primary);
 }
 
 .btn-secondary:hover {
-  background: #e0e0e0;
+  background: var(--accent-primary);
+  color: white;
+}
+
+/* Tertiary - Text only (ghost) */
+.btn-tertiary {
+  background: transparent;
+  color: var(--text-secondary);
+  padding: 10px 16px;
+}
+
+.btn-tertiary:hover {
+  color: var(--accent-primary);
+  background: rgba(124, 143, 206, 0.08);
+}
+
+/* Navigation Anchor - Soft, editorial affordance */
+.btn-nav {
+  background: rgba(255, 255, 255, 0.12);
+  color: var(--text-on-dark);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  font-weight: var(--font-weight-medium);
+}
+
+.btn-nav:hover {
+  background: rgba(255, 255, 255, 0.18);
+  border-color: rgba(255, 255, 255, 0.25);
+}
+
+.btn-nav:active {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+/* Coach Button - Soft, experiential identity */
+.btn-coach {
+  background: rgba(255, 255, 255, 0.15);
+  color: var(--text-on-dark);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  font-weight: var(--font-weight-semibold);
+  position: relative;
+}
+
+.btn-coach:hover {
+  background: rgba(255, 255, 255, 0.22);
+  border-color: rgba(255, 255, 255, 0.3);
+}
+
+/* Coach button with pending invite - Subtle warmth */
+.btn-coach--has-invite {
+  background: rgba(255, 255, 255, 0.18);
+  border-color: rgba(74, 222, 128, 0.4);
+  box-shadow: inset 0 0 0 1px rgba(74, 222, 128, 0.15);
+}
+
+.btn-coach--has-invite:hover {
+  background: rgba(255, 255, 255, 0.25);
+  border-color: rgba(74, 222, 128, 0.5);
 }
 
 .btn:disabled {
-  opacity: 0.6;
+  opacity: 0.5;
   cursor: not-allowed;
   transform: none;
 }
 
-/* Inputs */
+/* Inputs - Clean, minimal borders */
 input[type="text"],
 textarea {
   width: 100%;
-  padding: 12px 16px;
-  border: 2px solid #e0e0e0;
-  border-radius: 8px;
-  font-size: 16px;
-  transition: border-color 0.2s ease;
+  padding: 12px 14px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-base);
+  font-family: var(--font-family);
+  color: var(--text-primary);
+  background: var(--surface-card);
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
 }
 
 input[type="text"]:focus,
 textarea:focus {
   outline: none;
-  border-color: #667eea;
+  border-color: var(--border-focus);
+  box-shadow: 0 0 0 3px rgba(124, 143, 206, 0.12);
 }
 
-/* Progress Bar */
+input[type="text"]::placeholder,
+textarea::placeholder {
+  color: var(--text-muted);
+}
+
+/* Progress Bar - Refined */
 .progress-bar {
-  background: #e0e0e0;
-  border-radius: 10px;
-  height: 20px;
+  background: var(--border-muted);
+  border-radius: var(--radius-sm);
+  height: 8px;
   overflow: hidden;
 }
 
 .progress-bar-fill {
-  background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+  background: var(--surface-page);
   height: 100%;
-  border-radius: 10px;
-  transition: width 0.3s ease;
+  border-radius: var(--radius-sm);
+  transition: width var(--transition-slow);
 }
 
 /* Layout */
 .container {
   max-width: 1200px;
   margin: 0 auto;
-  padding: 0 20px;
+  padding: 0 var(--space-lg);
 }
 
 .container.narrow {
@@ -106,31 +410,33 @@ textarea:focus {
 
 .header {
   text-align: center;
-  margin-bottom: 32px;
+  margin-bottom: var(--space-xl);
 }
 
 .header h1 {
-  color: white;
-  font-size: 2rem;
-  margin-bottom: 8px;
-  text-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
+  color: var(--text-on-dark);
+  font-size: var(--font-size-2xl);
+  font-weight: var(--font-weight-bold);
+  margin-bottom: var(--space-sm);
+  letter-spacing: -0.02em;
 }
 
 .header p {
-  color: rgba(255, 255, 255, 0.9);
-  font-size: 1.1rem;
+  color: var(--text-on-dark-muted);
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-normal);
 }
 
 @media (min-width: 768px) {
   .header h1 {
-    font-size: 2.5rem;
+    font-size: var(--font-size-3xl);
   }
 }
 
 /* Lesson cards */
 .lesson-grid {
   display: grid;
-  gap: 16px;
+  gap: var(--space-md);
   grid-template-columns: 1fr;
 }
 
@@ -148,62 +454,69 @@ textarea:focus {
 
 .lesson-card {
   cursor: pointer;
-  transition: transform 0.2s ease, box-shadow 0.2s ease;
+  transition: transform var(--transition-normal), box-shadow var(--transition-normal);
 }
 
 .lesson-card:hover {
-  transform: translateY(-4px);
-  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.15);
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-lg);
 }
 
 .lesson-card h3 {
-  margin-bottom: 8px;
-  color: #333;
+  margin-bottom: var(--space-sm);
+  color: var(--text-primary);
+  font-weight: var(--font-weight-semibold);
+  font-size: var(--font-size-lg);
 }
 
 .lesson-card p {
-  color: #666;
-  margin-bottom: 12px;
-  font-size: 0.95rem;
+  color: var(--text-secondary);
+  margin-bottom: var(--space-md);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-relaxed);
 }
 
+/* Badges - Soft rectangles instead of pills */
 .difficulty-badge {
   display: inline-block;
-  padding: 4px 12px;
-  border-radius: 20px;
-  font-size: 12px;
-  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
   text-transform: uppercase;
+  letter-spacing: 0.03em;
 }
 
 .difficulty-beginner {
-  background: #e8f5e9;
-  color: #2e7d32;
+  background: var(--status-success-bg);
+  color: var(--status-success-text);
 }
 
 .difficulty-intermediate {
-  background: #fff3e0;
-  color: #ef6c00;
+  background: var(--status-warning-bg);
+  color: var(--status-warning-text);
 }
 
 .difficulty-advanced {
-  background: #ffebee;
-  color: #c62828;
+  background: var(--status-danger-bg);
+  color: var(--status-danger-text);
 }
 
 /* Question card */
 .question-card {
-  margin-bottom: 24px;
+  margin-bottom: var(--space-lg);
 }
 
 .question-card h2 {
-  color: #333;
-  margin-bottom: 16px;
-  font-size: 1.5rem;
+  color: var(--text-primary);
+  margin-bottom: var(--space-md);
+  font-size: var(--font-size-xl);
+  font-weight: var(--font-weight-semibold);
+  line-height: var(--line-height-tight);
 }
 
 .question-input {
-  margin-bottom: 16px;
+  margin-bottom: var(--space-md);
 }
 
 .question-input textarea {
@@ -212,45 +525,47 @@ textarea:focus {
 }
 
 .hint-section {
-  background: #fff8e1;
-  padding: 16px;
-  border-radius: 8px;
-  margin-bottom: 16px;
+  background: var(--status-warning-bg);
+  padding: var(--space-md);
+  border-radius: var(--radius-md);
+  margin-bottom: var(--space-md);
 }
 
 .hint-section h4 {
-  color: #f57c00;
-  margin-bottom: 8px;
+  color: var(--status-warning-text);
+  margin-bottom: var(--space-sm);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
 }
 
-/* Feedback */
+/* Feedback - Subtle accent border */
 .feedback-card {
-  border-left: 4px solid #667eea;
+  border-left: 3px solid var(--accent-primary);
 }
 
 .feedback-card.success {
-  border-left-color: #4caf50;
-  background: #e8f5e9;
+  border-left-color: var(--status-success);
+  background: var(--status-success-bg);
 }
 
 .feedback-card.needs-work {
-  border-left-color: #ff9800;
-  background: #fff8e1;
+  border-left-color: var(--status-warning);
+  background: var(--status-warning-bg);
 }
 
 .score-display {
-  font-size: 2rem;
-  font-weight: bold;
-  color: #667eea;
-  margin-bottom: 12px;
+  font-size: var(--font-size-2xl);
+  font-weight: var(--font-weight-bold);
+  color: var(--accent-primary);
+  margin-bottom: var(--space-md);
 }
 
 /* Stats */
 .stats-grid {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
-  gap: 16px;
-  margin-bottom: 24px;
+  gap: var(--space-md);
+  margin-bottom: var(--space-lg);
 }
 
 @media (min-width: 600px) {
@@ -267,56 +582,66 @@ textarea:focus {
 
 .stat-card {
   text-align: center;
-  padding: 20px;
+  padding: var(--space-lg);
 }
 
 .stat-card .value {
-  font-size: 2rem;
-  font-weight: bold;
-  color: #667eea;
+  font-size: var(--font-size-2xl);
+  font-weight: var(--font-weight-bold);
+  color: var(--accent-primary);
+  line-height: var(--line-height-tight);
 }
 
 .stat-card .label {
-  color: #666;
-  font-size: 0.9rem;
+  color: var(--text-muted);
+  font-size: var(--font-size-sm);
+  margin-top: var(--space-xs);
 }
 
 @media (min-width: 768px) {
   .stat-card .value {
-    font-size: 2.5rem;
+    font-size: var(--font-size-3xl);
   }
 }
 
-/* Back button */
+/* Back button - Navigation link on dark backgrounds */
 .back-btn {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  color: white;
+  gap: var(--space-sm);
+  color: var(--text-on-dark);
   text-decoration: none;
-  margin-bottom: 16px;
-  font-weight: 500;
+  margin-bottom: var(--space-md);
+  font-weight: var(--font-weight-medium);
+  font-size: var(--font-size-sm);
+  transition: all var(--transition-fast);
+  padding: 6px 12px;
+  margin-left: -12px;
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.08);
 }
 
 .back-btn:hover {
-  text-decoration: underline;
+  color: white;
+  background: rgba(255, 255, 255, 0.15);
+  text-decoration: none;
 }
 
 /* Loading */
 .loading {
   text-align: center;
-  padding: 40px;
+  padding: var(--space-2xl);
   color: white;
 }
 
 .loading-spinner {
-  width: 40px;
-  height: 40px;
-  border: 4px solid rgba(255, 255, 255, 0.3);
+  width: 32px;
+  height: 32px;
+  border: 3px solid rgba(255, 255, 255, 0.2);
   border-top-color: white;
   border-radius: 50%;
-  animation: spin 1s linear infinite;
-  margin: 0 auto 16px;
+  animation: spin 0.8s linear infinite;
+  margin: 0 auto var(--space-md);
 }
 
 @keyframes spin {
@@ -328,8 +653,8 @@ textarea:focus {
 /* Navigation */
 .nav-buttons {
   display: flex;
-  gap: 12px;
-  margin-top: 24px;
+  gap: var(--space-md);
+  margin-top: var(--space-lg);
 }
 
 .nav-buttons .btn {
@@ -340,61 +665,61 @@ textarea:focus {
 .achievement {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 12px;
-  background: #f5f5f5;
-  border-radius: 8px;
-  margin-bottom: 8px;
+  gap: var(--space-md);
+  padding: var(--space-md);
+  background: var(--surface-muted);
+  border-radius: var(--radius-md);
+  margin-bottom: var(--space-sm);
 }
 
 .achievement-icon {
-  font-size: 1.5rem;
+  font-size: var(--font-size-xl);
 }
 
 /* Weekly chart */
 .weekly-chart {
-  margin-bottom: 24px;
+  margin-bottom: var(--space-lg);
 }
 
 .week-row {
   display: flex;
   align-items: center;
-  gap: 12px;
-  margin-bottom: 8px;
+  gap: var(--space-md);
+  margin-bottom: var(--space-sm);
 }
 
 .week-label {
   width: 60px;
-  font-size: 0.9rem;
-  color: #666;
+  font-size: var(--font-size-sm);
+  color: var(--text-muted);
 }
 
 .week-bar {
   flex: 1;
-  height: 24px;
-  background: #e0e0e0;
-  border-radius: 4px;
+  height: 20px;
+  background: var(--border-muted);
+  border-radius: var(--radius-sm);
   overflow: hidden;
 }
 
 .week-bar-fill {
   height: 100%;
-  background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
-  border-radius: 4px;
+  background: var(--surface-page);
+  border-radius: var(--radius-sm);
 }
 
 .week-value {
   width: 100px;
   text-align: right;
-  font-size: 0.9rem;
-  color: #666;
+  font-size: var(--font-size-sm);
+  color: var(--text-secondary);
 }
 
 /* Two-column layout for desktop */
 .two-column {
   display: grid;
   grid-template-columns: 1fr;
-  gap: 24px;
+  gap: var(--space-lg);
 }
 
 @media (min-width: 900px) {
@@ -407,7 +732,7 @@ textarea:focus {
 .dashboard-grid {
   display: grid;
   grid-template-columns: 1fr;
-  gap: 24px;
+  gap: var(--space-lg);
 }
 
 @media (min-width: 768px) {
@@ -429,7 +754,7 @@ textarea:focus {
 /* Session cards */
 .session-list {
   display: grid;
-  gap: 16px;
+  gap: var(--space-md);
 }
 
 @media (min-width: 768px) {
@@ -455,23 +780,23 @@ textarea:focus {
 
 @media (min-width: 768px) {
   .centered-form {
-    margin-top: 60px;
+    margin-top: var(--space-2xl);
   }
 }
 
 /* Question layout for desktop */
 @media (min-width: 900px) {
   .question-card {
-    padding: 32px;
+    padding: var(--space-xl);
   }
 
   .question-card h2 {
-    font-size: 1.75rem;
+    font-size: var(--font-size-2xl);
   }
 
   .question-input textarea {
     min-height: 150px;
-    font-size: 1.1rem;
+    font-size: var(--font-size-lg);
   }
 }
 
@@ -483,6 +808,84 @@ textarea:focus {
 
   .nav-buttons .btn {
     flex: none;
-    min-width: 150px;
+    min-width: 140px;
   }
+}
+
+/* ============================================
+   Utility Classes
+   ============================================ */
+
+/* Text utilities */
+.text-muted {
+  color: var(--text-muted);
+}
+
+.text-secondary {
+  color: var(--text-secondary);
+}
+
+.text-primary {
+  color: var(--text-primary);
+}
+
+.text-small {
+  font-size: var(--font-size-sm);
+}
+
+.text-xs {
+  font-size: var(--font-size-xs);
+}
+
+/* Spacing utilities */
+.mb-0 { margin-bottom: 0; }
+.mb-1 { margin-bottom: var(--space-xs); }
+.mb-2 { margin-bottom: var(--space-sm); }
+.mb-3 { margin-bottom: var(--space-md); }
+.mb-4 { margin-bottom: var(--space-lg); }
+
+.mt-0 { margin-top: 0; }
+.mt-2 { margin-top: var(--space-sm); }
+.mt-3 { margin-top: var(--space-md); }
+.mt-4 { margin-top: var(--space-lg); }
+
+/* Status indicators - Soft styling */
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  letter-spacing: 0.02em;
+}
+
+.status-badge--success {
+  background: var(--status-success-bg);
+  color: var(--status-success-text);
+}
+
+.status-badge--warning {
+  background: var(--status-warning-bg);
+  color: var(--status-warning-text);
+}
+
+.status-badge--error {
+  background: var(--status-danger-bg);
+  color: var(--status-danger-text);
+}
+
+.status-badge--info {
+  background: var(--status-info-bg);
+  color: var(--status-info-text);
+}
+
+.status-badge--pending {
+  background: var(--status-pending-bg);
+  color: var(--status-pending-text);
+}
+
+.status-badge--neutral {
+  background: var(--border-muted);
+  color: var(--text-secondary);
 }

@@ -6,7 +6,7 @@
  */
 
 import { useState, useEffect } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 import {
   getClass,
   updateClass,
@@ -19,11 +19,13 @@ import {
   type UpdateClassInput,
 } from "../services/api";
 import { useToast } from "../components/Toast";
+import EducatorHeader from "../components/EducatorHeader";
 
 export default function ClassDetails() {
   const { classId } = useParams<{ classId: string }>();
   const navigate = useNavigate();
   const { showError } = useToast();
+
   const [classData, setClassData] = useState<ClassWithStudents | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -176,9 +178,7 @@ export default function ClassDetails() {
   if (error || !classData) {
     return (
       <div className="container">
-        <Link to="/educator/classes" className="back-btn">
-          ← Back to Classes
-        </Link>
+        <EducatorHeader />
         <div className="card">
           <p style={{ color: "#d32f2f" }}>{error || "Class not found."}</p>
           <button className="btn btn-primary" onClick={loadClass} style={{ marginTop: "16px" }}>
@@ -189,13 +189,16 @@ export default function ClassDetails() {
     );
   }
 
+  const hasSubjects = classData.subjects && classData.subjects.length > 0;
+  const hasStudents = classData.students.length > 0;
+
   return (
     <div className="container">
-      <Link to="/educator/classes" className="back-btn">
-        ← Back to Classes
-      </Link>
+      <EducatorHeader
+        breadcrumbs={[{ label: classData.name }]}
+      />
 
-      {/* Class Header */}
+      {/* Class Header Card */}
       <div className="card" style={{ marginBottom: "24px" }}>
         {isEditing ? (
           <div>
@@ -269,7 +272,7 @@ export default function ClassDetails() {
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
               <div>
                 <h1 style={{ margin: 0, color: "#667eea" }}>{classData.name}</h1>
-                <div style={{ display: "flex", gap: "16px", marginTop: "8px", flexWrap: "wrap" }}>
+                <div style={{ display: "flex", gap: "16px", marginTop: "8px", flexWrap: "wrap", alignItems: "center" }}>
                   {classData.gradeLevel && (
                     <span style={{ color: "#666" }}>{classData.gradeLevel}</span>
                   )}
@@ -277,48 +280,64 @@ export default function ClassDetails() {
                     <span style={{ color: "#666" }}>{classData.period}</span>
                   )}
                 </div>
+                {classData.description && (
+                  <p style={{ marginTop: "8px", marginBottom: 0, color: "#666", fontSize: "0.9rem" }}>{classData.description}</p>
+                )}
+                <p style={{ marginTop: "8px", marginBottom: 0, color: "#999", fontSize: "0.85rem" }}>
+                  Manage students and subject participation for this class.
+                </p>
               </div>
               <button
                 className="btn btn-secondary"
                 onClick={() => setIsEditing(true)}
+                style={{ flexShrink: 0 }}
               >
                 Edit
               </button>
             </div>
-            {classData.description && (
-              <p style={{ marginTop: "12px", color: "#666" }}>{classData.description}</p>
-            )}
           </div>
         )}
       </div>
 
-      {/* Students Section */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px" }}>
+      {/* Roster & Participation — Single Combined Section */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px", flexWrap: "wrap", gap: "8px" }}>
         <h2 style={{ color: "white", margin: 0 }}>
-          Students ({classData.students.length})
+          Roster & Participation
+          <span style={{ fontSize: "0.85rem", fontWeight: "normal", marginLeft: "8px", color: "rgba(255,255,255,0.6)" }}>
+            ({classData.students.length} student{classData.students.length !== 1 ? "s" : ""})
+          </span>
         </h2>
-        <button
-          className="btn btn-primary"
-          onClick={() => setShowAddStudents(!showAddStudents)}
-        >
-          + Add Students
-        </button>
+        <div style={{ display: "flex", gap: "8px" }}>
+          <button
+            className="btn btn-secondary"
+            onClick={() => { setShowAddSubject(!showAddSubject); if (showAddStudents) setShowAddStudents(false); }}
+            style={{ fontSize: "0.85rem", padding: "6px 14px" }}
+          >
+            + Add Subject
+          </button>
+          <button
+            className="btn btn-primary"
+            onClick={() => { setShowAddStudents(!showAddStudents); if (showAddSubject) setShowAddSubject(false); }}
+            style={{ fontSize: "0.85rem", padding: "6px 14px" }}
+          >
+            + Add Students
+          </button>
+        </div>
       </div>
 
-      {/* Add Students Form */}
+      {/* Add Students Form (inline, collapsible) */}
       {showAddStudents && (
         <div className="card" style={{ marginBottom: "16px" }}>
           <h3 style={{ margin: 0, marginBottom: "12px" }}>Add Students</h3>
-          <p style={{ color: "#666", marginBottom: "12px" }}>
-            Enter student names separated by commas or one per line.
-            New students will be automatically created.
+          <p style={{ color: "#666", marginBottom: "12px", fontSize: "0.9rem" }}>
+            Enter student names separated by commas or one per line. New students will be created automatically.
           </p>
           <form onSubmit={handleAddStudents}>
             <textarea
               value={studentNames}
               onChange={(e) => setStudentNames(e.target.value)}
               placeholder="John Smith, Jane Doe, Alex Johnson&#10;or&#10;John Smith&#10;Jane Doe&#10;Alex Johnson"
-              rows={4}
+              rows={3}
               style={{
                 width: "100%",
                 padding: "12px",
@@ -327,12 +346,13 @@ export default function ClassDetails() {
                 border: "2px solid #e0e0e0",
                 resize: "vertical",
                 fontFamily: "inherit",
+                boxSizing: "border-box",
               }}
               autoFocus
             />
             {addResult && (
-              <div style={{ marginTop: "12px", padding: "12px", background: "#e8f5e9", borderRadius: "8px" }}>
-                <span style={{ color: "#2e7d32" }}>
+              <div style={{ marginTop: "12px", padding: "10px 12px", background: "#e8f5e9", borderRadius: "8px" }}>
+                <span style={{ color: "#2e7d32", fontSize: "0.9rem" }}>
                   Added {addResult.created + addResult.existing} students
                   {addResult.created > 0 && ` (${addResult.created} new)`}
                 </span>
@@ -362,11 +382,56 @@ export default function ClassDetails() {
         </div>
       )}
 
-      {/* Students List */}
-      {classData.students.length === 0 ? (
+      {/* Add Subject Form (inline, collapsible) */}
+      {showAddSubject && (
+        <div className="card" style={{ marginBottom: "16px" }}>
+          <form onSubmit={handleAddSubject} style={{ display: "flex", gap: "12px", alignItems: "flex-end" }}>
+            <div style={{ flex: 1 }}>
+              <label style={{ display: "block", marginBottom: "4px", fontWeight: 600 }}>
+                Subject Name
+              </label>
+              <input
+                type="text"
+                value={newSubjectName}
+                onChange={(e) => setNewSubjectName(e.target.value)}
+                placeholder="e.g., Reading, Math, Science"
+                style={{
+                  width: "100%",
+                  padding: "12px",
+                  fontSize: "1rem",
+                  borderRadius: "8px",
+                  border: "2px solid #e0e0e0",
+                  boxSizing: "border-box",
+                }}
+                autoFocus
+              />
+            </div>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => {
+                setShowAddSubject(false);
+                setNewSubjectName("");
+              }}
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              className="btn btn-primary"
+              disabled={!newSubjectName.trim() || addingSubject}
+            >
+              {addingSubject ? "Adding..." : "Add"}
+            </button>
+          </form>
+        </div>
+      )}
+
+      {/* Empty state: no students at all */}
+      {!hasStudents ? (
         <div className="card" style={{ textAlign: "center", padding: "48px" }}>
           <p style={{ color: "#666", marginBottom: "16px" }}>
-            No students in this class yet. Add some students to get started!
+            No students in this class yet. Add students to get started.
           </p>
           <button
             className="btn btn-primary"
@@ -376,183 +441,45 @@ export default function ClassDetails() {
           </button>
         </div>
       ) : (
-        <div className="card">
-          <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-            {classData.students.map((student) => (
-              <div
-                key={student.id}
-                style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "center",
-                  padding: "12px 16px",
-                  background: "#f5f5f5",
-                  borderRadius: "8px",
-                }}
-              >
-                <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-                  <span style={{ fontWeight: 600, color: "#333" }}>{student.name}</span>
-                  {student.notes && (
-                    <span
-                      title={student.notes}
-                      style={{
-                        fontSize: "0.8rem",
-                        padding: "2px 8px",
-                        background: "#e3f2fd",
-                        color: "#1976d2",
-                        borderRadius: "12px",
-                      }}
-                    >
-                      Notes
-                    </span>
-                  )}
-                </div>
-                <div style={{ display: "flex", gap: "8px" }}>
-                  <button
-                    onClick={() => navigate(`/educator/student/${student.id}`)}
-                    style={{
-                      background: "transparent",
-                      border: "none",
-                      cursor: "pointer",
-                      color: "#667eea",
-                      fontSize: "0.85rem",
-                    }}
-                  >
-                    View
-                  </button>
-                  <button
-                    onClick={() => handleRemoveStudent(student.id, student.name)}
-                    style={{
-                      background: "transparent",
-                      border: "none",
-                      cursor: "pointer",
-                      color: "#999",
-                      fontSize: "0.85rem",
-                    }}
-                    onMouseEnter={(e) => {
-                      e.currentTarget.style.color = "#d32f2f";
-                    }}
-                    onMouseLeave={(e) => {
-                      e.currentTarget.style.color = "#999";
-                    }}
-                  >
-                    Remove
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Subject Participation Section */}
-      <div style={{ marginTop: "32px" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px" }}>
-          <h2 style={{ color: "white", margin: 0 }}>
-            Subject Participation
-          </h2>
-          <button
-            className="btn btn-primary"
-            onClick={() => setShowAddSubject(!showAddSubject)}
-          >
-            + Add Subject
-          </button>
-        </div>
-
-        {/* Add Subject Form */}
-        {showAddSubject && (
-          <div className="card" style={{ marginBottom: "16px" }}>
-            <form onSubmit={handleAddSubject} style={{ display: "flex", gap: "12px", alignItems: "flex-end" }}>
-              <div style={{ flex: 1 }}>
-                <label style={{ display: "block", marginBottom: "4px", fontWeight: 600 }}>
-                  Subject Name
-                </label>
-                <input
-                  type="text"
-                  value={newSubjectName}
-                  onChange={(e) => setNewSubjectName(e.target.value)}
-                  placeholder="e.g., Reading, Math, Science"
-                  style={{
-                    width: "100%",
-                    padding: "12px",
-                    fontSize: "1rem",
-                    borderRadius: "8px",
-                    border: "2px solid #e0e0e0",
-                  }}
-                  autoFocus
-                />
-              </div>
-              <button
-                type="button"
-                className="btn btn-secondary"
-                onClick={() => {
-                  setShowAddSubject(false);
-                  setNewSubjectName("");
-                }}
-              >
-                Cancel
-              </button>
-              <button
-                type="submit"
-                className="btn btn-primary"
-                disabled={!newSubjectName.trim() || addingSubject}
-              >
-                {addingSubject ? "Adding..." : "Add"}
-              </button>
-            </form>
-          </div>
-        )}
-
-        {/* No subjects message */}
-        {(!classData.subjects || classData.subjects.length === 0) ? (
-          <div className="card" style={{ textAlign: "center", padding: "32px" }}>
-            <p style={{ color: "#666", marginBottom: "8px" }}>
-              No subjects defined for this class yet.
+        /* Unified Roster & Participation Grid */
+        <div className="card" style={{ padding: 0, overflow: "hidden" }}>
+          {hasSubjects && (
+            <p style={{ color: "#666", fontSize: "0.85rem", margin: 0, padding: "14px 16px 0 16px" }}>
+              Toggle which subjects each student receives assignments for.
             </p>
-            <p style={{ color: "#999", fontSize: "0.9rem", margin: 0 }}>
-              Add subjects to control which students participate in each subject area.
-            </p>
-          </div>
-        ) : classData.students.length === 0 ? (
-          <div className="card" style={{ textAlign: "center", padding: "32px" }}>
-            <p style={{ color: "#666", margin: 0 }}>
-              Add students to configure subject participation.
-            </p>
-          </div>
-        ) : (
-          /* Subject × Student Grid */
-          <div className="card" style={{ overflow: "auto" }}>
-            <p style={{ color: "#666", fontSize: "0.85rem", marginBottom: "16px" }}>
-              All students participate in all subjects by default. Uncheck to exclude a student from receiving assignments for that subject.
-            </p>
-            <table style={{ width: "100%", borderCollapse: "collapse", minWidth: "400px" }}>
+          )}
+          <div style={{ overflow: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", minWidth: hasSubjects ? "400px" : undefined }}>
               <thead>
                 <tr>
                   <th
                     style={{
                       textAlign: "left",
-                      padding: "12px",
+                      padding: "12px 16px",
                       borderBottom: "2px solid #e0e0e0",
                       background: "#f5f5f5",
                       position: "sticky",
                       left: 0,
-                      zIndex: 1,
+                      zIndex: 2,
+                      minWidth: "180px",
                     }}
                   >
                     Student
                   </th>
-                  {classData.subjects.map((subject) => (
+                  {hasSubjects && classData.subjects.map((subject) => (
                     <th
                       key={subject}
                       style={{
                         textAlign: "center",
-                        padding: "12px",
+                        padding: "10px 12px",
                         borderBottom: "2px solid #e0e0e0",
                         background: "#f5f5f5",
                         minWidth: "100px",
+                        fontSize: "0.85rem",
+                        fontWeight: 600,
                       }}
                     >
-                      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "4px" }}>
+                      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "2px" }}>
                         <span>{subject}</span>
                         <button
                           onClick={() => handleRemoveSubject(subject)}
@@ -560,12 +487,13 @@ export default function ClassDetails() {
                             background: "none",
                             border: "none",
                             cursor: "pointer",
-                            color: "#999",
-                            fontSize: "0.7rem",
-                            padding: "2px 4px",
+                            color: "#bbb",
+                            fontSize: "0.65rem",
+                            padding: "1px 4px",
+                            lineHeight: 1.3,
                           }}
                           onMouseEnter={(e) => { e.currentTarget.style.color = "#d32f2f"; }}
-                          onMouseLeave={(e) => { e.currentTarget.style.color = "#999"; }}
+                          onMouseLeave={(e) => { e.currentTarget.style.color = "#bbb"; }}
                           title={`Remove ${subject}`}
                         >
                           ✕ remove
@@ -573,85 +501,136 @@ export default function ClassDetails() {
                       </div>
                     </th>
                   ))}
+                  {/* Empty header for actions column */}
+                  <th
+                    style={{
+                      width: "60px",
+                      padding: "12px 8px",
+                      borderBottom: "2px solid #e0e0e0",
+                      background: "#f5f5f5",
+                    }}
+                  />
                 </tr>
               </thead>
               <tbody>
-                {classData.students.map((student, index) => (
-                  <tr
-                    key={student.id}
-                    style={{ background: index % 2 === 0 ? "white" : "#fafafa" }}
-                  >
-                    <td
-                      style={{
-                        padding: "12px",
-                        borderBottom: "1px solid #e0e0e0",
-                        fontWeight: 500,
-                        position: "sticky",
-                        left: 0,
-                        background: index % 2 === 0 ? "white" : "#fafafa",
-                        zIndex: 1,
-                      }}
-                    >
-                      {student.name}
-                    </td>
-                    {classData.subjects.map((subject) => {
-                      const excluded = isStudentExcluded(student.id, subject);
-                      return (
-                        <td
-                          key={subject}
+                {classData.students.map((student, index) => {
+                  const rowBg = index % 2 === 0 ? "white" : "#fafafa";
+                  return (
+                    <tr key={student.id} style={{ background: rowBg }}>
+                      {/* Student name — clickable to view profile */}
+                      <td
+                        style={{
+                          padding: "10px 16px",
+                          borderBottom: "1px solid #eee",
+                          position: "sticky",
+                          left: 0,
+                          background: rowBg,
+                          zIndex: 1,
+                        }}
+                      >
+                        <span
+                          onClick={() => navigate(`/educator/student/${student.id}`, {
+                            state: { fromClass: classId, className: classData.name },
+                          })}
                           style={{
-                            textAlign: "center",
-                            padding: "12px",
-                            borderBottom: "1px solid #e0e0e0",
+                            fontWeight: 500,
+                            color: "#333",
+                            cursor: "pointer",
+                            textDecoration: "none",
+                            transition: "color 0.15s",
+                          }}
+                          onMouseEnter={(e) => {
+                            e.currentTarget.style.color = "#667eea";
+                            e.currentTarget.style.textDecoration = "underline";
+                          }}
+                          onMouseLeave={(e) => {
+                            e.currentTarget.style.color = "#333";
+                            e.currentTarget.style.textDecoration = "none";
+                          }}
+                          role="link"
+                          tabIndex={0}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" || e.key === " ") {
+                              e.preventDefault();
+                              navigate(`/educator/student/${student.id}`, {
+                                state: { fromClass: classId, className: classData.name },
+                              });
+                            }
                           }}
                         >
-                          <input
-                            type="checkbox"
-                            checked={!excluded}
-                            onChange={() => handleToggleParticipation(student.id, subject, excluded)}
+                          {student.name}
+                        </span>
+                      </td>
+
+                      {/* Subject participation checkboxes */}
+                      {hasSubjects && classData.subjects.map((subject) => {
+                        const excluded = isStudentExcluded(student.id, subject);
+                        return (
+                          <td
+                            key={subject}
                             style={{
-                              width: "20px",
-                              height: "20px",
-                              cursor: "pointer",
-                              accentColor: "#667eea",
+                              textAlign: "center",
+                              padding: "10px 12px",
+                              borderBottom: "1px solid #eee",
                             }}
-                            title={excluded ? `Add ${student.name} to ${subject}` : `Remove ${student.name} from ${subject}`}
-                          />
-                        </td>
-                      );
-                    })}
-                  </tr>
-                ))}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={!excluded}
+                              onChange={() => handleToggleParticipation(student.id, subject, excluded)}
+                              style={{
+                                width: "18px",
+                                height: "18px",
+                                cursor: "pointer",
+                                accentColor: "#667eea",
+                              }}
+                              title={excluded ? `Add ${student.name} to ${subject}` : `Remove ${student.name} from ${subject}`}
+                            />
+                          </td>
+                        );
+                      })}
+
+                      {/* Remove action */}
+                      <td
+                        style={{
+                          textAlign: "center",
+                          padding: "10px 8px",
+                          borderBottom: "1px solid #eee",
+                        }}
+                      >
+                        <button
+                          onClick={() => handleRemoveStudent(student.id, student.name)}
+                          style={{
+                            background: "none",
+                            border: "none",
+                            cursor: "pointer",
+                            color: "#ccc",
+                            fontSize: "0.75rem",
+                            padding: "2px 6px",
+                            borderRadius: "4px",
+                            transition: "color 0.15s, background 0.15s",
+                          }}
+                          onMouseEnter={(e) => {
+                            e.currentTarget.style.color = "#d32f2f";
+                            e.currentTarget.style.background = "#fef2f2";
+                          }}
+                          onMouseLeave={(e) => {
+                            e.currentTarget.style.color = "#ccc";
+                            e.currentTarget.style.background = "none";
+                          }}
+                          title={`Remove ${student.name} from class`}
+                        >
+                          ✕
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
-        )}
-      </div>
-
-      {/* Actions Footer */}
-      <div
-        style={{
-          marginTop: "48px",
-          paddingTop: "24px",
-          borderTop: "1px solid rgba(255,255,255,0.1)",
-          display: "flex",
-          gap: "16px",
-          flexWrap: "wrap",
-        }}
-      >
-        <button
-          className="btn btn-primary"
-          onClick={() => navigate(`/educator/class/${classId}/assign-lesson`)}
-        >
-          Assign Lesson to Class
-        </button>
-        <button
-          className="btn btn-secondary"
-          onClick={() => navigate("/educator")}
-        >
-          Back to Dashboard
-        </button>
-      </div>
+        </div>
+      )}
     </div>
   );
 }

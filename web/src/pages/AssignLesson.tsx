@@ -10,6 +10,7 @@
 
 import { useState, useEffect } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
+import EducatorHeader from "../components/EducatorHeader";
 import {
   getLessons,
   getClasses,
@@ -188,13 +189,6 @@ export default function AssignLesson() {
     );
   }
 
-  // Determine back navigation
-  const backPath = classId
-    ? `/educator/class/${classId}`
-    : lessonIdParam
-    ? "/educator"
-    : "/educator/classes";
-
   const selectedLesson = lessons.find((l) => l.id === selectedLessonId);
   const canAssign =
     selectedLessonId &&
@@ -204,9 +198,12 @@ export default function AssignLesson() {
 
   return (
     <div className="container">
-      <Link to={backPath} className="back-btn">
-        ← Back
-      </Link>
+      <EducatorHeader
+        breadcrumbs={[
+          ...(selectedClass ? [{ label: selectedClass.name, to: `/educator/class/${selectedClassId}` }] : []),
+          { label: "Assign Lesson" },
+        ]}
+      />
 
       <div className="header">
         <h1>Assign Lesson</h1>
@@ -318,7 +315,7 @@ export default function AssignLesson() {
                 </p>
                 <button
                   className="btn btn-primary"
-                  onClick={() => navigate("/educator/classes")}
+                  onClick={() => navigate("/educator?drawer=classes")}
                 >
                   Create Class
                 </button>

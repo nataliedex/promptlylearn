@@ -182,6 +182,9 @@ export class BadgeStore {
       helper_badge: 0,
       persistence: 0,
       curiosity: 0,
+      focus_badge: 0,
+      creativity_badge: 0,
+      collaboration_badge: 0,
       custom: 0,
     };
 
@@ -246,6 +249,9 @@ export class BadgeStore {
       helper_badge: 0,
       persistence: 0,
       curiosity: 0,
+      focus_badge: 0,
+      creativity_badge: 0,
+      collaboration_badge: 0,
       custom: 0,
     };
 
@@ -284,6 +290,25 @@ export class BadgeStore {
   existsForInsight(insightId: string): boolean {
     const data = this.loadAll();
     return data.badges.some((b) => b.insightId === insightId);
+  }
+
+  /**
+   * Get badges for a student formatted for cooldown checks
+   * Used by badge criteria evaluator
+   */
+  getForCooldownCheck(studentId: string): {
+    badgeType: BadgeType;
+    subject?: string;
+    assignmentId?: string;
+    awardedAt: string;
+  }[] {
+    const badges = this.getByStudent(studentId);
+    return badges.map(b => ({
+      badgeType: b.type,
+      subject: undefined, // Subject not stored on badge currently
+      assignmentId: b.assignmentId,
+      awardedAt: typeof b.issuedAt === "string" ? b.issuedAt : b.issuedAt.toISOString(),
+    }));
   }
 
   // ============================================

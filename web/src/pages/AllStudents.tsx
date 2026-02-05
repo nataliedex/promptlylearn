@@ -5,8 +5,9 @@
  */
 
 import { useState, useEffect } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import { getStudents, type Student } from "../services/api";
+import EducatorHeader from "../components/EducatorHeader";
 
 export default function AllStudents() {
   const navigate = useNavigate();
@@ -39,9 +40,7 @@ export default function AllStudents() {
 
   return (
     <div className="container">
-      <Link to="/educator" className="back-btn">
-        ← Back to Dashboard
-      </Link>
+      <EducatorHeader breadcrumbs={[{ label: "All Students" }]} />
 
       <div className="header">
         <h1>All Students</h1>

@@ -38,8 +38,26 @@ export type AttentionReason =
 /**
  * Action status for teacher workflow.
  * Tracks what action the teacher took on a flagged student.
+ * @deprecated Use ReviewState instead for new code.
  */
 export type StudentActionStatus = "reviewed" | "reassigned" | "no-action-needed";
+
+/**
+ * Canonical Review State - Single Source of Truth
+ *
+ * Each student-assignment pair has ONE state, DERIVED from underlying data:
+ * - not_started: Student has not submitted work yet
+ * - pending_review: Student completed, teacher hasn't reviewed
+ * - reviewed: Teacher reviewed, no follow-up scheduled
+ * - followup_scheduled: Teacher reviewed + at least one open follow-up
+ * - resolved: All follow-ups completed/dismissed
+ */
+export type ReviewState =
+  | "not_started"
+  | "pending_review"
+  | "reviewed"
+  | "followup_scheduled"
+  | "resolved";
 
 /**
  * Question-level outcome focused on learning journey.
@@ -141,11 +159,22 @@ export interface StudentAssignmentRow {
   // Attempts tracking
   attempts: number;
 
-  // Review status (legacy)
-  isReviewed: boolean;
+  // ============================================
+  // NEW: Single Source of Truth for Review State
+  // ============================================
+  reviewState: ReviewState;
+  lastActionAt?: string;
+  todoIds?: string[];
+  badgeIds?: string[];
 
-  // Action status for teacher workflow
+  // ============================================
+  // DEPRECATED: Legacy fields for backwards compatibility
+  // ============================================
+  /** @deprecated Use reviewState instead */
+  isReviewed: boolean;
+  /** @deprecated Use reviewState instead */
   actionStatus?: StudentActionStatus;
+  /** @deprecated Use lastActionAt instead */
   actionAt?: string;
 }
 
@@ -156,6 +185,7 @@ export interface AssignmentReviewData {
   assignmentId: string;
   title: string;
   questionCount: number;
+  assignedAt?: string; // ISO date string of earliest assignment
 
   // Summary stats
   stats: {

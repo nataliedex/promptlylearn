@@ -11,6 +11,7 @@ import { getAllLessons } from "../../loaders/lessonLoader";
 import { SessionStore } from "../../stores/sessionStore";
 import { StudentStore } from "../../stores/studentStore";
 import { StudentAssignmentStore } from "../../stores/studentAssignmentStore";
+import { recommendationStore } from "../../stores/recommendationStore";
 import {
   getAssignmentState,
   getAllAssignmentStates,
@@ -66,6 +67,12 @@ router.get("/dashboard", (req, res) => {
         assignedStudentIds,
         stateRecord
       );
+
+      // Get earliest assignment date for this lesson
+      const earliestAssignedAt = studentAssignmentStore.getEarliestAssignedAt(lesson.id);
+      if (earliestAssignedAt) {
+        computedState.assignedAt = earliestAssignedAt;
+      }
 
       // Auto-resolve if conditions are met
       if (shouldResolve(computedState) && stateRecord.lifecycleState === "active") {
@@ -187,32 +194,47 @@ router.post("/:id/activity", (req, res) => {
  *
  * Mark an action taken on a student's assignment.
  * Used for teacher workflow (reviewed, reassigned, no-action-needed).
+ * Also resolves any related global recommendations to ensure consistency.
  */
 router.post("/:id/students/:studentId/action", (req, res) => {
   try {
     const { id, studentId } = req.params;
-    const { action } = req.body;
+    const { action, teacherId } = req.body;
 
     if (!action || !["reviewed", "reassigned", "no-action-needed"].includes(action)) {
       return res.status(400).json({ error: "Invalid action. Must be: reviewed, reassigned, or no-action-needed" });
     }
 
+    let result;
+
     // For reassign, use the pushToStudent method which resets the assignment
     if (action === "reassigned") {
-      const result = studentAssignmentStore.pushToStudent(id, studentId);
+      result = studentAssignmentStore.pushToStudent(id, studentId);
       if (!result) {
         return res.status(404).json({ error: "Assignment not found" });
       }
-      return res.json({ success: true, assignment: result });
+    } else {
+      // For other actions, just mark the action
+      result = studentAssignmentStore.markAction(id, studentId, action);
+      if (!result) {
+        return res.status(404).json({ error: "Assignment not found" });
+      }
     }
 
-    // For other actions, just mark the action
-    const result = studentAssignmentStore.markAction(id, studentId, action);
-    if (!result) {
-      return res.status(404).json({ error: "Assignment not found" });
-    }
+    // Resolve any related global recommendations for this student+assignment
+    // This ensures "What Should I Do Next?" doesn't show insights that have
+    // already been addressed at the assignment level
+    const resolvedRecommendationIds = recommendationStore.resolveByStudentAssignment(
+      studentId,
+      id,
+      teacherId
+    );
 
-    res.json({ success: true, assignment: result });
+    res.json({
+      success: true,
+      assignment: result,
+      resolvedRecommendations: resolvedRecommendationIds.length,
+    });
   } catch (error) {
     console.error("Error marking student action:", error);
     res.status(500).json({ error: "Failed to mark student action" });

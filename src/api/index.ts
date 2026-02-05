@@ -16,6 +16,7 @@ import coachSessionsRouter from "./routes/coachSessions";
 import recommendationsRouter from "./routes/recommendations";
 import teacherTodosRouter from "./routes/teacherTodos";
 import attentionRouter from "./routes/attention";
+import coachingInvitesRouter from "./routes/coachingInvites";
 
 dotenv.config();
 
@@ -44,6 +45,7 @@ app.use("/api/coach-sessions", coachSessionsRouter);
 app.use("/api/recommendations", recommendationsRouter);
 app.use("/api/teacher-todos", teacherTodosRouter);
 app.use("/api/attention", attentionRouter);
+app.use("/api/coaching-invites", coachingInvitesRouter);
 
 // Health check
 app.get("/api/health", (req, res) => {

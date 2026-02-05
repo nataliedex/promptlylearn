@@ -241,59 +241,138 @@ export function isAttentionNowRecommendation(rec: Recommendation): boolean {
 }
 
 /**
- * Get a problem-focused attention reason for display.
- * This generates the text shown in the "needs attention" list.
+ * Get a concise "Category · Reason" summary for the attention row.
  *
- * @param rec - The recommendation
- * @returns A short, problem-focused summary (e.g., "Needs support on Division Basics (38%)")
+ * Format:  {Category} · {Primary reason}
+ * Target:  45–55 characters max (shorter reason phrases preferred over CSS truncation)
+ *
+ * Because attention rows always navigate to a single student, group-scoped
+ * recommendations are rewritten as student-centric text. "Group support"
+ * never appears as a category label — instead the row reads:
+ *   "Needs support · Part of group below 35%"
+ *
+ * Example outputs:
+ *   "Needs support · Scored 25% with high hints"   (individual)
+ *   "Needs support · Part of group below 35%"      (group → student row)
+ *   "Needs support · One of 3 struggling"          (group, no threshold)
+ *   "Check-in · Seeking help frequently"           (individual)
+ *   "Needs support · Review suggested"              (fallback)
+ *
+ * @param rec - The recommendation to summarize
+ * @returns A single-line display string, never exceeding ~55 characters
  */
 export function getAttentionReason(rec: Recommendation): string {
   const signals = rec.triggerData?.signals || {};
   const ruleName = rec.triggerData?.ruleName || "";
-  const assignmentTitle = signals.assignmentTitle || rec.assignmentId || "";
 
-  // Build reason based on rule/category
+  const category = getAttentionCategory(ruleName, rec.insightType);
+  const reason = getAttentionReasonPhrase(ruleName, signals);
+
+  return `${category} · ${reason}`;
+}
+
+/**
+ * Map rule/insight to a short category label (max ~15 chars).
+ *
+ * Note: "group-support" maps to "Needs support" (not "Group support")
+ * because attention rows always point to a single student.
+ */
+function getAttentionCategory(
+  ruleName: string,
+  insightType?: string
+): string {
   switch (ruleName) {
     case "needs-support":
-      const score = signals.score as number | undefined;
-      if (score !== undefined) {
-        return `Needs support on ${assignmentTitle} (${Math.round(score)}%)`;
-      }
-      return `Needs support on ${assignmentTitle}`;
-
+    case "struggling-student":
     case "group-support":
-      const studentCount = signals.studentCount as number | undefined;
-      if (studentCount) {
-        return `Group needs support (${studentCount} students)`;
-      }
-      return "Group needs support";
-
+      return "Needs support";
     case "check-in-suggested":
-      const coachIntent = signals.coachIntent as string | undefined;
-      if (coachIntent === "support-seeking") {
-        return "Check-in suggested: seeking help in coach";
-      }
-      const hintRate = signals.hintUsageRate as number | undefined;
-      if (hintRate !== undefined && hintRate > 0.5) {
-        return `Check-in suggested: high coach usage (${Math.round(hintRate * 100)}%)`;
-      }
-      return "Check-in suggested";
-
+      return "Check-in";
     case "developing":
-      const devHintRate = signals.hintUsageRate as number | undefined;
-      if (devHintRate !== undefined && devHintRate > 0.5) {
-        return `Developing with high coach usage (${Math.round(devHintRate * 100)}%)`;
-      }
-      const helpRequests = signals.helpRequestCount as number | undefined;
-      if (helpRequests !== undefined && helpRequests >= 3) {
-        return `Developing with repeated help requests (${helpRequests})`;
-      }
-      return "Developing - needs monitoring";
-
+      return "Needs support";
     default:
-      // Fallback to the recommendation's own summary/reason
-      return rec.summary || rec.reason || "Needs attention";
+      if (insightType === "check_in") return "Check-in";
+      return "Needs support";
   }
+}
+
+/**
+ * Pick the best short reason phrase from available signals.
+ * Target: ≤35 characters so total stays under 55.
+ *
+ * Individual canonical phrases:
+ *   "Scored {n}% with high hints"      — score + high hint usage
+ *   "Scored {n}%"                      — score only
+ *   "Seeking help frequently"          — support-seeking coach intent
+ *   "High hint usage ({n}%)"           — high hint rate, no score
+ *   "Repeated help requests ({n})"     — frequent help requests
+ *
+ * Group-as-student canonical phrases (row = single student):
+ *   "Part of group below {avg}%"       — group threshold available
+ *   "One of {n} struggling"            — group count available
+ *   "Group trend detected"             — no group details available
+ *
+ * Fallback:
+ *   "Review suggested"                 — no signals at all
+ */
+function getAttentionReasonPhrase(
+  ruleName: string,
+  signals: Record<string, unknown>
+): string {
+  const score = signals.score as number | undefined;
+  const hintRate = signals.hintUsageRate as number | undefined;
+  const coachIntent = signals.coachIntent as string | undefined;
+  const studentCount = signals.studentCount as number | undefined;
+  const avgScore = signals.averageScore as number | undefined;
+  const threshold = (signals.thresholdPercent ?? signals.threshold ?? avgScore) as number | undefined;
+  const helpRequests = signals.helpRequestCount as number | undefined;
+  const groupCount = (signals.groupCount ?? signals.studentCount) as number | undefined;
+
+  // --- Group support (rendered on a student row) ---
+  // Produce student-centric text: the row click targets one student,
+  // so avoid "3 students below 35%" phrasing.
+  if (ruleName === "group-support") {
+    // (A) Threshold available → "Part of group below 35%"
+    if (threshold !== undefined) {
+      return `Part of group below ${Math.round(threshold)}%`;
+    }
+    // (B) Group count available → "One of 3 struggling"
+    if (groupCount) {
+      return `One of ${groupCount} struggling`;
+    }
+    // (C) No details → "Group trend detected"
+    return "Group trend detected";
+  }
+
+  // --- Individual rules ---
+
+  // Score + high hint usage  →  "Scored 25% with high hints"
+  if (score !== undefined && hintRate !== undefined && hintRate > 0.5) {
+    return `Scored ${Math.round(score)}% with high hints`;
+  }
+
+  // Score only  →  "Scored 25%"
+  if (score !== undefined) {
+    return `Scored ${Math.round(score)}%`;
+  }
+
+  // Coach intent is support-seeking  →  "Seeking help frequently"
+  if (coachIntent === "support-seeking") {
+    return "Seeking help frequently";
+  }
+
+  // High hint rate without score  →  "High hint usage (75%)"
+  if (hintRate !== undefined && hintRate > 0.5) {
+    return `High hint usage (${Math.round(hintRate * 100)}%)`;
+  }
+
+  // Repeated help requests  →  "Repeated help requests (4)"
+  if (helpRequests !== undefined && helpRequests >= 3) {
+    return `Repeated help requests (${helpRequests})`;
+  }
+
+  // No signals available
+  return "Review suggested";
 }
 
 // ============================================
@@ -356,19 +435,28 @@ export function getStudentAttentionStatus(
   const pendingRecs = studentRecs.filter((r) => statusIsPending(r.status));
   const resolvedRecs = studentRecs.filter((r) => statusIsResolved(r.status));
 
-  // Determine attention reason from highest priority ATTENTION-NOW recommendation
+  // Determine attention reason and assignment from highest priority ATTENTION-NOW recommendation
   // Use problem-focused reason, not celebration text
   let attentionReason: string | undefined;
+  let derivedAssignmentId = assignmentId || "";
+  let derivedAssignmentTitle = assignmentTitle;
   if (attentionNowRecs.length > 0) {
     const highestPriority = attentionNowRecs.sort((a, b) => b.priority - a.priority)[0];
     attentionReason = getAttentionReason(highestPriority);
+    // If no assignmentId was provided, use the one from the highest priority recommendation
+    if (!derivedAssignmentId && highestPriority.assignmentId) {
+      derivedAssignmentId = highestPriority.assignmentId;
+      derivedAssignmentTitle = derivedAssignmentTitle ||
+        (highestPriority.triggerData?.signals?.assignmentTitle as string) ||
+        (highestPriority.triggerData?.signals?.lessonTitle as string);
+    }
   }
 
   return {
     studentId,
     studentName,
-    assignmentId: assignmentId || "",
-    assignmentTitle,
+    assignmentId: derivedAssignmentId,
+    assignmentTitle: derivedAssignmentTitle,
     // CRITICAL: Only true if student has ATTENTION-NOW recommendations
     // (not celebrations or enrichment)
     needsAttention: attentionNowRecs.length > 0,

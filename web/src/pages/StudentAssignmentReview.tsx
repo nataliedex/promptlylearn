@@ -9,7 +9,7 @@
  */
 
 import { useState, useEffect, useRef, useCallback } from "react";
-import { useParams, Link } from "react-router-dom";
+import { useParams, Link, useNavigate, useLocation, useSearchParams } from "react-router-dom";
 import {
   getLesson,
   getSessions,
@@ -17,13 +17,35 @@ import {
   updateSession,
   getStudentAssignment,
   markStudentReviewed,
+  unmarkStudentReviewed,
+  appendSystemNote,
   pushAssignmentToStudent,
-  undoReassignment,
+  submitReviewActions,
+  getBadgeTypes,
+  createCoachingInvite,
+  getRecommendations,
+  dismissRecommendation,
+  markRecommendationReviewed,
+  getTeacherTodo,
+  deleteTeacherTodo,
+  completeTeacherTodo,
+  reopenTeacherTodo,
+  supersedeTeacherTodo,
+  reactivateRecommendation,
   type Session,
   type Lesson,
   type Student,
   type StudentAssignment,
+  type BadgeTypeInfo,
+  type ReviewState,
+  type Recommendation,
+  type TeacherTodo,
+  CHECKLIST_ACTIONS,
+  REVIEW_STATE_LABELS,
+  isAttentionNowRecommendation,
 } from "../services/api";
+import Drawer from "../components/Drawer";
+import EducatorHeader from "../components/EducatorHeader";
 import { useToast } from "../components/Toast";
 import {
   buildStudentDrilldown,
@@ -32,9 +54,9 @@ import {
   getUnderstandingBgColor,
   getCoachSupportLabel,
   getQuestionOutcomeLabel,
-  getAttentionReasonDisplay,
   calculateQuestionOutcome,
 } from "../utils/teacherDashboardUtils";
+import { getCategoryConfig } from "../utils/recommendationConfig";
 import type { StudentDrilldownData, QuestionOutcome } from "../types/teacherDashboard";
 
 // Type for a single attempt at a question
@@ -61,9 +83,423 @@ interface QuestionWithAttempts {
   attempts: QuestionAttempt[];
 }
 
+// ============================================
+// Recommendation Logic (per schema)
+// ============================================
+
+// Human-readable labels for recommendation types
+const RECOMMENDATION_TYPE_LABELS: Record<string, string> = {
+  // From insightType (actual backend values)
+  "challenge_opportunity": "Extend learning",
+  "celebrate_progress": "Celebrate progress",
+  "check_in": "Needs support",
+  "monitor": "Monitor",
+  // Legacy/alternate forms
+  "extend_learning": "Extend learning",
+  "needs_support": "Needs support",
+  "challenge-opportunity": "Extend learning",
+  "celebrate-progress": "Celebrate progress",
+  "needs-support": "Needs support",
+  "group-review": "Group review",
+  "check-in-suggested": "Needs support",
+  "developing": "Needs support",
+  "individual-checkin": "Needs support",
+  "small-group": "Group review",
+  "enrichment": "Extend learning",
+  "celebrate": "Celebrate progress",
+  "ready-for-challenge": "Extend learning",
+  "notable-improvement": "Celebrate progress",
+  "persistence": "Celebrate progress",
+  "watch-progress": "Monitor",
+};
+
+// Map API action types to UI action types (all lowercase for matching)
+const ACTION_TYPE_MAP: Record<string, string> = {
+  // Standard forms
+  "award_badge": "badge",
+  "add_to_todos": "todo",
+  "add_todo": "todo",
+  "invite_coaching": "coaching",
+  // Shorthand forms
+  "badge": "badge",
+  "todo": "todo",
+  "coaching": "coaching",
+  // Hyphenated variations
+  "award-badge": "badge",
+  "add-to-todos": "todo",
+  "add-todo": "todo",
+  "invite-coaching": "coaching",
+};
+
+/**
+ * Checks if a recommendation is actionable.
+ * A recommendation is actionable if:
+ * 1. Status is "active"
+ * 2. Has a recognized insight type/category
+ */
+function isRecommendationActionable(recommendation: Recommendation | null): boolean {
+  if (!recommendation) return false;
+  if (recommendation.status !== "active") return false;
+
+  // Check that we have a recognized category to derive actions from
+  const category =
+    recommendation.insightType ||
+    recommendation.triggerData?.ruleName ||
+    (recommendation as any).type ||
+    "";
+
+  // TEMP debugging log (do not remove)
+  console.log("isRecommendationActionable - status:", recommendation.status, "category:", category);
+
+  // Category must exist for us to derive actions
+  return !!category;
+}
+
+/**
+ * Gets the human-readable type label for a recommendation.
+ * Checks multiple possible sources for the type.
+ */
+function getRecommendationTypeLabel(recommendation: Recommendation): string {
+  // Try various sources for the recommendation type
+  const recType =
+    recommendation.insightType ||
+    recommendation.type ||
+    (recommendation.triggerData?.signals?.recommendationType as string) ||
+    "";
+
+  return RECOMMENDATION_TYPE_LABELS[recType] || RECOMMENDATION_TYPE_LABELS[recType.toLowerCase()] || "Review";
+}
+
+/**
+ * Derives UI action types from recommendation based on insight type and data.
+ *
+ * Actions are derived from:
+ * 1. insightType/ruleName → category → default actions
+ * 2. suggestedBadge presence → include "badge" action
+ *
+ * UI action types: "badge" | "todo" | "coaching"
+ */
+function getSuggestedActions(recommendation: Recommendation): string[] {
+  const actions: string[] = [];
+
+  // Get the category from insight type or rule name
+  const category =
+    recommendation.insightType ||
+    recommendation.triggerData?.ruleName ||
+    (recommendation as any).type ||
+    "";
+
+  // Category-based action mapping (aligned with backend getChecklistActionsForCategory)
+  switch (category) {
+    case "challenge_opportunity":
+    case "enrichment":
+    case "ready-for-challenge":
+      // High performers: badge, coaching (extension), todo for follow-up
+      actions.push("badge", "coaching", "todo");
+      break;
+
+    case "celebrate_progress":
+    case "celebrate":
+    case "notable-improvement":
+    case "persistence":
+      // Celebration: primarily badge
+      actions.push("badge", "todo");
+      break;
+
+    case "check_in":
+    case "individual-checkin":
+    case "needs-support":
+    case "developing":
+    case "check-in-suggested":
+      // Support needed: todo for follow-up, coaching for intervention
+      actions.push("todo", "coaching");
+      break;
+
+    case "monitor":
+    case "watch-progress":
+      // Monitoring: just todo for tracking
+      actions.push("todo");
+      break;
+
+    default:
+      // Fallback: offer all actions
+      actions.push("badge", "todo", "coaching");
+  }
+
+  // If there's a specific badge suggestion, ensure badge is first
+  if ((recommendation as any).suggestedBadge) {
+    const badgeIndex = actions.indexOf("badge");
+    if (badgeIndex > 0) {
+      actions.splice(badgeIndex, 1);
+      actions.unshift("badge");
+    } else if (badgeIndex === -1) {
+      actions.unshift("badge");
+    }
+  }
+
+  // TEMP debugging log (do not remove)
+  console.log("getSuggestedActions - category:", category, "actions:", actions, "hasBadge:", !!(recommendation as any).suggestedBadge);
+
+  return actions;
+}
+
+/**
+ * Gets raw action strings from recommendation for debugging.
+ * These are human-readable descriptions, not action types.
+ */
+function getSuggestedActionsRaw(recommendation: Recommendation | null): string[] {
+  if (!recommendation) return [];
+  return recommendation.suggestedTeacherActions || [];
+}
+
+/**
+ * Determines if a recommendation is for support/intervention (vs enrichment).
+ * Used to show appropriate coaching session labels.
+ */
+function isRecommendationForSupport(recommendation: Recommendation | null): boolean {
+  if (!recommendation) return false;
+
+  const category =
+    recommendation.insightType ||
+    recommendation.triggerData?.ruleName ||
+    (recommendation as any).type ||
+    "";
+
+  const supportTypes = [
+    "check_in",
+    "individual-checkin",
+    "needs-support",
+    "developing",
+    "check-in-suggested",
+    "group-support",
+    "small-group",
+  ];
+
+  return supportTypes.includes(category);
+}
+
+// ============================================
+// Session Focus Suggestion Engine
+// ============================================
+
+interface SuggestedSessionFocus {
+  /** 2–4 actionable bullets for the callout box */
+  bullets: string[];
+  /** Short "Based on:" signals (e.g., "Q1 Still Developing + hint used") */
+  basedOn: string[];
+  /** Clean text for auto-filling the Session focus textarea */
+  autofillText: string;
+}
+
+interface AnalyzedQuestion {
+  question: QuestionWithAttempts;
+  outcome: QuestionOutcome;
+  usedHint: boolean;
+  response: string;
+  score: number | undefined;
+  /** Lower = weaker. developing=0, not-attempted=1, with-support=2, demonstrated=3 */
+  rank: number;
+}
+
+const OUTCOME_RANK: Record<QuestionOutcome, number> = {
+  "developing": 0,
+  "not-attempted": 1,
+  "with-support": 2,
+  "demonstrated": 3,
+};
+
+const OUTCOME_LABELS: Record<QuestionOutcome, string> = {
+  "developing": "Still Developing",
+  "not-attempted": "Not Attempted",
+  "with-support": "Succeeded with Support",
+  "demonstrated": "Demonstrated Understanding",
+};
+
+function analyzeQuestions(questions: QuestionWithAttempts[]): AnalyzedQuestion[] {
+  return questions.map((q) => {
+    const latest = q.attempts[q.attempts.length - 1];
+    if (!latest) {
+      return { question: q, outcome: "not-attempted" as QuestionOutcome, usedHint: false, response: "", score: undefined, rank: 1 };
+    }
+    return {
+      question: q,
+      outcome: latest.outcome,
+      usedHint: latest.usedHint,
+      response: latest.response,
+      score: latest.score,
+      rank: OUTCOME_RANK[latest.outcome] ?? 1,
+    };
+  });
+}
+
+/**
+ * Detect skill gaps from the student's responses.
+ * Returns actionable coaching bullets and signals.
+ */
+function getSuggestedSessionFocus(questions: QuestionWithAttempts[]): SuggestedSessionFocus {
+  const empty: SuggestedSessionFocus = { bullets: [], basedOn: [], autofillText: "" };
+  if (questions.length === 0) return empty;
+
+  const analyzed = analyzeQuestions(questions);
+  const weak = analyzed.filter((a) => a.rank <= 1); // developing or not-attempted
+  const supported = analyzed.filter((a) => a.outcome === "with-support");
+  const hintHeavy = analyzed.filter((a) => a.usedHint && a.rank < 3);
+  const strong = analyzed.filter((a) => a.rank === 3);
+
+  // Pick the top 1–2 focus questions (weakest first, then supported-with-hints)
+  const focusQuestions: AnalyzedQuestion[] = [];
+  for (const q of [...weak, ...supported.filter((s) => s.usedHint)]) {
+    if (focusQuestions.length >= 2) break;
+    if (!focusQuestions.some((f) => f.question.questionId === q.question.questionId)) {
+      focusQuestions.push(q);
+    }
+  }
+  // If nothing weak at all, pick the first supported question
+  if (focusQuestions.length === 0 && supported.length > 0) {
+    focusQuestions.push(supported[0]);
+  }
+  // Last resort: first question
+  if (focusQuestions.length === 0 && analyzed.length > 0) {
+    focusQuestions.push(analyzed[0]);
+  }
+
+  // --- Build "Based on" signals ---
+  const basedOn: string[] = focusQuestions.map((fq) => {
+    const label = OUTCOME_LABELS[fq.outcome];
+    const hint = fq.usedHint ? " + hint used" : "";
+    return `Q${fq.question.questionNumber} ${label}${hint}`;
+  });
+
+  // --- Detect skill patterns across focus questions ---
+  const bullets: string[] = [];
+
+  // 1. Short / thin responses → reasoning depth
+  const hasShortResponse = focusQuestions.some((fq) => {
+    const words = fq.response.trim().split(/\s+/).length;
+    return words > 0 && words < 12;
+  });
+  if (hasShortResponse) {
+    bullets.push("Practice explaining your thinking using 2 reasons or examples.");
+  }
+
+  // 2. Topic-specific bullet referencing the weakest question
+  if (focusQuestions.length > 0) {
+    const primary = focusQuestions[0];
+    const topic = extractTopicPhrase(primary.question.questionText);
+    if (primary.outcome === "developing") {
+      bullets.push(`Work on ${topic} — try answering in your own words first.`);
+    } else if (primary.outcome === "with-support") {
+      bullets.push(`Focus on ${topic} without relying on hints.`);
+    } else if (primary.outcome === "not-attempted") {
+      bullets.push(`Try ${topic} together during the session.`);
+    }
+  }
+
+  // 3. Second weak question if present
+  if (focusQuestions.length > 1) {
+    const secondary = focusQuestions[1];
+    const topic = extractTopicPhrase(secondary.question.questionText);
+    bullets.push(`Also practice ${topic}.`);
+  }
+
+  // 4. Hint dependence (if multiple questions used hints)
+  if (hintHeavy.length >= 2) {
+    bullets.push("Try answering before checking hints — build confidence first.");
+  } else if (hintHeavy.length === 1 && !bullets.some((b) => b.includes("hint"))) {
+    bullets.push("Practice answering without hints, then check after.");
+  }
+
+  // 5. Sentence completeness (if short responses detected but not already addressed)
+  if (hasShortResponse && !bullets.some((b) => b.includes("sentence"))) {
+    bullets.push("Turn short answers into complete sentences.");
+  }
+
+  // 6. If everything is strong, offer a lighter suggestion
+  if (focusQuestions.length > 0 && focusQuestions.every((fq) => fq.rank >= 3)) {
+    return {
+      bullets: ["Review strong answers and celebrate progress.", "Try explaining answers to a partner for extra practice."],
+      basedOn: ["All questions demonstrated understanding"],
+      autofillText: "Review strong answers and try explaining to a partner for extra practice.",
+    };
+  }
+
+  // Cap at 4 bullets
+  const finalBullets = bullets.slice(0, 4);
+
+  // Build autofill text: a clean sentence/list version
+  const autofillText = finalBullets
+    .map((b) => b.replace(/\.$/, ""))
+    .join(". ") + ".";
+
+  return { bullets: finalBullets, basedOn, autofillText };
+}
+
+/**
+ * Extract a short topic phrase from a question for use in coaching bullets.
+ * Turns "Explain why the ocean is important" → "explaining why the ocean is important".
+ */
+function extractTopicPhrase(questionText: string): string {
+  // Clean up the question text
+  let text = questionText.trim().replace(/\?$/, "").replace(/\.$/, "");
+
+  // If it starts with a command verb, convert to gerund form for coaching language
+  const verbMap: [RegExp, string][] = [
+    [/^Explain\b/i, "explaining"],
+    [/^Describe\b/i, "describing"],
+    [/^Tell\b/i, "telling"],
+    [/^Write\b/i, "writing about"],
+    [/^List\b/i, "listing"],
+    [/^Name\b/i, "naming"],
+    [/^Show\b/i, "showing"],
+    [/^Compare\b/i, "comparing"],
+    [/^Identify\b/i, "identifying"],
+    [/^Think about\b/i, "thinking about"],
+    [/^What\b/i, "understanding what"],
+    [/^Why\b/i, "understanding why"],
+    [/^How\b/i, "understanding how"],
+  ];
+
+  for (const [pattern, replacement] of verbMap) {
+    if (pattern.test(text)) {
+      text = text.replace(pattern, replacement);
+      break;
+    }
+  }
+
+  // Truncate if too long
+  if (text.length > 80) {
+    text = text.slice(0, 77) + "...";
+  }
+
+  return text.charAt(0).toLowerCase() + text.slice(1);
+}
+
 export default function StudentAssignmentReview() {
   const { lessonId, studentId } = useParams<{ lessonId: string; studentId: string }>();
+  const navigate = useNavigate();
+  const location = useLocation();
+  const [searchParams] = useSearchParams();
   const { showSuccess, showError } = useToast();
+
+  // Check if we should show insights expanded by default
+  const showInsightsParam = searchParams.get("showInsights") === "true";
+
+  // Navigation state for context (breadcrumbs, recommendation deep links)
+  const navigationState = location.state as {
+    fromStudent?: string;
+    studentName?: string;
+    fromAssignment?: string;
+    assignmentTitle?: string;
+    from?: "recommended-actions";
+    returnTo?: string;
+    scrollTo?: string;
+    recommendationId?: string;
+    recommendationType?: string;
+    categoryLabel?: string;
+  } | null;
+
+  const recommendationType = navigationState?.recommendationType;
+  const cameFromRecommendedActions = navigationState?.from === "recommended-actions";
 
   const [drilldown, setDrilldown] = useState<StudentDrilldownData | null>(null);
   const [session, setSession] = useState<Session | null>(null);
@@ -81,19 +517,48 @@ export default function StudentAssignmentReview() {
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Action states
-  const [isPushing, setIsPushing] = useState(false);
   const [isMarkingReviewed, setIsMarkingReviewed] = useState(false);
-  const [isUndoing, setIsUndoing] = useState(false);
+  const [isUnmarkingReviewed, setIsUnmarkingReviewed] = useState(false);
+  const [showReviewConfirmation, setShowReviewConfirmation] = useState(false);
 
-  // Track if we just reassigned (for showing undo button)
-  const [justReassigned, setJustReassigned] = useState(false);
-  const [previousState, setPreviousState] = useState<{
-    completedAt?: string;
-    reviewedAt?: string;
-  } | null>(null);
+  // Actions section state
+  const [awardBadgeChecked, setAwardBadgeChecked] = useState(false);
+  const [selectedBadgeType, setSelectedBadgeType] = useState("");
+  const [badgeMessage, setBadgeMessage] = useState("");
+  const [createTodoChecked, setCreateTodoChecked] = useState(false);
+  const [selectedTodoType, setSelectedTodoType] = useState("");
+  const [customTodoText, setCustomTodoText] = useState("");
+  const [reassignChecked, setReassignChecked] = useState(false);
+  const [badgeTypes, setBadgeTypes] = useState<BadgeTypeInfo[]>([]);
+  const [isSavingActions, setIsSavingActions] = useState(false);
+
+  // Coaching session state
+  const [pushCoachingChecked, setPushCoachingChecked] = useState(false);
+  const [coachingTitle, setCoachingTitle] = useState("");
+  const [coachingNote, setCoachingNote] = useState("");
+  const [coachingFocus, setCoachingFocus] = useState("");
+  const [showFocusReplaceConfirm, setShowFocusReplaceConfirm] = useState(false);
+
+  // Active recommendation for this student+assignment (determines if Actions show)
+  const [activeRecommendation, setActiveRecommendation] = useState<Recommendation | null>(null);
+  const [recommendationLoading, setRecommendationLoading] = useState(true);
 
   // Expanded questions
   const [expandedQuestions, setExpandedQuestions] = useState<Set<string>>(new Set());
+
+  // Auto-sizing textarea ref
+  const notesTextareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // Follow-up drawer state
+  const [followupDrawerOpen, setFollowupDrawerOpen] = useState(false);
+  const [followupTodo, setFollowupTodo] = useState<TeacherTodo | null>(null);
+  const [followupLoading, setFollowupLoading] = useState(false);
+  const [followupMenuOpen, setFollowupMenuOpen] = useState(false);
+  const [isMovingBack, setIsMovingBack] = useState(false);
+  const [followupCompleting, setFollowupCompleting] = useState(false);
+
+  // Mark Reviewed undo timer (deferred note)
+  const markReviewedNoteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Audio playback
   const [playingQuestionId, setPlayingQuestionId] = useState<string | null>(null);
@@ -214,7 +679,179 @@ export default function StudentAssignmentReview() {
     };
   }, [lessonId, studentId]);
 
-  // Auto-save notes (and auto-mark as reviewed when notes are saved)
+  // Load badge types for the actions section
+  useEffect(() => {
+    getBadgeTypes()
+      .then((data) => setBadgeTypes(data.badgeTypes))
+      .catch((err) => console.error("Failed to load badge types:", err));
+  }, []);
+
+  // Load active recommendation for this student+assignment
+  // This determines whether to show the Actions section
+  useEffect(() => {
+    if (!lessonId || !studentId) {
+      setRecommendationLoading(false);
+      return;
+    }
+
+    setRecommendationLoading(true);
+    getRecommendations({
+      assignmentId: lessonId,
+      studentId: studentId,
+      status: "active",
+    })
+      .then((data) => {
+        // Find the first actionable recommendation
+        const actionableRec = data.recommendations.find(isRecommendationActionable) || null;
+
+        // TEMP debugging logs (do not remove)
+        console.log("activeRecommendation", actionableRec);
+        console.log("suggestedActionsRaw", actionableRec ? getSuggestedActionsRaw(actionableRec) : []);
+        console.log("actionable?", isRecommendationActionable(actionableRec));
+
+        setActiveRecommendation(actionableRec);
+      })
+      .catch((err) => {
+        console.error("Failed to load recommendations:", err);
+        setActiveRecommendation(null);
+      })
+      .finally(() => {
+        setRecommendationLoading(false);
+      });
+  }, [lessonId, studentId]);
+
+  // Auto-resize the notes textarea to fit content
+  const resizeTextarea = useCallback(() => {
+    const textarea = notesTextareaRef.current;
+    if (!textarea) return;
+    textarea.style.height = "auto";
+    const maxHeight = 300;
+    textarea.style.height = `${Math.min(textarea.scrollHeight, maxHeight)}px`;
+    textarea.style.overflow = textarea.scrollHeight > maxHeight ? "auto" : "hidden";
+  }, []);
+
+  // Resize when teacherNote changes (including initial load)
+  useEffect(() => {
+    resizeTextarea();
+  }, [teacherNote, resizeTextarea]);
+
+  // Handle follow-up badge click
+  const handleFollowupClick = useCallback(async () => {
+    if (!assignment?.todoIds?.length) return;
+    setFollowupDrawerOpen(true);
+    setFollowupLoading(true);
+    try {
+      const { todo } = await getTeacherTodo(assignment.todoIds[0]);
+      // Guard: don't display superseded todos as active follow-ups
+      if (todo.status === "superseded") {
+        setFollowupTodo(null);
+        return;
+      }
+      setFollowupTodo(todo);
+    } catch (err) {
+      console.error("Failed to load follow-up todo:", err);
+    } finally {
+      setFollowupLoading(false);
+    }
+  }, [assignment]);
+
+  // Move follow-up back to Recommended Actions
+  const handleMoveBackToRecommendations = useCallback(async () => {
+    if (!followupTodo || !lessonId || !studentId) return;
+    setIsMovingBack(true);
+    try {
+      await deleteTeacherTodo(followupTodo.id, true);
+      // Update local assignment state: remove todo, revert to reviewed
+      setAssignment((prev) => prev ? {
+        ...prev,
+        reviewState: "reviewed" as ReviewState,
+        todoIds: (prev.todoIds || []).filter((id) => id !== followupTodo.id),
+      } : null);
+      // Reload recommendation since it was reactivated
+      if (lessonId && studentId) {
+        getRecommendations({ assignmentId: lessonId, studentId, status: "active" })
+          .then((data) => {
+            const actionableRec = data.recommendations.find(isRecommendationActionable) || null;
+            setActiveRecommendation(actionableRec);
+          })
+          .catch(() => {});
+      }
+      setFollowupDrawerOpen(false);
+      setFollowupTodo(null);
+      setFollowupMenuOpen(false);
+      showSuccess("Moved back to Recommended Actions");
+    } catch (err) {
+      console.error("Failed to move back:", err);
+      showError("Failed to move back");
+    } finally {
+      setIsMovingBack(false);
+    }
+  }, [followupTodo, lessonId, studentId, showSuccess, showError]);
+
+  // Handle completing a follow-up todo from the drawer
+  const handleFollowupComplete = useCallback(async () => {
+    if (!followupTodo || followupCompleting) return;
+    setFollowupCompleting(true);
+    try {
+      await completeTeacherTodo(followupTodo.id);
+      // Update local todo state to show as done
+      setFollowupTodo((prev) => prev ? { ...prev, status: "done", doneAt: new Date().toISOString() } : null);
+      // Update assignment review state: if all todos done, move to resolved
+      setAssignment((prev) => {
+        if (!prev) return prev;
+        const remainingTodoIds = (prev.todoIds || []).filter((id) => id !== followupTodo.id);
+        return {
+          ...prev,
+          reviewState: remainingTodoIds.length === 0 ? "resolved" as ReviewState : prev.reviewState,
+          todoIds: remainingTodoIds,
+        };
+      });
+      // Sync local teacher note with the system note appended by backend
+      const dateStr = new Date().toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+      const systemNote = `\n---\n[System · ${dateStr}]\nFollow-up completed: "${followupTodo.label}"`;
+      setTeacherNote((prev) => (prev || "") + systemNote);
+      // Show toast with undo
+      const todoToUndo = followupTodo;
+      showSuccess("Follow-up marked complete.", {
+        duration: 5000,
+        action: {
+          label: "Undo",
+          onClick: async () => {
+            try {
+              await reopenTeacherTodo(todoToUndo.id);
+              setFollowupTodo((prev) => prev ? { ...prev, status: "open", doneAt: undefined } : null);
+              setAssignment((prev) => {
+                if (!prev) return prev;
+                const todoIds = prev.todoIds || [];
+                return {
+                  ...prev,
+                  reviewState: "followup_scheduled" as ReviewState,
+                  todoIds: todoIds.includes(todoToUndo.id) ? todoIds : [...todoIds, todoToUndo.id],
+                };
+              });
+              setTeacherNote((prev) => {
+                if (!prev) return prev;
+                const label = todoToUndo.label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+                const notePattern = new RegExp(`\\n---\\n\\[System · [^\\]]+\\]\\nFollow-up completed: "${label}"`);
+                return prev.replace(notePattern, "") || "";
+              });
+              showSuccess("Follow-up reopened.");
+            } catch (err) {
+              console.error("Failed to undo completion:", err);
+              showError("Failed to undo");
+            }
+          },
+        },
+      });
+    } catch (err) {
+      console.error("Failed to complete follow-up:", err);
+      showError("Failed to complete follow-up");
+    } finally {
+      setFollowupCompleting(false);
+    }
+  }, [followupTodo, followupCompleting, showSuccess, showError]);
+
+  // Auto-save notes
   const saveNotes = useCallback(async () => {
     if (!session || !lessonId || !studentId) return;
 
@@ -233,23 +870,13 @@ export default function StudentAssignmentReview() {
         },
       });
 
-      // Auto-mark as reviewed when teacher adds notes
-      if ((teacherNote && teacherNote.trim()) && assignment && !assignment.reviewedAt) {
-        try {
-          await markStudentReviewed(lessonId, studentId);
-          setAssignment((prev) => prev ? { ...prev, reviewedAt: new Date().toISOString() } : null);
-        } catch (err) {
-          console.log("Failed to mark as reviewed:", err);
-        }
-      }
-
       setLastSaved(new Date());
     } catch (err) {
       console.error("Failed to save notes:", err);
     } finally {
       setSaving(false);
     }
-  }, [session, lessonId, studentId, teacherNote, questionNotes, assignment]);
+  }, [session, lessonId, studentId, teacherNote, questionNotes]);
 
   const debouncedSave = useCallback(() => {
     if (saveTimeoutRef.current) {
@@ -260,79 +887,406 @@ export default function StudentAssignmentReview() {
     }, 1000);
   }, [saveNotes]);
 
-  // Reassign assignment to student
-  const handleReassignToStudent = async () => {
-    if (!lessonId || !studentId || !assignment) return;
-
-    // Save previous state for undo
-    setPreviousState({
-      completedAt: assignment.completedAt,
-      reviewedAt: assignment.reviewedAt,
-    });
-
-    setIsPushing(true);
-    try {
-      const result = await pushAssignmentToStudent(lessonId, studentId);
-      setAssignment((prev) => prev ? {
-        ...prev,
-        completedAt: undefined,
-        reviewedAt: undefined,
-        attempts: result.attempts,
-      } : null);
-      setJustReassigned(true);
-      showSuccess(`Reassigned to student (Attempt #${result.attempts})`);
-    } catch (err) {
-      console.error("Failed to reassign:", err);
-      showError("Failed to reassign to student");
-      setPreviousState(null);
-    } finally {
-      setIsPushing(false);
-    }
-  };
-
-  // Undo reassignment
-  const handleUndoReassignment = async () => {
-    if (!lessonId || !studentId || !previousState) return;
-
-    setIsUndoing(true);
-    try {
-      const result = await undoReassignment(
-        lessonId,
-        studentId,
-        previousState.completedAt,
-        previousState.reviewedAt
-      );
-      setAssignment((prev) => prev ? {
-        ...prev,
-        completedAt: result.completedAt,
-        reviewedAt: result.reviewedAt,
-        attempts: result.attempts,
-      } : null);
-      setJustReassigned(false);
-      setPreviousState(null);
-      showSuccess("Reassignment undone");
-    } catch (err) {
-      console.error("Failed to undo reassignment:", err);
-      showError("Failed to undo reassignment");
-    } finally {
-      setIsUndoing(false);
-    }
-  };
-
-  // Mark as reviewed
+  // Mark as reviewed (with deferred note and undo toast)
   const handleMarkReviewed = async () => {
     if (!lessonId || !studentId) return;
 
     setIsMarkingReviewed(true);
     try {
+      // Mark reviewed WITHOUT appending the note yet
       await markStudentReviewed(lessonId, studentId);
-      setAssignment((prev) => prev ? { ...prev, reviewedAt: new Date().toISOString() } : null);
+      setAssignment((prev) => prev ? {
+        ...prev,
+        reviewState: "reviewed" as ReviewState,
+        reviewedAt: new Date().toISOString()
+      } : null);
+
+      // Build the system note text (but don't append yet)
+      const dateStr = new Date().toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+      const systemNote = `\n---\n[System · ${dateStr}]\nReviewed by teacher (no follow-up needed).`;
+
+      // Start 8-second timer to append the note
+      if (markReviewedNoteTimerRef.current) clearTimeout(markReviewedNoteTimerRef.current);
+      markReviewedNoteTimerRef.current = setTimeout(async () => {
+        try {
+          await appendSystemNote(lessonId, studentId, systemNote);
+          setTeacherNote((prev) => (prev || "") + systemNote);
+        } catch (e) {
+          console.error("Failed to append review note:", e);
+        }
+      }, 8000);
+
+      // Show undo toast
+      showSuccess("Assignment marked as reviewed.", {
+        duration: 8000,
+        action: {
+          label: "Undo",
+          onClick: async () => {
+            // Cancel the deferred note
+            if (markReviewedNoteTimerRef.current) {
+              clearTimeout(markReviewedNoteTimerRef.current);
+              markReviewedNoteTimerRef.current = null;
+            }
+            try {
+              await unmarkStudentReviewed(lessonId, studentId);
+              setAssignment((prev) => prev ? {
+                ...prev,
+                reviewState: "pending_review" as ReviewState,
+                reviewedAt: undefined,
+              } : null);
+              showSuccess("Review reopened.");
+            } catch (err) {
+              console.error("Failed to undo mark reviewed:", err);
+              showError("Failed to undo");
+            }
+          },
+        },
+      });
     } catch (err) {
       console.error("Failed to mark as reviewed:", err);
+      showError("Failed to mark as reviewed");
     } finally {
       setIsMarkingReviewed(false);
     }
   };
+
+  const handleMarkReviewedClick = () => {
+    if (isActionRequired) {
+      setShowReviewConfirmation(true);
+    } else {
+      handleMarkReviewed();
+    }
+  };
+
+  const handleConfirmNoFollowUp = () => {
+    setShowReviewConfirmation(false);
+    handleMarkReviewed();
+  };
+
+  const handleScrollToActions = () => {
+    setShowReviewConfirmation(false);
+    actionsSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+
+  const handleReopenForReview = async () => {
+    if (!lessonId || !studentId) return;
+
+    setIsUnmarkingReviewed(true);
+    try {
+      // 1. Set assignment back to pending_review
+      await unmarkStudentReviewed(lessonId, studentId);
+
+      // 2. Supersede any teacher to-dos linked to this assignment
+      //    Superseded todos are retained for history but hidden from active views
+      const todoIdsToSupersede = assignment?.todoIds || [];
+      const supersededLabels: string[] = [];
+      for (const todoId of todoIdsToSupersede) {
+        try {
+          const result = await supersedeTeacherTodo(todoId);
+          if (result.todo?.label) {
+            supersededLabels.push(result.todo.label);
+          }
+        } catch (e) {
+          console.error("Failed to supersede todo:", todoId, e);
+        }
+      }
+
+      // 3. Reactivate any resolved recommendations for this student+assignment
+      try {
+        const { recommendations: resolvedRecs } = await getRecommendations({
+          assignmentId: lessonId,
+          studentId,
+          status: "resolved",
+        });
+        for (const rec of resolvedRecs) {
+          try {
+            await reactivateRecommendation(rec.id);
+          } catch (e) {
+            console.error("Failed to reactivate recommendation:", rec.id, e);
+          }
+        }
+      } catch (e) {
+        console.error("Failed to fetch resolved recommendations:", e);
+      }
+
+      // 4. Reload active recommendations so Actions section reappears
+      try {
+        const { recommendations: activeRecs } = await getRecommendations({
+          assignmentId: lessonId,
+          studentId,
+          status: "active",
+        });
+        const actionableRec = activeRecs.find(isRecommendationActionable) || null;
+        setActiveRecommendation(actionableRec);
+      } catch (e) {
+        console.error("Failed to reload recommendations:", e);
+      }
+
+      // 5. Close follow-up drawer and reset follow-up state
+      setFollowupDrawerOpen(false);
+      setFollowupTodo(null);
+      setFollowupMenuOpen(false);
+
+      // 6. Append system note documenting all side effects
+      const dateStr = new Date().toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+      const noteLines: string[] = [];
+      noteLines.push("Review reopened by teacher");
+      if (supersededLabels.length > 0) {
+        const items = supersededLabels.map((l) => `"${l}"`).join(", ");
+        noteLines.push(`Removed from active to-do list: ${items}`);
+      }
+      noteLines.push("Assignment returned to Awaiting Review");
+      const systemNote = `\n---\n[System \u00b7 ${dateStr}]\n${noteLines.join("\n")}`;
+      const updatedNote = (teacherNote || "") + systemNote;
+      setTeacherNote(updatedNote);
+      if (session) {
+        try {
+          await updateSession(session.id, { educatorNotes: updatedNote });
+        } catch (e) {
+          console.error("Failed to save reopen note:", e);
+        }
+      }
+
+      // 7. Update local assignment state — clear reviewedAt and todoIds
+      setAssignment((prev) => prev ? {
+        ...prev,
+        reviewState: "pending_review" as ReviewState,
+        reviewedAt: undefined,
+        todoIds: [],
+      } : null);
+
+      // 8. Reset action selections so they're fresh
+      setAwardBadgeChecked(false);
+      setSelectedBadgeType("");
+      setBadgeMessage("");
+      setCreateTodoChecked(false);
+      setSelectedTodoType("");
+      setCustomTodoText("");
+      setPushCoachingChecked(false);
+      setCoachingTitle("");
+      setCoachingNote("");
+      setCoachingFocus("");
+      setShowFocusReplaceConfirm(false);
+
+      showSuccess(supersededLabels.length > 0
+        ? "Review reopened. Previous follow-ups removed."
+        : "Review reopened."
+      );
+    } catch (err) {
+      console.error("Failed to reopen for review:", err);
+      showError("Failed to reopen for review");
+    } finally {
+      setIsUnmarkingReviewed(false);
+    }
+  };
+
+  // Save review actions (badge, to-do, coaching session, mark reviewed)
+  const handleSaveActions = async () => {
+    if (!lessonId || !studentId) return;
+
+    // Check if there's something to save
+    const hasBadgeToAward = awardBadgeChecked && selectedBadgeType;
+    const hasTodoToCreate = createTodoChecked && selectedTodoType && (selectedTodoType !== "custom" || customTodoText.trim());
+    const hasCoachingToCreate = pushCoachingChecked && coachingTitle.trim();
+    const hasReassign = reassignChecked;
+    const hasNoteChange = teacherNote !== (session?.educatorNotes || "");
+
+    if (!hasBadgeToAward && !hasTodoToCreate && !hasCoachingToCreate && !hasReassign && !hasNoteChange) {
+      showError("Please select at least one action");
+      return;
+    }
+
+    // Validate custom to-do text if selected
+    if (createTodoChecked && selectedTodoType === "custom" && !customTodoText.trim()) {
+      showError("Please enter your to-do text");
+      return;
+    }
+
+    // Validate coaching session title if checked
+    if (pushCoachingChecked && !coachingTitle.trim()) {
+      showError("Please enter a title for the coaching session");
+      return;
+    }
+
+    setIsSavingActions(true);
+    try {
+      // If there's a note change, save it first
+      if (hasNoteChange) {
+        await saveNotes();
+      }
+
+      // Create coaching invite if checked
+      if (hasCoachingToCreate && lesson) {
+        // Combine teacher note and session focus into a single field
+        const noteParts: string[] = [];
+        if (coachingNote.trim()) noteParts.push(coachingNote.trim());
+        if (coachingFocus.trim()) noteParts.push(`Session focus: ${coachingFocus.trim()}`);
+
+        await createCoachingInvite({
+          studentId,
+          subject: lesson.subject || "General",
+          assignmentId: lessonId,
+          assignmentTitle: lesson.title,
+          title: coachingTitle.trim(),
+          teacherNote: noteParts.length > 0 ? noteParts.join("\n\n") : undefined,
+        });
+      }
+
+      // Submit the review actions (badge, todo, mark reviewed)
+      const result = await submitReviewActions(lessonId, studentId, {
+        awardBadgeType: hasBadgeToAward ? selectedBadgeType : undefined,
+        badgeMessage: hasBadgeToAward ? badgeMessage : undefined,
+        createTodo: !!hasTodoToCreate,
+        todoActionKey: hasTodoToCreate ? selectedTodoType : undefined,
+        todoCustomLabel: hasTodoToCreate && selectedTodoType === "custom" ? customTodoText.trim() : undefined,
+        recommendationId: activeRecommendation?.id,
+      });
+
+      // Update assignment state with new reviewState and todoIds
+      setAssignment((prev) => {
+        if (!prev) return null;
+        const updatedTodoIds = [...(prev.todoIds || [])];
+        if (result.todo && !updatedTodoIds.includes(result.todo.id)) {
+          updatedTodoIds.push(result.todo.id);
+        }
+        return {
+          ...prev,
+          reviewState: result.reviewState || "reviewed",
+          reviewedAt: result.reviewedAt,
+          todoIds: updatedTodoIds,
+        };
+      });
+
+      // Mark recommendation as resolved (so it no longer appears as active)
+      if (activeRecommendation) {
+        try {
+          await markRecommendationReviewed(activeRecommendation.id);
+        } catch (err) {
+          console.log("Failed to mark recommendation as reviewed:", err);
+          // Non-blocking - continue even if this fails
+        }
+        // Clear active recommendation to hide callout and actions
+        setActiveRecommendation(null);
+      }
+
+      // Append system-generated notes for actions taken
+      const actionDescriptions: string[] = [];
+      if (result.badge) {
+        const badgeName = badgeTypes.find((bt) => bt.id === selectedBadgeType)?.name || selectedBadgeType;
+        actionDescriptions.push(`Awarded badge: ${badgeName}`);
+      }
+      if (result.todo) {
+        const todoLabel = selectedTodoType === "custom"
+          ? customTodoText.trim()
+          : (CHECKLIST_ACTIONS[selectedTodoType as keyof typeof CHECKLIST_ACTIONS]?.label || selectedTodoType);
+        actionDescriptions.push(`Added to Teacher To-Dos \u2014 "${todoLabel}"`);
+      }
+      if (hasCoachingToCreate) {
+        const sessionType = isRecommendationForSupport(activeRecommendation) ? "support" : "enrichment";
+        actionDescriptions.push(`Scheduled ${sessionType} session`);
+      }
+
+      if (actionDescriptions.length > 0) {
+        const dateStr = new Date().toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+        let systemNote: string;
+
+        if (activeRecommendation) {
+          // Action originated from a recommendation — include category and reason
+          const category = getRecommendationTypeLabel(activeRecommendation);
+          const reason = (activeRecommendation.reason || "").replace(/\.$/, "");
+          const actionLines = actionDescriptions.map((d) => `Action taken: ${d}`).join("\n");
+          systemNote = `\n---\n[System \u00b7 ${dateStr}]\n${category}: ${reason}\n${actionLines}`;
+        } else {
+          // Manual action — no recommendation context
+          const actionLines = actionDescriptions.map((d) => `Action taken: ${d}`).join("\n");
+          systemNote = `\n---\n[System \u00b7 ${dateStr}]\n${actionLines}`;
+        }
+
+        const updatedNote = (teacherNote || "") + systemNote;
+        setTeacherNote(updatedNote);
+        // Persist immediately
+        if (session) {
+          try {
+            await updateSession(session.id, {
+              educatorNotes: updatedNote,
+            });
+          } catch (err) {
+            console.error("Failed to save system note:", err);
+          }
+        }
+      }
+
+      // Perform reassignment if checked (after other actions are saved)
+      if (hasReassign) {
+        try {
+          const reassignResult = await pushAssignmentToStudent(lessonId, studentId);
+          setAssignment((prev) => prev ? {
+            ...prev,
+            completedAt: undefined,
+            reviewState: reassignResult.reviewState || "not_started",
+            attempts: reassignResult.attempts,
+          } : null);
+
+          // Append reassignment system note
+          const dateStr = new Date().toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+          const reassignNote = `\n---\n[System \u00b7 ${dateStr}]\nAssignment reassigned by teacher.\nAssignment returned to awaiting review.`;
+          const currentNote = teacherNote || "";
+          // Avoid duplicate notes if the same reassign note already exists at the end
+          if (!currentNote.endsWith(reassignNote)) {
+            const updatedNote = currentNote + reassignNote;
+            setTeacherNote(updatedNote);
+            try {
+              await appendSystemNote(lessonId, studentId, reassignNote);
+            } catch (err) {
+              console.error("Failed to append reassignment note:", err);
+            }
+          }
+
+          showSuccess("Assignment reassigned.");
+        } catch (err) {
+          console.error("Failed to reassign:", err);
+          showError("Failed to reassign assignment");
+        }
+      } else if (result.todo) {
+        showSuccess("Follow-up added to your to-do list.");
+      } else {
+        showSuccess("Assignment marked as reviewed.");
+      }
+
+      // Reset action selections
+      setAwardBadgeChecked(false);
+      setSelectedBadgeType("");
+      setBadgeMessage("");
+      setCreateTodoChecked(false);
+      setSelectedTodoType("");
+      setCustomTodoText("");
+      setReassignChecked(false);
+      setPushCoachingChecked(false);
+      setCoachingTitle("");
+      setCoachingNote("");
+      setCoachingFocus("");
+      setShowFocusReplaceConfirm(false);
+    } catch (err) {
+      console.error("Failed to save actions:", err);
+      showError("Failed to save actions");
+    } finally {
+      setIsSavingActions(false);
+    }
+  };
+
+  // Check if save actions button should be enabled
+  const canSaveActions = () => {
+    const hasBadgeToAward = awardBadgeChecked && selectedBadgeType;
+    const hasTodoToCreate = createTodoChecked && selectedTodoType && (selectedTodoType !== "custom" || customTodoText.trim());
+    const hasCoachingToCreate = pushCoachingChecked && coachingTitle.trim();
+    const hasNoteChange = teacherNote !== (session?.educatorNotes || "");
+    return hasBadgeToAward || hasTodoToCreate || hasCoachingToCreate || reassignChecked || hasNoteChange;
+  };
+
+  // Reference for sections (for auto-scroll when coming from recommendations)
+  const actionsSectionRef = useRef<HTMLDivElement>(null);
+  const questionsSectionRef = useRef<HTMLDivElement>(null);
+
 
   // Toggle question expansion
   const toggleQuestion = (questionId: string) => {
@@ -399,6 +1353,28 @@ export default function StudentAssignmentReview() {
     }
   };
 
+  // Determine if we have an actionable recommendation
+  // This is the single source of truth for showing Actions/callout
+  const hasActionableRecommendation = isRecommendationActionable(activeRecommendation);
+
+  const isActionRequired =
+    hasActionableRecommendation &&
+    activeRecommendation !== null &&
+    isAttentionNowRecommendation(activeRecommendation);
+
+  // Get the suggested actions from the recommendation (mapped to UI action types)
+  const suggestedActions = activeRecommendation ? getSuggestedActions(activeRecommendation) : [];
+
+  // Scroll to actions section if coming from recommended actions
+  // This useEffect must be before any early returns to satisfy React hooks rules
+  useEffect(() => {
+    if (!loading && !recommendationLoading && hasActionableRecommendation && cameFromRecommendedActions) {
+      setTimeout(() => {
+        actionsSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      }, 300);
+    }
+  }, [loading, recommendationLoading, hasActionableRecommendation, cameFromRecommendedActions]);
+
   if (loading) {
     return (
       <div className="loading">
@@ -411,6 +1387,7 @@ export default function StudentAssignmentReview() {
   if (!lesson || !student) {
     return (
       <div className="container">
+        <EducatorHeader breadcrumbs={[{ label: "Not found" }]} />
         <div className="card">
           <p>Student or assignment not found.</p>
           <Link to="/educator" className="btn btn-primary" style={{ marginTop: "16px" }}>
@@ -421,17 +1398,73 @@ export default function StudentAssignmentReview() {
     );
   }
 
+  // Navigation state for student profile links (assignment context)
+  const studentProfileState = {
+    fromAssignment: lessonId,
+    assignmentTitle: lesson.title,
+  };
+
+  // Breadcrumbs: Home / {Assignment Title} / {Student Name}
+  // Class context is shown elsewhere on the page, not in the breadcrumb trail.
+  const breadcrumbs = [
+    { label: lesson.title, to: `/educator/assignment/${lessonId}` },
+    { label: student.name, to: `/educator/student/${studentId}`, state: studentProfileState },
+  ];
+
   // No session means student hasn't started
   if (!session || !drilldown) {
     return (
       <div className="container">
-        <Link to={`/educator/assignment/${lessonId}`} className="back-btn">
-          ← Back to Assignment
-        </Link>
+        <EducatorHeader breadcrumbs={breadcrumbs} />
+
+        {/* Assignment Context Banner */}
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            flexWrap: "wrap",
+            gap: "8px",
+            padding: "10px 14px",
+            background: "#f8f9fa",
+            borderRadius: "8px",
+            marginBottom: "16px",
+            fontSize: "0.9rem",
+          }}
+        >
+          <span style={{ color: "#666" }}>Reviewing:</span>
+          <span style={{ fontWeight: 500, color: "#333" }}>{lesson.title}</span>
+          {lesson.subject && (
+            <span
+              style={{
+                padding: "2px 8px",
+                background: "#e3f2fd",
+                color: "#1565c0",
+                borderRadius: "4px",
+                fontSize: "0.8rem",
+                fontWeight: 500,
+              }}
+            >
+              {lesson.subject}
+            </span>
+          )}
+        </div>
 
         <div className="header">
-          <h1>{student.name}</h1>
-          <p>{lesson.title}</p>
+          <h1>
+            <Link
+              to={`/educator/student/${studentId}`}
+              state={studentProfileState}
+              style={{
+                color: "inherit",
+                textDecoration: "none",
+                cursor: "pointer",
+              }}
+              onMouseEnter={(e) => { e.currentTarget.style.textDecoration = "underline"; }}
+              onMouseLeave={(e) => { e.currentTarget.style.textDecoration = "none"; }}
+            >
+              {student.name}
+            </Link>
+          </h1>
         </div>
 
         <div className="card" style={{ textAlign: "center", padding: "48px" }}>
@@ -449,216 +1482,902 @@ export default function StudentAssignmentReview() {
 
   return (
     <div className="container">
-      <Link to={`/educator/assignment/${lessonId}`} className="back-btn">
-        ← Back to Assignment
-      </Link>
+      <EducatorHeader breadcrumbs={breadcrumbs} />
 
-      <div className="header">
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-          <div>
-            <h1>{student.name}</h1>
-            <p>
-              {lesson.title} •{" "}
-              {drilldown.completedAt
-                ? new Date(drilldown.completedAt).toLocaleDateString()
-                : "In Progress"}
-              {assignment && assignment.attempts > 1 && (
-                <span style={{ marginLeft: "8px", color: "#1565c0" }}>
-                  (Attempt #{assignment.attempts})
+      {/* Unified Header Card */}
+      <div
+        className="card"
+        style={{
+          background: "white",
+          padding: "20px 24px",
+          marginBottom: "16px",
+        }}
+      >
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "16px" }}>
+          {/* Left: Assignment & Student Info */}
+          <div style={{ flex: 1, minWidth: 0 }}>
+            {/* Assignment Title - Primary */}
+            <h1
+              style={{
+                margin: "0 0 4px 0",
+                fontSize: "1.5rem",
+                fontWeight: 600,
+                color: "#1e293b",
+                lineHeight: 1.2,
+              }}
+            >
+              {lesson.title}
+            </h1>
+            {/* Student Name - Prominent Secondary (clickable → Student Profile) */}
+            <h2
+              style={{
+                margin: "0 0 12px 0",
+                fontSize: "1.1rem",
+                fontWeight: 500,
+                color: "#475569",
+              }}
+            >
+              <Link
+                to={`/educator/student/${studentId}`}
+                state={studentProfileState}
+                style={{
+                  color: "inherit",
+                  textDecoration: "none",
+                  cursor: "pointer",
+                  transition: "text-decoration 0.15s",
+                }}
+                onMouseEnter={(e) => { e.currentTarget.style.textDecoration = "underline"; }}
+                onMouseLeave={(e) => { e.currentTarget.style.textDecoration = "none"; }}
+              >
+                {student.name}
+              </Link>
+            </h2>
+            {/* Metadata row */}
+            <div style={{ display: "flex", alignItems: "center", gap: "12px", flexWrap: "wrap" }}>
+              {lesson.subject && (
+                <span
+                  style={{
+                    padding: "4px 10px",
+                    background: "#e0f2fe",
+                    color: "#0369a1",
+                    borderRadius: "4px",
+                    fontSize: "0.8rem",
+                    fontWeight: 500,
+                  }}
+                >
+                  {lesson.subject}
                 </span>
               )}
-            </p>
-          </div>
-          <div style={{ display: "flex", gap: "12px", flexShrink: 0 }}>
-            {/* Reassign to Student / Undo Reassignment Button */}
-            {assignment && (
-              justReassigned ? (
-                <button
-                  onClick={handleUndoReassignment}
-                  disabled={isUndoing}
-                  className="btn btn-secondary"
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "6px",
-                    padding: "10px 16px",
-                    background: "#fff3e0",
-                    color: "#e65100",
-                    border: "1px solid #ffcc80",
-                  }}
-                  title="Undo the reassignment"
-                >
-                  {isUndoing ? "Undoing..." : "Undo Reassignment"}
-                </button>
-              ) : (
-                <button
-                  onClick={handleReassignToStudent}
-                  disabled={isPushing}
-                  className="btn btn-secondary"
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "6px",
-                    padding: "10px 16px",
-                  }}
-                  title="Reassign to student for another attempt"
-                >
-                  {isPushing ? "Reassigning..." : "Reassign to Student"}
-                </button>
-              )
-            )}
-            {/* Mark as Reviewed Button */}
-            {assignment && !assignment.reviewedAt && (
-              <button
-                onClick={handleMarkReviewed}
-                disabled={isMarkingReviewed}
-                className="btn btn-primary"
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "6px",
-                  padding: "10px 16px",
-                }}
-              >
-                {isMarkingReviewed ? "Marking..." : "Mark as Reviewed"}
-              </button>
-            )}
-            {/* Already Reviewed Badge */}
-            {assignment && assignment.reviewedAt && (
-              <span
-                style={{
-                  background: "#e8f5e9",
-                  color: "#2e7d32",
-                  padding: "10px 16px",
-                  borderRadius: "8px",
-                  fontWeight: 500,
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "6px",
-                }}
-              >
-                Reviewed
+              <span style={{ color: "#64748b", fontSize: "0.85rem" }}>
+                {drilldown.completedAt
+                  ? `Completed ${new Date(drilldown.completedAt).toLocaleDateString()}`
+                  : "In Progress"}
               </span>
+              {assignment && assignment.attempts > 1 && (
+                <span style={{ color: "#0369a1", fontSize: "0.85rem", fontWeight: 500 }}>
+                  Attempt #{assignment.attempts}
+                </span>
+              )}
+            </div>
+          </div>
+
+          {/* Right: Status & Actions */}
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: "10px", flexShrink: 0 }}>
+            {/* Review Status Badge + Mark Reviewed */}
+            {assignment && (
+              <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                <ReviewStateBadge
+                  reviewState={assignment.reviewState}
+                  onUnmark={assignment.reviewState && assignment.reviewState !== "not_started" && assignment.reviewState !== "pending_review" ? handleReopenForReview : undefined}
+                  isUnmarking={isUnmarkingReviewed}
+                  onFollowupClick={assignment.todoIds?.length ? handleFollowupClick : undefined}
+                />
+                {assignment.reviewState === "pending_review" && (
+                  <button
+                    onClick={handleMarkReviewedClick}
+                    disabled={isMarkingReviewed}
+                    style={{
+                      padding: "10px 16px",
+                      background: isMarkingReviewed ? "#e2e8f0" : "#667eea",
+                      color: isMarkingReviewed ? "#64748b" : "white",
+                      border: "none",
+                      borderRadius: "8px",
+                      cursor: isMarkingReviewed ? "not-allowed" : "pointer",
+                      fontSize: "0.9rem",
+                      fontWeight: 600,
+                      opacity: isMarkingReviewed ? 0.7 : 1,
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {isMarkingReviewed ? "Marking..." : "Mark Reviewed"}
+                  </button>
+                )}
+              </div>
+            )}
+
+            {/* Inline confirmation panel for attention-required students */}
+            {showReviewConfirmation && assignment?.reviewState === "pending_review" && activeRecommendation && (
+              <div style={{
+                background: "#fffbeb",
+                border: "1px solid #f59e0b",
+                borderRadius: "8px",
+                padding: "12px 14px",
+                maxWidth: "320px",
+              }}>
+                <div style={{ fontWeight: 600, fontSize: "0.85rem", color: "#92400e", marginBottom: "6px" }}>
+                  This student was flagged for attention
+                </div>
+                <div style={{ fontSize: "0.82rem", color: "#78350f", marginBottom: "10px", lineHeight: 1.4 }}>
+                  {activeRecommendation.reason}
+                </div>
+                <div style={{ display: "flex", gap: "8px" }}>
+                  <button
+                    onClick={handleScrollToActions}
+                    style={{
+                      padding: "6px 12px",
+                      background: "#667eea",
+                      color: "white",
+                      border: "none",
+                      borderRadius: "6px",
+                      cursor: "pointer",
+                      fontSize: "0.82rem",
+                      fontWeight: 600,
+                    }}
+                  >
+                    Take an action
+                  </button>
+                  <button
+                    onClick={handleConfirmNoFollowUp}
+                    style={{
+                      padding: "6px 12px",
+                      background: "transparent",
+                      color: "#78350f",
+                      border: "1px solid #d97706",
+                      borderRadius: "6px",
+                      cursor: "pointer",
+                      fontSize: "0.82rem",
+                      fontWeight: 500,
+                    }}
+                  >
+                    No follow-up needed
+                  </button>
+                </div>
+              </div>
             )}
           </div>
         </div>
       </div>
 
-      {/* PRIMARY: Teacher Notes */}
-      <div className="card" style={{ borderLeft: "4px solid #667eea" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px" }}>
-          <h3 style={{ margin: 0 }}>Your Notes</h3>
-          <div style={{ fontSize: "0.85rem", color: "#666" }}>
+      {/* Teacher Notes */}
+      <div className="card" style={{ background: "white", border: "1px solid #e2e8f0", marginBottom: "12px" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
+          <h3 style={{ margin: 0, color: "#1e293b", fontSize: "1rem" }}>Notes</h3>
+          <div style={{ fontSize: "0.8rem", color: "#94a3b8" }}>
             {saving && "Saving..."}
             {!saving && lastSaved && `Saved ${lastSaved.toLocaleTimeString()}`}
           </div>
         </div>
         <textarea
+          ref={notesTextareaRef}
           value={teacherNote}
           onChange={(e) => {
             setTeacherNote(e.target.value);
             debouncedSave();
           }}
-          placeholder={`Add notes about ${student.name}'s work, follow-up actions, or observations...`}
+          placeholder={`Add notes about ${student.name}'s work...`}
           style={{
             width: "100%",
-            minHeight: "100px",
-            padding: "12px",
-            borderRadius: "8px",
-            border: "2px solid #e0e0e0",
-            fontSize: "1rem",
+            minHeight: "80px",
+            maxHeight: "300px",
+            padding: "10px 12px",
+            borderRadius: "6px",
+            border: "1px solid #e2e8f0",
+            fontSize: "0.9rem",
             fontFamily: "inherit",
-            resize: "vertical",
+            resize: "none",
             boxSizing: "border-box",
           }}
         />
       </div>
 
-      {/* Understanding Summary */}
-      <div className="card">
-        <div style={{ display: "flex", alignItems: "center", gap: "16px", flexWrap: "wrap" }}>
-          <span
-            style={{
-              display: "inline-block",
-              padding: "8px 16px",
-              borderRadius: "16px",
-              fontSize: "1rem",
-              fontWeight: 600,
-              background: getUnderstandingBgColor(drilldown.understanding),
-              color: getUnderstandingColor(drilldown.understanding),
+      {/* Recommendation Context - ONLY shown when there's an actionable recommendation */}
+      {hasActionableRecommendation && activeRecommendation && (() => {
+        const catConfig = getCategoryConfig(activeRecommendation);
+        const isSoftened = assignment?.reviewState === "followup_scheduled" || assignment?.reviewState === "resolved";
+        return (
+          <RecommendationContext
+            typeLabel={getRecommendationTypeLabel(activeRecommendation)}
+            reason={activeRecommendation.reason}
+            categoryColor={catConfig.color}
+            categoryBgColor={catConfig.bgColor}
+            softened={isSoftened}
+            onDismiss={async () => {
+              try {
+                await dismissRecommendation(activeRecommendation.id);
+                setActiveRecommendation(null);
+                setShowReviewConfirmation(false);
+                showSuccess("Dismissed");
+              } catch (err) {
+                console.error("Failed to dismiss:", err);
+                showError("Failed to dismiss");
+              }
             }}
-          >
-            {getUnderstandingLabel(drilldown.understanding)}
-          </span>
-          <span style={{ color: "#666" }}>
-            {drilldown.questions.length}/{lesson.prompts.length} questions answered
-          </span>
-          <span style={{ color: "#666" }}>
-            Coach support: {getCoachSupportLabel(drilldown.coachSupport)}
-          </span>
-          {drilldown.timeSpentMinutes && (
-            <span style={{ color: "#666" }}>
-              {drilldown.timeSpentMinutes} min spent
-            </span>
-          )}
+          />
+        );
+      })()}
+
+      {/* Actions Section - Always visible when assignment exists */}
+      {assignment && (
+        <div
+          ref={actionsSectionRef}
+          className="card"
+          style={{
+            background: "white",
+            border: "1px solid #e2e8f0",
+          }}
+        >
+          <h3 style={{ margin: "0 0 12px 0", color: "#1e293b", fontSize: "1rem" }}>Actions</h3>
+
+          <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+
+            {/* Recommended Actions - only when actionable recommendation exists */}
+            {hasActionableRecommendation && activeRecommendation && suggestedActions.length > 0 && (
+              <div>
+                <h4 style={{ margin: "0 0 8px 0", color: "#64748b", fontSize: "0.85rem", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.03em" }}>
+                  Recommended Actions
+                </h4>
+                <p style={{ margin: "0 0 10px 0", color: "#94a3b8", fontSize: "0.8rem" }}>
+                  Based on this student's performance
+                </p>
+
+                <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+                  {/* Award Badge Option */}
+                  {suggestedActions.includes("badge") && (
+                  <div>
+                    <label
+                      style={{
+                        display: "flex",
+                        alignItems: "flex-start",
+                        gap: "8px",
+                        cursor: "pointer",
+                        fontSize: "0.95rem",
+                        color: "#333",
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={awardBadgeChecked}
+                        onChange={(e) => setAwardBadgeChecked(e.target.checked)}
+                        style={{
+                          marginTop: "2px",
+                          cursor: "pointer",
+                          width: "16px",
+                          height: "16px",
+                        }}
+                      />
+                      <span>Award Badge</span>
+                    </label>
+
+                    {/* Badge selector (shows when checked) */}
+                    {awardBadgeChecked && (
+                      <div
+                        style={{
+                          marginTop: "8px",
+                          marginLeft: "24px",
+                          padding: "12px",
+                          background: "#fff",
+                          border: "1px solid #e0e0e0",
+                          borderRadius: "6px",
+                        }}
+                      >
+                        <div style={{ marginBottom: "8px" }}>
+                          <label style={{ display: "block", fontSize: "0.85rem", fontWeight: 500, marginBottom: "4px" }}>
+                            Badge type: <span style={{ color: "#c62828" }}>*</span>
+                          </label>
+                          <select
+                            value={selectedBadgeType}
+                            onChange={(e) => setSelectedBadgeType(e.target.value)}
+                            style={{
+                              width: "100%",
+                              padding: "8px",
+                              fontSize: "0.9rem",
+                              border: "1px solid #ccc",
+                              borderRadius: "4px",
+                            }}
+                          >
+                            <option value="">Select a badge...</option>
+                            {badgeTypes.map((bt) => (
+                              <option key={bt.id} value={bt.id}>
+                                {bt.icon} {bt.name}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <div>
+                          <label style={{ display: "block", fontSize: "0.85rem", fontWeight: 500, marginBottom: "4px" }}>
+                            Message (optional):
+                          </label>
+                          <input
+                            type="text"
+                            value={badgeMessage}
+                            onChange={(e) => setBadgeMessage(e.target.value)}
+                            placeholder={`Great work, ${student.name}!`}
+                            style={{
+                              width: "100%",
+                              padding: "8px",
+                              fontSize: "0.9rem",
+                              border: "1px solid #ccc",
+                              borderRadius: "4px",
+                              boxSizing: "border-box",
+                            }}
+                          />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                  )}
+
+                  {/* Invite Coaching Option */}
+                  {suggestedActions.includes("coaching") && (() => {
+                    const isSupportSession = isRecommendationForSupport(activeRecommendation);
+                    const sessionLabel = isSupportSession ? "Invite to support session" : "Invite to enrichment session";
+                    const badgeLabel = isSupportSession ? "Support" : "Enrichment";
+                    const badgeColor = isSupportSession ? "#7c3aed" : "#166534";
+                    const badgeBgColor = isSupportSession ? "#f5f3ff" : "#e8f5e9";
+                    const defaultTitle = isSupportSession
+                      ? `Extra help with ${lesson?.title || "this topic"}`
+                      : `Advanced discussions about ${lesson?.title || "this topic"}`;
+
+                    return (
+                  <div>
+                    <label
+                      style={{
+                        display: "flex",
+                        alignItems: "flex-start",
+                        gap: "8px",
+                        cursor: "pointer",
+                        fontSize: "0.95rem",
+                        color: "#333",
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={pushCoachingChecked}
+                        onChange={(e) => {
+                          const checked = e.target.checked;
+                          setPushCoachingChecked(checked);
+                          // Set default title when checking the box
+                          if (checked && lesson?.title) {
+                            setCoachingTitle(defaultTitle);
+                          }
+                        }}
+                        style={{
+                          marginTop: "2px",
+                          cursor: "pointer",
+                          width: "16px",
+                          height: "16px",
+                        }}
+                      />
+                      <span>
+                        {sessionLabel}
+                        <span
+                          style={{
+                            marginLeft: "6px",
+                            fontSize: "0.75rem",
+                            color: badgeColor,
+                            background: badgeBgColor,
+                            padding: "1px 6px",
+                            borderRadius: "3px",
+                          }}
+                        >
+                          {badgeLabel}
+                        </span>
+                      </span>
+                    </label>
+
+                    {/* Coaching session form (shows when checked) */}
+                    {pushCoachingChecked && (
+                      <div
+                        style={{
+                          marginTop: "8px",
+                          marginLeft: "24px",
+                          padding: "12px",
+                          background: "#fff",
+                          border: `1px solid ${isSupportSession ? "#ddd6fe" : "#c8e6c9"}`,
+                          borderRadius: "6px",
+                          borderLeft: `4px solid ${badgeColor}`,
+                        }}
+                      >
+                        <div style={{ marginBottom: "12px" }}>
+                          <label style={{ display: "block", fontSize: "0.85rem", fontWeight: 500, marginBottom: "4px" }}>
+                            Session title: <span style={{ color: "#c62828" }}>*</span>
+                          </label>
+                          <input
+                            type="text"
+                            value={coachingTitle}
+                            onChange={(e) => setCoachingTitle(e.target.value)}
+                            placeholder={isSupportSession
+                              ? "e.g., Extra help with Division Strategies"
+                              : "e.g., Advanced discussions about Division Strategies"}
+                            style={{
+                              width: "100%",
+                              padding: "8px",
+                              fontSize: "0.9rem",
+                              border: "1px solid #ccc",
+                              borderRadius: "4px",
+                              boxSizing: "border-box",
+                            }}
+                          />
+                          <p style={{ margin: "4px 0 0 0", fontSize: "0.8rem", color: "#666" }}>
+                            This will appear as the invitation title for the student
+                          </p>
+                        </div>
+                        <div>
+                          <label style={{ display: "block", fontSize: "0.85rem", fontWeight: 500, marginBottom: "4px" }}>
+                            Personal note to student (optional):
+                          </label>
+                          <textarea
+                            value={coachingNote}
+                            onChange={(e) => setCoachingNote(e.target.value)}
+                            placeholder={isSupportSession
+                              ? `e.g., ${student.name}, I'd like to help you practice some of these concepts...`
+                              : `e.g., Great work on the basics, ${student.name}! I think you're ready for some extra challenges...`}
+                            style={{
+                              width: "100%",
+                              padding: "8px",
+                              fontSize: "0.9rem",
+                              border: "1px solid #ccc",
+                              borderRadius: "4px",
+                              boxSizing: "border-box",
+                              minHeight: "60px",
+                              resize: "vertical",
+                            }}
+                          />
+                        </div>
+
+                        {/* Suggested focus callout + Session focus field */}
+                        {(() => {
+                          const suggestion = getSuggestedSessionFocus(questionsWithAttempts);
+                          const handleUseSuggested = () => {
+                            if (coachingFocus.trim()) {
+                              setShowFocusReplaceConfirm(true);
+                            } else {
+                              setCoachingFocus(suggestion.autofillText);
+                            }
+                          };
+                          const handleConfirmReplace = () => {
+                            setCoachingFocus(suggestion.autofillText);
+                            setShowFocusReplaceConfirm(false);
+                          };
+                          return (
+                        <div style={{ marginTop: "12px" }}>
+                          {suggestion.bullets.length > 0 && (
+                            <div
+                              style={{
+                                padding: "10px 12px",
+                                background: "#f8fafc",
+                                border: "1px solid #e2e8f0",
+                                borderRadius: "6px",
+                                marginBottom: "8px",
+                              }}
+                            >
+                              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "4px" }}>
+                                <span style={{ fontSize: "0.82rem", fontWeight: 600, color: "#475569" }}>
+                                  Suggested focus
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={handleUseSuggested}
+                                  style={{
+                                    background: "none",
+                                    border: "none",
+                                    color: "#667eea",
+                                    fontSize: "0.78rem",
+                                    fontWeight: 500,
+                                    cursor: "pointer",
+                                    padding: "0",
+                                    textDecoration: "underline",
+                                  }}
+                                >
+                                  Use suggested focus
+                                </button>
+                              </div>
+                              <ul style={{ margin: "0", paddingLeft: "18px", fontSize: "0.82rem", color: "#334155", lineHeight: 1.55 }}>
+                                {suggestion.bullets.map((bullet, i) => (
+                                  <li key={i}>{bullet}</li>
+                                ))}
+                              </ul>
+                              {suggestion.basedOn.length > 0 && (
+                                <p style={{ margin: "6px 0 0 0", fontSize: "0.75rem", color: "#94a3b8" }}>
+                                  Based on: {suggestion.basedOn.join(", ")}
+                                </p>
+                              )}
+
+                              {/* Replace confirmation */}
+                              {showFocusReplaceConfirm && (
+                                <div
+                                  style={{
+                                    marginTop: "8px",
+                                    padding: "8px 10px",
+                                    background: "#fffbeb",
+                                    border: "1px solid #fbbf24",
+                                    borderRadius: "4px",
+                                  }}
+                                >
+                                  <p style={{ margin: "0 0 2px 0", fontSize: "0.82rem", fontWeight: 600, color: "#92400e" }}>
+                                    Replace current focus?
+                                  </p>
+                                  <p style={{ margin: "0 0 6px 0", fontSize: "0.78rem", color: "#78350f" }}>
+                                    This will overwrite what you've typed in Session focus.
+                                  </p>
+                                  <div style={{ display: "flex", gap: "6px" }}>
+                                    <button
+                                      type="button"
+                                      onClick={handleConfirmReplace}
+                                      style={{
+                                        padding: "4px 10px",
+                                        background: "#667eea",
+                                        color: "white",
+                                        border: "none",
+                                        borderRadius: "4px",
+                                        cursor: "pointer",
+                                        fontSize: "0.78rem",
+                                        fontWeight: 600,
+                                      }}
+                                    >
+                                      Replace
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => setShowFocusReplaceConfirm(false)}
+                                      style={{
+                                        padding: "4px 10px",
+                                        background: "transparent",
+                                        color: "#78350f",
+                                        border: "1px solid #d97706",
+                                        borderRadius: "4px",
+                                        cursor: "pointer",
+                                        fontSize: "0.78rem",
+                                        fontWeight: 500,
+                                      }}
+                                    >
+                                      Cancel
+                                    </button>
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          )}
+                          <label style={{ display: "block", fontSize: "0.85rem", fontWeight: 500, marginBottom: "4px" }}>
+                            Session focus (optional):
+                          </label>
+                          <textarea
+                            value={coachingFocus}
+                            onChange={(e) => {
+                              setCoachingFocus(e.target.value);
+                              if (showFocusReplaceConfirm) setShowFocusReplaceConfirm(false);
+                            }}
+                            placeholder="e.g., Practice explaining your thinking with 2 reasons and an example"
+                            style={{
+                              width: "100%",
+                              padding: "8px",
+                              fontSize: "0.9rem",
+                              border: "1px solid #ccc",
+                              borderRadius: "4px",
+                              boxSizing: "border-box",
+                              minHeight: "48px",
+                              resize: "vertical",
+                            }}
+                          />
+                        </div>
+                          );
+                        })()}
+
+                        {/* Preview */}
+                        <div
+                          style={{
+                            marginTop: "12px",
+                            padding: "10px",
+                            background: badgeBgColor,
+                            borderRadius: "4px",
+                            fontSize: "0.85rem",
+                          }}
+                        >
+                          <strong style={{ color: badgeColor }}>Preview:</strong>
+                          <p style={{ margin: "4px 0 0 0", color: "#333" }}>
+                            {student.name} will see an invitation to a {isSupportSession ? "support" : "special coaching"} session on "{coachingTitle || "..."}"
+                            in {lesson?.subject || "their subject"}.
+                          </p>
+                          {coachingFocus.trim() && (
+                            <p style={{ margin: "4px 0 0 0", color: "#333" }}>
+                              We'll focus on: "{coachingFocus.trim()}"
+                            </p>
+                          )}
+                          <p style={{ margin: "4px 0 0 0", color: "#666", fontSize: "0.8rem" }}>
+                            {isSupportSession
+                              ? "The session will focus on building understanding and practice."
+                              : "The session will operate in enrichment mode with deeper challenges."}
+                          </p>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                    );
+                  })()}
+                </div>
+              </div>
+            )}
+
+            {/* Divider between recommended and teacher actions (only when both sections show) */}
+            {hasActionableRecommendation && activeRecommendation && suggestedActions.length > 0 && (
+              <div style={{ borderTop: "1px solid #e2e8f0" }} />
+            )}
+
+            {/* Teacher Actions - always visible */}
+            <div>
+              <h4 style={{ margin: "0 0 8px 0", color: "#64748b", fontSize: "0.85rem", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.03em" }}>
+                Teacher Actions
+              </h4>
+
+              <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+                {/* Add Teacher To-Do Option */}
+                <div>
+                  <label
+                    style={{
+                      display: "flex",
+                      alignItems: "flex-start",
+                      gap: "8px",
+                      cursor: "pointer",
+                      fontSize: "0.95rem",
+                      color: "#333",
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={createTodoChecked}
+                      onChange={(e) => setCreateTodoChecked(e.target.checked)}
+                      style={{
+                        marginTop: "2px",
+                        cursor: "pointer",
+                        width: "16px",
+                        height: "16px",
+                      }}
+                    />
+                    <span>Add to Teacher To-Dos</span>
+                  </label>
+
+                  {/* To-do selector (shows when checked) */}
+                  {createTodoChecked && (
+                    <div
+                      style={{
+                        marginTop: "8px",
+                        marginLeft: "24px",
+                        padding: "12px",
+                        background: "#fff",
+                        border: "1px solid #e0e0e0",
+                        borderRadius: "6px",
+                      }}
+                    >
+                      <div style={{ marginBottom: "8px" }}>
+                        <label style={{ display: "block", fontSize: "0.85rem", fontWeight: 500, marginBottom: "4px" }}>
+                          To-do type: <span style={{ color: "#c62828" }}>*</span>
+                        </label>
+                        <select
+                          value={selectedTodoType}
+                          onChange={(e) => {
+                            setSelectedTodoType(e.target.value);
+                            if (e.target.value !== "custom") setCustomTodoText("");
+                          }}
+                          style={{
+                            width: "100%",
+                            padding: "8px",
+                            fontSize: "0.9rem",
+                            border: "1px solid #ccc",
+                            borderRadius: "4px",
+                          }}
+                        >
+                          <option value="">Select a to-do...</option>
+                          <option value="check_in_1to1">
+                            {CHECKLIST_ACTIONS.check_in_1to1.label}
+                          </option>
+                          <option value="review_responses">
+                            {CHECKLIST_ACTIONS.review_responses.label}
+                          </option>
+                          <option value="prepare_targeted_practice">
+                            {CHECKLIST_ACTIONS.prepare_targeted_practice.label}
+                          </option>
+                          <option value="run_small_group_review">
+                            {CHECKLIST_ACTIONS.run_small_group_review.label}
+                          </option>
+                          <option value="discuss_extension">
+                            {CHECKLIST_ACTIONS.discuss_extension.label}
+                          </option>
+                          <option value="custom">Write your own...</option>
+                        </select>
+                      </div>
+
+                      {/* Custom to-do text input */}
+                      {selectedTodoType === "custom" && (
+                        <div style={{ marginBottom: "8px" }}>
+                          <label style={{ display: "block", fontSize: "0.85rem", fontWeight: 500, marginBottom: "4px" }}>
+                            To-do: <span style={{ color: "#c62828" }}>*</span>
+                          </label>
+                          <input
+                            type="text"
+                            value={customTodoText}
+                            onChange={(e) => setCustomTodoText(e.target.value)}
+                            placeholder="e.g., Follow up on reading comprehension strategies"
+                            style={{
+                              width: "100%",
+                              padding: "8px",
+                              fontSize: "0.9rem",
+                              border: "1px solid #ccc",
+                              borderRadius: "4px",
+                              boxSizing: "border-box",
+                            }}
+                          />
+                        </div>
+                      )}
+
+                      {/* Context preview */}
+                      <div
+                        style={{
+                          fontSize: "0.85rem",
+                          color: "#666",
+                          background: "#f5f5f5",
+                          padding: "8px",
+                          borderRadius: "4px",
+                          marginTop: "8px",
+                        }}
+                      >
+                        <strong>Context:</strong> {student.name} · {lesson?.subject || "No subject"} · {lesson?.title}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Reassign Assignment Option */}
+                <div>
+                  <label
+                    style={{
+                      display: "flex",
+                      alignItems: "flex-start",
+                      gap: "8px",
+                      cursor: "pointer",
+                      fontSize: "0.95rem",
+                      color: "#333",
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={reassignChecked}
+                      onChange={(e) => setReassignChecked(e.target.checked)}
+                      style={{
+                        marginTop: "2px",
+                        cursor: "pointer",
+                        width: "16px",
+                        height: "16px",
+                      }}
+                    />
+                    <span>Reassign assignment</span>
+                  </label>
+
+                  {/* Confirmation detail (shows when checked) */}
+                  {reassignChecked && (
+                    <div
+                      style={{
+                        marginTop: "8px",
+                        marginLeft: "24px",
+                        padding: "12px",
+                        background: "#fff7ed",
+                        border: "1px solid #fed7aa",
+                        borderRadius: "6px",
+                        fontSize: "0.85rem",
+                        color: "#92400e",
+                      }}
+                    >
+                      <p style={{ margin: 0 }}>
+                        This will send the assignment back to {student.name} for another attempt.
+                        Their previous work will be saved.
+                      </p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Save Actions Button */}
+          <div style={{ marginTop: "20px", display: "flex", alignItems: "center", gap: "12px" }}>
+            <button
+              onClick={handleSaveActions}
+              disabled={!canSaveActions() || isSavingActions}
+              style={{
+                padding: "12px 24px",
+                fontSize: "0.95rem",
+                fontWeight: 600,
+                background: canSaveActions() && !isSavingActions ? "#7c8fce" : "#ccc",
+                color: "white",
+                border: "none",
+                borderRadius: "6px",
+                cursor: canSaveActions() && !isSavingActions ? "pointer" : "not-allowed",
+                display: "flex",
+                alignItems: "center",
+                gap: "8px",
+              }}
+            >
+              {isSavingActions ? "Saving..." : "Save actions"}
+            </button>
+            {!canSaveActions() && (
+              <span style={{ fontSize: "0.85rem", color: "#666" }}>
+                Select an action or modify notes to enable
+              </span>
+            )}
+          </div>
         </div>
+      )}
 
-        {/* Learning Journey Insights */}
-        {(drilldown.insights.startedStrong ||
-          drilldown.insights.improvedOverTime ||
-          drilldown.insights.recoveredWithSupport ||
-          drilldown.insights.struggledConsistently) && (
-          <div style={{ marginTop: "16px", display: "flex", gap: "8px", flexWrap: "wrap" }}>
-            {drilldown.insights.startedStrong && (
-              <InsightBadge color="#2e7d32" bg="#e8f5e9">Started strong</InsightBadge>
-            )}
-            {drilldown.insights.improvedOverTime && (
-              <InsightBadge color="#1565c0" bg="#e3f2fd">Improved over time</InsightBadge>
-            )}
-            {drilldown.insights.recoveredWithSupport && (
-              <InsightBadge color="#7b1fa2" bg="#f3e5f5">Recovered with support</InsightBadge>
-            )}
-            {drilldown.insights.struggledConsistently && (
-              <InsightBadge color="#c62828" bg="#ffebee">Needs consistent support</InsightBadge>
-            )}
-          </div>
+      {/* Performance Summary - compact single row */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: "10px",
+          flexWrap: "wrap",
+          padding: "12px 16px",
+          background: "white",
+          border: "1px solid #e2e8f0",
+          borderRadius: "8px",
+          marginTop: "12px",
+        }}
+      >
+        <span
+          style={{
+            padding: "4px 12px",
+            borderRadius: "12px",
+            fontSize: "0.85rem",
+            fontWeight: 600,
+            background: getUnderstandingBgColor(drilldown.understanding),
+            color: getUnderstandingColor(drilldown.understanding),
+          }}
+        >
+          {getUnderstandingLabel(drilldown.understanding)}
+        </span>
+        <span style={{ color: "#64748b", fontSize: "0.8rem" }}>
+          {drilldown.questions.length}/{lesson.prompts.length} questions
+        </span>
+        <span style={{ color: "#64748b", fontSize: "0.8rem" }}>
+          Coach: {getCoachSupportLabel(drilldown.coachSupport)}
+        </span>
+        {drilldown.timeSpentMinutes && (
+          <span style={{ color: "#64748b", fontSize: "0.8rem" }}>
+            {drilldown.timeSpentMinutes} min
+          </span>
         )}
-
-        {/* Why Flagged */}
-        {drilldown.needsReview && drilldown.attentionReasons.length > 0 && (
-          <div
-            style={{
-              marginTop: "16px",
-              padding: "12px",
-              background: "#fff3e0",
-              borderRadius: "8px",
-            }}
-          >
-            <p style={{ margin: 0, fontWeight: 500, color: "#e65100", marginBottom: "8px" }}>
-              Why this student was flagged:
-            </p>
-            <ul style={{ margin: 0, paddingLeft: "20px" }}>
-              {drilldown.attentionReasons.map((reason, i) => {
-                const { label, isPositive } = getAttentionReasonDisplay(reason);
-                return (
-                  <li key={i} style={{ color: isPositive ? "#2e7d32" : "#666" }}>
-                    {label}
-                  </li>
-                );
-              })}
-            </ul>
-          </div>
+        {/* Learning Journey Insights - inline chips */}
+        {drilldown.insights.startedStrong && (
+          <span style={{ padding: "2px 8px", background: "#e8f5e9", color: "#166534", borderRadius: "10px", fontSize: "0.75rem" }}>Started strong</span>
+        )}
+        {drilldown.insights.improvedOverTime && (
+          <span style={{ padding: "2px 8px", background: "#e3f2fd", color: "#1565c0", borderRadius: "10px", fontSize: "0.75rem" }}>Improved</span>
+        )}
+        {drilldown.insights.recoveredWithSupport && (
+          <span style={{ padding: "2px 8px", background: "#f3e5f5", color: "#9178a8", borderRadius: "10px", fontSize: "0.75rem" }}>Recovered</span>
+        )}
+        {drilldown.insights.struggledConsistently && (
+          <span style={{ padding: "2px 8px", background: "#ffebee", color: "#c62828", borderRadius: "10px", fontSize: "0.75rem" }}>Struggling</span>
         )}
       </div>
 
       {/* Question Breakdown Header */}
       <div
+        ref={questionsSectionRef}
         style={{
           display: "flex",
           justifyContent: "space-between",
           alignItems: "center",
-          marginTop: "32px",
-          marginBottom: "16px",
+          marginTop: "20px",
+          marginBottom: "12px",
         }}
       >
         <h2 style={{ color: "white", margin: 0 }}>Question Breakdown</h2>
@@ -694,6 +2413,155 @@ export default function StudentAssignmentReview() {
           onPlayAudio={playAudio}
         />
       ))}
+
+      {/* Follow-up Details Drawer */}
+      <Drawer
+        isOpen={followupDrawerOpen}
+        onClose={() => { setFollowupDrawerOpen(false); setFollowupMenuOpen(false); }}
+        title="Follow-up details"
+        width="460px"
+      >
+        {followupLoading ? (
+          <p style={{ color: "#64748b" }}>Loading...</p>
+        ) : followupTodo ? (
+          <div>
+            {/* Section: Scheduled Follow-up */}
+            <div style={{
+              display: "flex", alignItems: "flex-start", gap: "10px",
+              marginBottom: "12px", paddingBottom: "8px", borderBottom: "1px solid #f1f5f9",
+            }}>
+              <span style={{ fontSize: "1.1rem" }}>📋</span>
+              <div>
+                <div style={{ fontWeight: 600, fontSize: "0.9rem", color: "#1e293b" }}>Scheduled Follow-up</div>
+                <div style={{ fontSize: "0.75rem", color: "#64748b", marginTop: "2px" }}>Action planned for this student</div>
+              </div>
+            </div>
+
+            {/* Todo card — primary focus, with inline overflow menu */}
+            <div style={{
+              padding: "12px 14px",
+              background: followupTodo.status === "open" ? "#fffbeb" : "#f8fafc",
+              border: `1px solid ${followupTodo.status === "open" ? "#fcd34d" : "#e2e8f0"}`,
+              borderRadius: "8px",
+              opacity: followupTodo.status === "done" ? 0.8 : 1,
+            }}>
+              <div style={{ display: "flex", alignItems: "flex-start", gap: "10px" }}>
+                <button
+                  onClick={followupTodo.status === "open" ? handleFollowupComplete : undefined}
+                  disabled={followupCompleting || followupTodo.status === "done"}
+                  style={{
+                    width: "20px", height: "20px", borderRadius: "4px",
+                    border: followupTodo.status === "open" ? "2px solid #d97706" : "none",
+                    background: followupCompleting ? "#fcd34d" : followupTodo.status === "done" ? "#10b981" : "white",
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    flexShrink: 0, marginTop: "1px", padding: 0,
+                    cursor: followupTodo.status === "open" && !followupCompleting ? "pointer" : "default",
+                    transition: "all 0.15s ease",
+                  }}
+                  title={followupTodo.status === "open" ? "Mark as complete" : "Completed"}
+                >
+                  {followupTodo.status === "done" && <span style={{ color: "white", fontSize: "12px", fontWeight: "bold" }}>✓</span>}
+                  {followupCompleting && <span style={{ fontSize: "10px" }}>...</span>}
+                </button>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{
+                    fontWeight: 500, fontSize: "0.85rem",
+                    color: followupTodo.status === "done" ? "#64748b" : "#92400e",
+                    textDecoration: followupTodo.status === "done" ? "line-through" : "none",
+                  }}>
+                    {followupTodo.label}
+                  </div>
+                  {followupTodo.assignmentTitle && (
+                    <div style={{ fontSize: "0.75rem", color: "#94a3b8", marginTop: "4px" }}>
+                      {followupTodo.subject ? `${followupTodo.subject} \u00b7 ` : ""}{followupTodo.assignmentTitle}
+                    </div>
+                  )}
+                  {followupTodo.category && (
+                    <div style={{
+                      display: "inline-block", fontSize: "0.68rem", color: "#6b7280",
+                      background: "#f3f4f6", padding: "2px 6px", borderRadius: "4px", marginTop: "6px",
+                    }}>
+                      {followupTodo.category}
+                    </div>
+                  )}
+                </div>
+
+                {/* Overflow menu on the card — matches TeacherTodosPanel TodoItem */}
+                {followupTodo.status === "open" && (
+                  <div style={{ position: "relative", flexShrink: 0 }}>
+                    <button
+                      onClick={() => setFollowupMenuOpen(!followupMenuOpen)}
+                      disabled={isMovingBack}
+                      style={{
+                        background: "transparent", border: "none",
+                        padding: "4px 6px", cursor: isMovingBack ? "wait" : "pointer",
+                        color: "#999", fontSize: "1rem", lineHeight: 1, borderRadius: "4px",
+                      }}
+                      title="More options"
+                    >
+                      ⋯
+                    </button>
+                    {followupMenuOpen && (
+                      <>
+                        <div
+                          onClick={() => setFollowupMenuOpen(false)}
+                          style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, zIndex: 99 }}
+                        />
+                        <div style={{
+                          position: "absolute", top: "100%", right: 0, marginTop: "4px",
+                          background: "white", border: "1px solid #e0e0e0", borderRadius: "6px",
+                          boxShadow: "0 2px 8px rgba(0,0,0,0.15)", zIndex: 100, minWidth: "220px",
+                        }}>
+                          <button
+                            onClick={handleMoveBackToRecommendations}
+                            disabled={isMovingBack}
+                            style={{
+                              display: "block", width: "100%", padding: "10px 14px",
+                              background: "transparent", border: "none", textAlign: "left",
+                              cursor: isMovingBack ? "wait" : "pointer",
+                              fontSize: "0.85rem", color: "#333",
+                              opacity: isMovingBack ? 0.6 : 1,
+                            }}
+                            onMouseEnter={(e) => { e.currentTarget.style.background = "#f5f5f5"; }}
+                            onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
+                          >
+                            {isMovingBack ? "Moving..." : "Move back to Recommended Actions"}
+                          </button>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Inline metadata — visually secondary */}
+            <div style={{
+              display: "flex", alignItems: "center", justifyContent: "space-between",
+              marginTop: "12px", padding: "0 4px",
+            }}>
+              <span style={{ fontSize: "0.75rem", color: "#94a3b8" }}>
+                Created {new Date(followupTodo.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+              </span>
+              <span style={{ display: "flex", alignItems: "center", gap: "5px", fontSize: "0.75rem", color: "#94a3b8" }}>
+                <span style={{
+                  display: "inline-block", width: "7px", height: "7px", borderRadius: "50%",
+                  background: followupTodo.status === "open" ? "#f59e0b" : "#22c55e",
+                }} />
+                {followupTodo.status === "open" ? "Open" : "Completed"}
+                {followupTodo.doneAt && (
+                  <span> · {new Date(followupTodo.doneAt).toLocaleDateString("en-US", { month: "short", day: "numeric" })}</span>
+                )}
+              </span>
+            </div>
+          </div>
+        ) : (
+          <div style={{ textAlign: "center", padding: "48px 24px", color: "#64748b" }}>
+            <div style={{ fontSize: "2.5rem", marginBottom: "12px", opacity: 0.5 }}>📋</div>
+            <p style={{ margin: 0, fontSize: "0.95rem" }}>Could not load follow-up details.</p>
+          </div>
+        )}
+      </Drawer>
     </div>
   );
 }
@@ -702,29 +2570,157 @@ export default function StudentAssignmentReview() {
 // Helper Components
 // ============================================
 
-function InsightBadge({
-  children,
-  color,
-  bg,
+// Recommendation Context - compact display explaining why an action is recommended
+// Only shown when there's an actionable recommendation
+// Answers: "Why am I being asked to take action?"
+function RecommendationContext({
+  typeLabel,
+  reason,
+  categoryColor,
+  categoryBgColor,
+  softened,
+  onDismiss,
 }: {
-  children: React.ReactNode;
-  color: string;
-  bg: string;
+  typeLabel: string;
+  reason: string;
+  categoryColor?: string;
+  categoryBgColor?: string;
+  softened?: boolean;
+  onDismiss?: () => void;
 }) {
+  // Use category colors when provided, fall back to neutral
+  const accentColor = categoryColor || "#64748b";
+  const bgColor = categoryBgColor || "#f8fafc";
+  // Softened state: mute the colors after action taken
+  const opacity = softened ? 0.55 : 1;
+
   return (
-    <span
+    <div
       style={{
-        display: "inline-block",
-        padding: "6px 12px",
-        borderRadius: "16px",
-        fontSize: "0.85rem",
-        fontWeight: 500,
-        background: bg,
-        color: color,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        gap: "12px",
+        padding: "10px 14px",
+        background: bgColor,
+        borderLeft: `3px solid ${accentColor}`,
+        borderRadius: "6px",
+        marginBottom: "12px",
+        opacity,
+        transition: "opacity 0.2s ease",
       }}
     >
-      {children}
-    </span>
+      <div style={{ display: "flex", alignItems: "center", gap: "10px", flex: 1, flexWrap: "wrap" }}>
+        {/* Type label chip — uses category color */}
+        <span
+          style={{
+            padding: "3px 10px",
+            background: categoryBgColor || "#e2e8f0",
+            color: accentColor,
+            borderRadius: "4px",
+            fontSize: "0.8rem",
+            fontWeight: 600,
+            whiteSpace: "nowrap",
+          }}
+        >
+          {typeLabel}
+        </span>
+        {/* Reason text */}
+        <span style={{ color: "#475569", fontSize: "0.85rem" }}>
+          {reason}
+        </span>
+      </div>
+      {onDismiss && (
+        <button
+          onClick={onDismiss}
+          style={{
+            padding: "4px 8px",
+            background: "transparent",
+            border: "none",
+            color: "#94a3b8",
+            fontSize: "0.75rem",
+            cursor: "pointer",
+            flexShrink: 0,
+          }}
+          title="Dismiss this recommendation"
+        >
+          ✕
+        </button>
+      )}
+    </div>
+  );
+}
+
+// Review State Badge Component
+// Shows the current review state with appropriate styling and unmark option
+// ============================================
+
+function ReviewStateBadge({
+  reviewState,
+  onUnmark,
+  isUnmarking,
+  onFollowupClick,
+}: {
+  reviewState?: ReviewState;
+  onUnmark?: () => void;
+  isUnmarking?: boolean;
+  onFollowupClick?: () => void;
+}) {
+  const config: Record<ReviewState, { bg: string; color: string; icon: string }> = {
+    not_started: { bg: "#f1f5f9", color: "#64748b", icon: "" },
+    pending_review: { bg: "#fff7ed", color: "#ea580c", icon: "" },
+    reviewed: { bg: "#e8f5e9", color: "#166534", icon: "✓" },
+    followup_scheduled: { bg: "#fef3c7", color: "#b45309", icon: "📋" },
+    resolved: { bg: "#e8f5e9", color: "#166534", icon: "✓" },
+  };
+
+  const state = reviewState || "pending_review";
+  const { bg, color, icon } = config[state];
+  const isClickable = state === "followup_scheduled" && !!onFollowupClick;
+
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+      <span
+        onClick={isClickable ? onFollowupClick : undefined}
+        style={{
+          background: bg,
+          color: color,
+          padding: "10px 16px",
+          borderRadius: "8px",
+          fontWeight: 500,
+          display: "flex",
+          alignItems: "center",
+          gap: "6px",
+          cursor: isClickable ? "pointer" : "default",
+          transition: isClickable ? "filter 0.15s" : undefined,
+        }}
+        onMouseEnter={isClickable ? (e) => { e.currentTarget.style.filter = "brightness(0.95)"; } : undefined}
+        onMouseLeave={isClickable ? (e) => { e.currentTarget.style.filter = ""; } : undefined}
+        title={isClickable ? "View follow-up details" : undefined}
+      >
+        {icon && <span>{icon}</span>}
+        {REVIEW_STATE_LABELS[state]}
+      </span>
+      {onUnmark && (
+        <button
+          onClick={onUnmark}
+          disabled={isUnmarking}
+          style={{
+            background: "transparent",
+            border: "1px solid #e2e8f0",
+            borderRadius: "6px",
+            padding: "8px 12px",
+            fontSize: "0.85rem",
+            color: "#64748b",
+            cursor: isUnmarking ? "not-allowed" : "pointer",
+            opacity: isUnmarking ? 0.6 : 1,
+          }}
+          title="Return to pending review state"
+        >
+          {isUnmarking ? "Reopening..." : "Reopen for Review"}
+        </button>
+      )}
+    </div>
   );
 }
 
@@ -754,7 +2750,7 @@ function QuestionCardWithAttempts({
 }: QuestionCardWithAttemptsProps) {
   // Outcome colors
   const outcomeColors: Record<string, { bg: string; color: string }> = {
-    demonstrated: { bg: "#e8f5e9", color: "#2e7d32" },
+    demonstrated: { bg: "#e8f5e9", color: "#166534" },
     "with-support": { bg: "#e3f2fd", color: "#1565c0" },
     developing: { bg: "#fff3e0", color: "#e65100" },
     "not-attempted": { bg: "#f5f5f5", color: "#666" },
@@ -786,10 +2782,10 @@ function QuestionCardWithAttempts({
         <div style={{ display: "flex", alignItems: "center", gap: "12px", flex: 1 }}>
           <span
             style={{
-              background: "#667eea",
+              background: "#7c8fce",
               color: "white",
               padding: "4px 10px",
-              borderRadius: "12px",
+              borderRadius: "8px",
               fontSize: "0.85rem",
               fontWeight: 600,
               flexShrink: 0,
@@ -828,7 +2824,7 @@ function QuestionCardWithAttempts({
               style={{
                 display: "inline-block",
                 padding: "4px 8px",
-                borderRadius: "12px",
+                borderRadius: "8px",
                 fontSize: "0.75rem",
                 fontWeight: 500,
                 background: "#e3f2fd",
@@ -845,7 +2841,7 @@ function QuestionCardWithAttempts({
               style={{
                 display: "inline-block",
                 padding: "4px 10px",
-                borderRadius: "12px",
+                borderRadius: "8px",
                 fontSize: "0.8rem",
                 fontWeight: 500,
                 background: bg,
@@ -871,7 +2867,7 @@ function QuestionCardWithAttempts({
             <div
               style={{
                 background: "#f5f5f5",
-                borderRadius: "12px",
+                borderRadius: "8px",
                 padding: "16px",
                 marginBottom: "12px",
                 textAlign: "center",
@@ -894,9 +2890,9 @@ function QuestionCardWithAttempts({
                     key={attemptKey}
                     style={{
                       background: isLatest ? "#f5f5f5" : "#fafafa",
-                      borderRadius: "12px",
+                      borderRadius: "8px",
                       padding: "16px",
-                      border: isLatest ? "2px solid #667eea" : "1px solid #eee",
+                      border: isLatest ? "2px solid #7c8fce" : "1px solid #eee",
                     }}
                   >
                     {/* Attempt header */}
@@ -906,7 +2902,7 @@ function QuestionCardWithAttempts({
                           style={{
                             fontSize: "0.8rem",
                             fontWeight: 600,
-                            color: isLatest ? "#667eea" : "#666",
+                            color: isLatest ? "#7c8fce" : "#666",
                           }}
                         >
                           {isLatest ? "Latest Attempt" : `Attempt #${attempt.attemptNumber}`}
@@ -917,7 +2913,7 @@ function QuestionCardWithAttempts({
                       </div>
                       <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
                         {attempt.usedHint && (
-                          <span style={{ fontSize: "0.75rem", color: "#7b1fa2" }}>💡 Hint used</span>
+                          <span style={{ fontSize: "0.75rem", color: "#9178a8" }}>💡 Hint used</span>
                         )}
                         <span
                           style={{
@@ -950,8 +2946,8 @@ function QuestionCardWithAttempts({
                             onPlayAudio(attempt.audioBase64!, attempt.audioFormat!, attemptKey);
                           }}
                           style={{
-                            background: isPlaying ? "#667eea" : "#e8f5e9",
-                            color: isPlaying ? "white" : "#2e7d32",
+                            background: isPlaying ? "#7c8fce" : "#e8f5e9",
+                            color: isPlaying ? "white" : "#166534",
                             border: "none",
                             borderRadius: "50%",
                             width: "36px",

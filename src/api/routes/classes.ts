@@ -9,11 +9,13 @@ import { Router } from "express";
 import { randomUUID } from "crypto";
 import { ClassStore } from "../../stores/classStore";
 import { StudentStore } from "../../stores/studentStore";
+import { StudentAssignmentStore } from "../../stores/studentAssignmentStore";
 import { Student } from "../../domain/student";
 
 const router = Router();
 const classStore = new ClassStore();
 const studentStore = new StudentStore();
+const studentAssignmentStore = new StudentAssignmentStore();
 
 // ============================================
 // Class CRUD
@@ -301,10 +303,19 @@ router.post("/:id/students/bulk", (req, res) => {
  */
 router.delete("/:id/students/:studentId", (req, res) => {
   try {
-    const updated = classStore.removeStudent(req.params.id, req.params.studentId);
+    const { id: classId, studentId } = req.params;
+    const updated = classStore.removeStudent(classId, studentId);
 
     if (!updated) {
       return res.status(404).json({ error: "Class not found" });
+    }
+
+    // Clean up StudentAssignment records for this student in this class.
+    // Without this, orphaned assignments would still appear in the student's view.
+    const allAssignments = studentAssignmentStore.getStudentAssignments(studentId);
+    const orphaned = allAssignments.filter(a => a.classId === classId);
+    for (const a of orphaned) {
+      studentAssignmentStore.unassignStudent(a.lessonId, studentId);
     }
 
     res.json(updated);

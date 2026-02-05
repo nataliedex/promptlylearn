@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useParams, Link } from "react-router-dom";
+import EducatorHeader from "../components/EducatorHeader";
 import {
   getSession,
   getLesson,
@@ -235,6 +236,7 @@ export default function SessionReview() {
   if (!session || !lesson) {
     return (
       <div className="container">
+        <EducatorHeader breadcrumbs={[{ label: "Session not found" }]} />
         <div className="card">
           <p>Session not found.</p>
           <Link to="/educator" className="btn btn-primary" style={{ marginTop: "16px" }}>
@@ -251,9 +253,12 @@ export default function SessionReview() {
 
   return (
     <div className="container">
-      <Link to={`/educator/student/${session.studentId}`} className="back-btn">
-        ← Back to {session.studentName}'s Sessions
-      </Link>
+      <EducatorHeader
+        breadcrumbs={[
+          { label: session.studentName || "Student", to: `/educator/student/${session.studentId}` },
+          { label: session.lessonTitle || "Session" },
+        ]}
+      />
 
       <div className="header">
         <h1>{session.lessonTitle}</h1>

@@ -159,6 +159,13 @@ The student is working on a lesson called "${lessonTitle}".
 Question: "${prompt.input}"
 ${prompt.hints?.length ? `Hints available: ${prompt.hints.join("; ")}` : ""}
 
+VOICE & STYLE RULES (CRITICAL for text-to-speech):
+- Sound like a friendly mentor speaking naturally, not reading a script
+- Keep feedback SHORT (2 sentences max) - optimized for spoken delivery
+- Use contractions naturally ("that's", "you're", "let's")
+- Be warm but concise - every word should count
+- Follow-up questions should be conversational, 1 sentence max
+
 Your task:
 1. Evaluate if the student's answer demonstrates understanding (score 0-100)
 2. Provide warm, conversational feedback
@@ -169,15 +176,13 @@ Your task:
 Rules:
 - Use simple, age-appropriate language for ${gradeLevel}
 - Be encouraging and positive, even when correcting
-- Keep responses short (2-3 sentences for feedback)
-- Follow-up questions should be 1 sentence
 - Never be discouraging or negative
 
 Respond in JSON format:
 {
   "score": <number 0-100>,
   "isCorrect": <boolean - true if score >= 70>,
-  "feedback": "<warm feedback about their answer>",
+  "feedback": "<warm, SHORT feedback about their answer>",
   "followUpQuestion": "<your follow-up question based on their performance>",
   "encouragement": "<short encouraging phrase like 'Great thinking!' or 'You're getting there!'>",
   "shouldContinue": true
@@ -287,10 +292,13 @@ Respond in JSON format:
 
 interface ChatRequest {
   studentName: string;
+  preferredName?: string; // First name or nickname for natural conversation
   topics: string[]; // Lesson titles selected by student
   message: string;
   conversationHistory?: ConversationMessage[];
   gradeLevel?: string;
+  enrichmentMode?: boolean; // If true, coach operates in enrichment mode with harder material
+  teacherFocus?: string; // Teacher's note about what to focus on (paraphrase, don't read verbatim)
 }
 
 interface ChatResponse {
@@ -303,10 +311,13 @@ router.post("/chat", async (req, res) => {
   try {
     const {
       studentName,
+      preferredName,
       topics,
       message,
       conversationHistory = [],
       gradeLevel = "2nd grade",
+      enrichmentMode = false,
+      teacherFocus,
     } = req.body as ChatRequest;
 
     if (!studentName || !message) {
@@ -315,10 +326,16 @@ router.post("/chat", async (req, res) => {
       });
     }
 
+    // Use preferred name (first name) for natural conversation
+    // Fall back to first token of full name if no preferred name provided
+    const displayName = preferredName || studentName.split(" ")[0];
+
     const client = getClient();
     if (!client) {
       return res.json({
-        response: "That's a great question! Keep thinking about it and exploring your ideas.",
+        response: enrichmentMode
+          ? "That's a fascinating question! What do you think might be the answer? Let's explore it together."
+          : "That's a great question! Keep thinking about it and exploring your ideas.",
         shouldContinue: true,
       });
     }
@@ -340,11 +357,13 @@ router.post("/chat", async (req, res) => {
 
     const response = await generateChatResponse(
       client,
-      studentName,
+      displayName,
       message,
       conversationHistory,
       topicsContext,
-      gradeLevel
+      gradeLevel,
+      enrichmentMode,
+      teacherFocus
     );
 
     res.json(response);
@@ -356,11 +375,13 @@ router.post("/chat", async (req, res) => {
 
 async function generateChatResponse(
   client: OpenAI,
-  studentName: string,
+  displayName: string, // First name or preferred name only
   message: string,
   history: ConversationMessage[],
   topicsContext: string,
-  gradeLevel: string
+  gradeLevel: string,
+  enrichmentMode: boolean = false,
+  teacherFocus?: string // Teacher's note - paraphrase, never read verbatim
 ): Promise<ChatResponse> {
   const turnCount = history.filter((h) => h.role === "student").length;
   const shouldWrapUp = turnCount >= 5; // Allow more turns for freeform chat
@@ -369,18 +390,88 @@ async function generateChatResponse(
     .map((h) => `${h.role === "coach" ? "Coach" : "Student"}: ${h.message}`)
     .join("\n");
 
-  const systemPrompt = `You are a warm, encouraging learning coach having a friendly conversation with ${studentName}, a ${gradeLevel} student.
+  // Build teacher guidance context (for internal use, never expose verbatim)
+  const teacherGuidance = teacherFocus
+    ? `\n[INTERNAL GUIDANCE - paraphrase naturally, NEVER read aloud or quote]: The teacher wants you to help this student with: ${teacherFocus}\n`
+    : "";
+
+  // Build system prompt based on mode
+  let systemPrompt: string;
+
+  if (enrichmentMode) {
+    // Enrichment mode: Higher difficulty, challenge-oriented, Socratic approach
+    systemPrompt = `You are an enrichment coach for ${displayName}, a high-performing ${gradeLevel} student who has been specially invited by their teacher for deeper exploration.
+
+${topicsContext ? `The enrichment session focuses on:\n${topicsContext}\n` : "This is a general enrichment conversation."}
+${teacherGuidance}
+${historyText ? `Conversation so far:\n${historyText}\n` : "This is the start of the enrichment session."}
+
+VOICE & STYLE RULES (CRITICAL):
+- Address the student as "${displayName}" (first name only) - NEVER use full name or last name
+- Sound like a friendly mentor speaking naturally, not reading a script
+- Keep responses SHORT and conversational (optimized for text-to-speech)
+- Avoid formal phrasing like "your teacher noted..." - just naturally guide the conversation
+- If teacher guidance exists, weave it in naturally without quoting or referencing it
+
+ENRICHMENT MODE GUIDELINES:
+This student is EXCELLING and ready for challenges beyond grade level. Your approach:
+
+1. Challenge with depth:
+   - Ask probing "why" and "how" questions that push their thinking
+   - Explore edge cases and exceptions to rules
+   - Connect concepts across domains
+   - Present problems that require multiple steps of reasoning
+
+2. Socratic method:
+   - Guide discovery through strategic questioning rather than direct answers
+   - When they ask a question, respond with a thought-provoking counter-question first
+   - Celebrate sophisticated reasoning and original thinking
+   - Build on their ideas to go deeper
+
+3. Extend beyond basics:
+   - Use vocabulary 1-2 grade levels above their level when appropriate
+   - Introduce related advanced concepts
+   - Share interesting connections to real-world applications
+   - Encourage them to make predictions and test hypotheses
+
+4. DO NOT:
+   - Give direct answers without making them think first
+   - Oversimplify or use remedial scaffolding
+   - Do the thinking for them
+   - Praise effort over actual insight (praise their reasoning quality)
+   - NEVER say "your teacher mentioned" or "the focus should be" - just guide naturally
+
+RESPONSE STYLE:
+- Keep responses engaging but challenging
+- Ask ONE powerful follow-up question that stretches their thinking
+- ${shouldWrapUp ? "Wrap up by highlighting their most sophisticated insight and suggesting a challenge they could explore independently." : "Keep pushing them to think deeper."}
+
+Respond in JSON format:
+{
+  "response": "<your enrichment-focused response with a challenging follow-up>",
+  "shouldContinue": ${!shouldWrapUp}
+}`;
+  } else {
+    // Regular mode: Supportive, accessible, direct answers
+    systemPrompt = `You are a warm, encouraging learning coach having a friendly conversation with ${displayName}, a ${gradeLevel} student.
 
 ${topicsContext ? `The student is learning about these topics:\n${topicsContext}\n` : "The student wants to have a general learning conversation."}
-
+${teacherGuidance}
 ${historyText ? `Conversation so far:\n${historyText}\n` : "This is the start of the conversation."}
+
+VOICE & STYLE RULES (CRITICAL):
+- Address the student as "${displayName}" (first name only) - NEVER use full name or last name
+- Sound like a friendly mentor speaking naturally, not reading a script
+- Keep responses SHORT (2-3 sentences max) - optimized for text-to-speech
+- Use contractions naturally ("let's", "you're", "that's")
+- Avoid formal phrasing like "your teacher noted..." or "the focus should be..."
+- If teacher guidance exists, weave it in naturally without quoting or referencing it
 
 Your role:
 - Be warm, friendly, and conversational - like a favorite teacher or tutor
 - ANSWER their questions directly and helpfully first
 - After answering, you may ask a brief follow-up question to keep the conversation going
 - Use simple, age-appropriate language for ${gradeLevel}
-- Keep responses to 2-4 sentences
 - ${shouldWrapUp ? "This conversation is getting long - give a final helpful answer and wrap up warmly." : "Keep the conversation flowing naturally."}
 
 Response structure:
@@ -393,19 +484,21 @@ Rules:
 - Give real answers - don't just deflect with questions
 - Make learning feel fun and exciting
 - If they share something, respond warmly before moving on
+- NEVER mention teacher notes or guidance explicitly - just naturally steer the conversation
 
 Respond in JSON format:
 {
   "response": "<your conversational response>",
   "shouldContinue": ${!shouldWrapUp}
 }`;
+  }
 
   try {
     const completion = await client.chat.completions.create({
       model: "gpt-4o-mini",
       messages: [
         { role: "system", content: systemPrompt },
-        { role: "user", content: `${studentName} says: "${message}"` },
+        { role: "user", content: `${displayName} says: "${message}"` },
       ],
       temperature: 0.8,
       max_tokens: 350,

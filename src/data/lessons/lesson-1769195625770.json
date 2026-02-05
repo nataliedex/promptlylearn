@@ -1,0 +1,46 @@
+{
+  "id": "lesson-1769195625770",
+  "title": "Ancient Egypt",
+  "description": "Pryramids, mummies, Pharaohs",
+  "difficulty": "intermediate",
+  "gradeLevel": "2nd",
+  "subject": "Social Studies",
+  "prompts": [
+    {
+      "id": "q1",
+      "type": "explain",
+      "input": "Why do you think the ancient Egyptians built pyramids? What do you think they used them for?",
+      "hints": [
+        "Think about what you know about pyramids and their shape.",
+        "Consider what is important to a Pharaoh and how they might want to be remembered."
+      ]
+    },
+    {
+      "id": "q2",
+      "type": "explain",
+      "input": "What do you think it was like to be a Pharaoh in ancient Egypt? Explain why you think that.",
+      "hints": [
+        "Think about the special things a Pharaoh might have had.",
+        "Consider how they might have made important decisions for their people."
+      ]
+    },
+    {
+      "id": "q3",
+      "type": "explain",
+      "input": "How do you think ancient Egyptians made mummies? What steps do you think they took to prepare a body?",
+      "hints": [
+        "Think about the materials they might have used.",
+        "Consider why they wanted to preserve the body."
+      ]
+    },
+    {
+      "id": "q4",
+      "type": "explain",
+      "input": "How do you think the way we remember important people today is different from how the ancient Egyptians remembered their Pharaohs? Explain your thoughts.",
+      "hints": [
+        "Think about how we use books, pictures, and stories to remember people today.",
+        "Consider what special things ancient Egyptians did to honor their Pharaohs, like building pyramids or creating tombs."
+      ]
+    }
+  ]
+}

@@ -15,6 +15,14 @@ export interface Student {
   id: string;
   name: string;
 
+  // Name the coach (and other student-facing UI) should use.
+  // Falls back to first token of `name` when absent.
+  preferredName?: string;
+
+  // Optional pronouns (e.g. "she/her", "he/him", "they/them").
+  // Used only when present; never invented.
+  pronouns?: string;
+
   // Relationship arrays for easy lookups
   classes: string[]; // Array of classIds this student belongs to
   assignments: string[]; // Array of assignmentIds assigned to this student

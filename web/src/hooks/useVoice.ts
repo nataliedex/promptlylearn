@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from "react";
-import { checkVoiceStatus, transcribeAudio, textToSpeech } from "../services/api";
+import { checkVoiceStatus, transcribeAudio, textToSpeech, textToSpeechStream } from "../services/api";
 
 export interface RecordingResult {
   text: string;
@@ -14,9 +14,12 @@ export interface UseVoiceReturn {
   voiceAvailable: boolean;
   error: string | null;
   recordingDuration: number;
+  timeToFirstAudio: number | null; // Latency metric (ms)
   startRecording: () => Promise<void>;
   stopRecording: () => Promise<RecordingResult | null>;
   speak: (text: string) => Promise<boolean>;
+  speakStream: (text: string) => Promise<boolean>; // Streaming version for lower latency
+  stopSpeaking: () => void; // Barge-in / interrupt
   cancelRecording: () => void;
 }
 
@@ -26,6 +29,7 @@ export function useVoice(): UseVoiceReturn {
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [voiceAvailable, setVoiceAvailable] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [timeToFirstAudio, setTimeToFirstAudio] = useState<number | null>(null);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
@@ -34,6 +38,7 @@ export function useVoice(): UseVoiceReturn {
   const durationIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const isSpeakingRef = useRef(false); // Use ref to track speaking state for blocking check
   const currentAudioRef = useRef<HTMLAudioElement | null>(null); // Track current audio element
+  const abortControllerRef = useRef<AbortController | null>(null); // For cancelling streaming requests
 
   // Check if voice features are available on mount
   useEffect(() => {
@@ -317,6 +322,135 @@ export function useVoice(): UseVoiceReturn {
     }
   }, [voiceAvailable]);
 
+  /**
+   * Streaming TTS - starts playback as soon as first audio chunk arrives.
+   * Reduces perceived latency compared to buffered speak().
+   */
+  const speakStream = useCallback(async (text: string): Promise<boolean> => {
+    const requestStart = performance.now();
+    console.log("[speakStream] Starting, voiceAvailable:", voiceAvailable, "isSpeakingRef:", isSpeakingRef.current);
+
+    if (!voiceAvailable) {
+      console.log("[speakStream] SKIPPED: voice not available");
+      return false;
+    }
+
+    if (isSpeakingRef.current) {
+      console.log("[speakStream] SKIPPED: already speaking");
+      return false;
+    }
+
+    if (!text || typeof text !== "string" || text.trim().length === 0) {
+      console.log("[speakStream] SKIPPED: invalid text");
+      return false;
+    }
+
+    isSpeakingRef.current = true;
+    setIsSpeaking(true);
+    setError(null);
+    setTimeToFirstAudio(null);
+
+    // Create abort controller for barge-in support
+    const abortController = new AbortController();
+    abortControllerRef.current = abortController;
+
+    try {
+      console.log("[speakStream] Fetching audio stream...");
+
+      const response = await textToSpeechStream(text, "nova", (timeMs) => {
+        setTimeToFirstAudio(timeMs);
+      });
+
+      if (abortController.signal.aborted) {
+        console.log("[speakStream] Aborted before playback");
+        return false;
+      }
+
+      // Get the audio as a blob for playback
+      // Note: For true streaming playback, we'd use MediaSource Extensions,
+      // but MP3 isn't widely supported. This approach starts playback once
+      // the full response is received but the streaming reduces server wait time.
+      const audioBlob = await response.blob();
+      const audioUrl = URL.createObjectURL(audioBlob);
+      const audioElement = new Audio(audioUrl);
+      currentAudioRef.current = audioElement;
+
+      const playbackStart = performance.now();
+      const totalLatency = playbackStart - requestStart;
+      console.log(`[speakStream] Audio ready, total latency: ${totalLatency.toFixed(0)}ms`);
+
+      return new Promise<boolean>((resolve) => {
+        audioElement.onended = () => {
+          console.log("[speakStream] Playback ended successfully");
+          currentAudioRef.current = null;
+          abortControllerRef.current = null;
+          isSpeakingRef.current = false;
+          setIsSpeaking(false);
+          URL.revokeObjectURL(audioUrl);
+          resolve(true);
+        };
+
+        audioElement.onerror = (e) => {
+          console.error("[speakStream] Playback error:", e);
+          currentAudioRef.current = null;
+          abortControllerRef.current = null;
+          isSpeakingRef.current = false;
+          setIsSpeaking(false);
+          URL.revokeObjectURL(audioUrl);
+          setError("Audio playback failed.");
+          resolve(false);
+        };
+
+        audioElement.play().catch((playErr) => {
+          console.error("[speakStream] play() error:", playErr);
+          currentAudioRef.current = null;
+          abortControllerRef.current = null;
+          isSpeakingRef.current = false;
+          setIsSpeaking(false);
+          URL.revokeObjectURL(audioUrl);
+          setError("Failed to start audio playback.");
+          resolve(false);
+        });
+      });
+    } catch (err: any) {
+      console.error("[speakStream] Error:", err?.message);
+      setError("Failed to play audio: " + (err?.message || "Unknown error"));
+      abortControllerRef.current = null;
+      isSpeakingRef.current = false;
+      setIsSpeaking(false);
+      return false;
+    }
+  }, [voiceAvailable]);
+
+  /**
+   * Stop speaking / barge-in - interrupts current audio playback.
+   * Allows user to interrupt the coach mid-speech.
+   */
+  const stopSpeaking = useCallback(() => {
+    console.log("[stopSpeaking] Interrupt requested");
+
+    // Abort any ongoing fetch
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+
+    // Stop current audio playback
+    if (currentAudioRef.current) {
+      currentAudioRef.current.pause();
+      currentAudioRef.current.currentTime = 0;
+      // Clean up the object URL if it exists
+      if (currentAudioRef.current.src.startsWith("blob:")) {
+        URL.revokeObjectURL(currentAudioRef.current.src);
+      }
+      currentAudioRef.current = null;
+    }
+
+    isSpeakingRef.current = false;
+    setIsSpeaking(false);
+    console.log("[stopSpeaking] Speech interrupted");
+  }, []);
+
   return {
     isRecording,
     isTranscribing,
@@ -324,9 +458,12 @@ export function useVoice(): UseVoiceReturn {
     voiceAvailable,
     error,
     recordingDuration,
+    timeToFirstAudio,
     startRecording,
     stopRecording,
     speak,
+    speakStream,
+    stopSpeaking,
     cancelRecording,
   };
 }

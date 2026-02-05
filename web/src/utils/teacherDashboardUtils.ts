@@ -20,6 +20,7 @@ import type {
   AssignmentReviewData,
   StudentDrilldownData,
   StudentActionStatus,
+  ReviewState,
 } from "../types/teacherDashboard";
 
 // ============================================
@@ -385,7 +386,8 @@ export function buildStudentRow(
     hasTeacherNote: !!session.educatorNotes,
     sessionId: session.id,
     attempts: 1, // Default, will be overridden by buildAssignmentReview if assignment data available
-    isReviewed: false, // Default, will be overridden by buildAssignmentReview if assignment data available
+    reviewState: "pending_review" as ReviewState, // Default for completed sessions, will be overridden by buildAssignmentReview
+    isReviewed: false, // Deprecated: derived from reviewState
   };
 }
 
@@ -458,7 +460,7 @@ export function buildStudentDrilldown(
 
 /**
  * Build assignment review data from sessions.
- * @param assignmentDetails - Optional map of studentId to assignment details (attempts, action status, etc.)
+ * @param assignmentDetails - Optional map of studentId to assignment details (attempts, reviewState, etc.)
  */
 export function buildAssignmentReview(
   lessonId: string,
@@ -471,7 +473,13 @@ export function buildAssignmentReview(
     attempts: number;
     completedAt?: string;
     reviewedAt?: string;
+    reviewState: ReviewState;
+    lastActionAt?: string;
+    todoIds?: string[];
+    badgeIds?: string[];
+    /** @deprecated Use reviewState instead */
     actionStatus?: StudentActionStatus;
+    /** @deprecated Use lastActionAt instead */
     actionAt?: string;
   }>
 ): AssignmentReviewData {
@@ -497,11 +505,17 @@ export function buildAssignmentReview(
   // Build rows for students who have sessions (using latest session)
   const studentRows = latestSessions.map((session) => {
     const row = buildStudentRow(session, lesson);
-    // Override attempts, isReviewed, and actionStatus from assignment details if available
+    // Override with assignment details if available
     if (assignmentDetails && assignmentDetails[session.studentId]) {
       const details = assignmentDetails[session.studentId];
       row.attempts = details.attempts;
-      row.isReviewed = !!details.reviewedAt;
+      // NEW: Use reviewState as source of truth
+      row.reviewState = details.reviewState;
+      row.lastActionAt = details.lastActionAt;
+      row.todoIds = details.todoIds;
+      row.badgeIds = details.badgeIds;
+      // Deprecated: derive isReviewed from reviewState for backwards compatibility
+      row.isReviewed = details.reviewState !== "not_started" && details.reviewState !== "pending_review";
       row.actionStatus = details.actionStatus;
       row.actionAt = details.actionAt;
     }
@@ -512,22 +526,32 @@ export function buildAssignmentReview(
   const sessionStudentIds = new Set(latestSessions.map((s) => s.studentId));
   const notStartedRows: StudentAssignmentRow[] = allStudentIds
     .filter((id) => !sessionStudentIds.has(id))
-    .map((id) => ({
-      studentId: id,
-      studentName: allStudentNames[id] || "Unknown",
-      isComplete: false,
-      questionsAnswered: 0,
-      totalQuestions: lesson.prompts.length,
-      understanding: "needs-support" as UnderstandingLevel,
-      coachSupport: "minimal" as CoachSupportLevel,
-      needsReview: false,
-      attentionReasons: [],
-      hasTeacherNote: false,
-      attempts: assignmentDetails?.[id]?.attempts || 1,
-      isReviewed: !!assignmentDetails?.[id]?.reviewedAt,
-      actionStatus: assignmentDetails?.[id]?.actionStatus,
-      actionAt: assignmentDetails?.[id]?.actionAt,
-    }));
+    .map((id) => {
+      const details = assignmentDetails?.[id];
+      const reviewState = details?.reviewState || "not_started";
+      return {
+        studentId: id,
+        studentName: allStudentNames[id] || "Unknown",
+        isComplete: false,
+        questionsAnswered: 0,
+        totalQuestions: lesson.prompts.length,
+        understanding: "needs-support" as UnderstandingLevel,
+        coachSupport: "minimal" as CoachSupportLevel,
+        needsReview: false,
+        attentionReasons: [],
+        hasTeacherNote: false,
+        attempts: details?.attempts || 1,
+        // NEW: Use reviewState as source of truth
+        reviewState: reviewState as ReviewState,
+        lastActionAt: details?.lastActionAt,
+        todoIds: details?.todoIds,
+        badgeIds: details?.badgeIds,
+        // Deprecated: derive from reviewState for backwards compatibility
+        isReviewed: reviewState !== "not_started" && reviewState !== "pending_review",
+        actionStatus: details?.actionStatus,
+        actionAt: details?.actionAt,
+      };
+    });
 
   const allRows = [...studentRows, ...notStartedRows];
 

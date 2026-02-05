@@ -94,7 +94,7 @@ export default function Progress() {
 
       {/* Score Progress */}
       <div className="card">
-        <h3 style={{ marginBottom: "16px" }}>Score Overview</h3>
+        <h3 style={{ marginBottom: "16px" }}>Score Progress</h3>
 
         <div style={{ marginBottom: "16px" }}>
           <div

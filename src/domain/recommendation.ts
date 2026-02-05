@@ -102,6 +102,13 @@ export interface Recommendation {
     submittedAt: string;
     submittedBy: string;
   }[];
+
+  // Badge suggestion (if applicable)
+  suggestedBadge?: {
+    badgeType: BadgeType;
+    reason: string;
+    evidence?: Record<string, any>;
+  };
 }
 
 // ============================================
@@ -168,6 +175,14 @@ export const DETECTION_RULES: DetectionRule[] = [
     type: "celebrate",
     description: "Student showed significant score improvement",
     baseConfidenceScore: 0.85,
+    basePriority: "medium",
+  },
+  {
+    name: "persistence",
+    insightType: "celebrate_progress",
+    type: "celebrate",
+    description: "Student showed great persistence through difficulty (heavy hint usage but completed)",
+    baseConfidenceScore: 0.8,
     basePriority: "medium",
   },
   {
@@ -416,7 +431,23 @@ export interface StudentPerformanceData {
   hasTeacherNote: boolean;
   completedAt?: string;
   previousScore?: number; // For improvement detection
+  previousCompletedAt?: string; // When the previous attempt was completed
   helpRequestCount?: number; // For escalation: number of help requests in coach sessions
+
+  // Badge-related fields
+  subject?: string; // Subject for mastery badge evaluation
+  timeSpentMinutes?: number; // For focus badge evaluation
+  questionCount?: number; // Number of questions in the assignment
+  subjectHistory?: { // For mastery badge - subject-level history
+    subject: string;
+    assignments: {
+      assignmentId: string;
+      assignmentTitle: string;
+      score: number;
+      hintUsageRate: number;
+      completedAt: string;
+    }[];
+  }[];
 }
 
 export interface AssignmentAggregateData {
@@ -501,6 +532,17 @@ export interface Badge {
   assignmentId?: string; // Optional: which assignment earned this
   insightId?: string; // Optional: which insight triggered this badge
   issuedAt: Date;
+  // Evidence for student-facing display (from badge criteria evaluation)
+  evidence?: {
+    previousScore?: number;
+    currentScore?: number;
+    improvement?: number;
+    subjectAverageScore?: number;
+    subjectAssignmentCount?: number;
+    hintUsageRate?: number;
+  };
+  // When the student was shown a celebration for this badge (null = not yet celebrated)
+  celebratedAt?: string;
 }
 
 /**
@@ -513,6 +555,9 @@ export const BADGE_TYPES = {
   helper_badge: "Helper Badge",
   persistence: "Persistence",
   curiosity: "Curiosity Award",
+  focus_badge: "Focus Badge",
+  creativity_badge: "Creativity Badge",
+  collaboration_badge: "Collaboration Badge",
   custom: "Custom Badge",
 } as const;
 

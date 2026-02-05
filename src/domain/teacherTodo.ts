@@ -15,7 +15,18 @@ import { ChecklistActionKey } from "./recommendation";
 // Types
 // ============================================
 
-export type TeacherTodoStatus = "open" | "done";
+export type TeacherTodoStatus = "open" | "done" | "superseded";
+
+/**
+ * Recommendation category for display (human-readable)
+ */
+export type RecommendationCategory =
+  | "Needs Support"
+  | "Developing"
+  | "Ready for Challenge"
+  | "Celebrate Progress"
+  | "Group Support"
+  | "Monitor";
 
 /**
  * TeacherTodo - An actionable item for a teacher
@@ -28,6 +39,7 @@ export interface TeacherTodo {
   // Action details
   actionKey: ChecklistActionKey;
   label: string;  // Teacher-friendly text
+  category?: RecommendationCategory;  // e.g., "Needs Support", "Developing"
 
   // Context (optional - helps make todo understandable)
   classId?: string;
@@ -42,6 +54,7 @@ export interface TeacherTodo {
   status: TeacherTodoStatus;
   createdAt: string;  // ISO timestamp
   doneAt?: string;    // ISO timestamp when completed
+  supersededAt?: string;  // ISO timestamp when superseded by review reopen
 }
 
 /**
@@ -52,6 +65,7 @@ export interface CreateTeacherTodoInput {
   recommendationId: string;
   actionKey: ChecklistActionKey;
   label: string;
+  category?: RecommendationCategory;
   classId?: string;
   className?: string;
   subject?: string;
@@ -240,6 +254,126 @@ export function groupTodosByClass(todos: TeacherTodo[]): TodosByClass[] {
 
   // Sort by class name
   result.sort((a, b) => a.className.localeCompare(b.className));
+
+  return result;
+}
+
+// ============================================
+// Group by Student (for To-Do Panel)
+// ============================================
+
+/**
+ * A single todo with context for display
+ */
+export interface TodoWithContext {
+  todo: TeacherTodo;
+  contextLine: string; // e.g., "Math · Division Basics · Lesson: Division Basics"
+}
+
+/**
+ * Todos grouped by student for display
+ */
+export interface TodosByStudent {
+  studentId: string;
+  studentName: string;
+  todos: TodoWithContext[];
+}
+
+/**
+ * Build a context line from todo fields.
+ * Format: "Subject · Assignment Title" (only includes fields that exist)
+ */
+function buildContextLine(todo: TeacherTodo): string {
+  const parts: string[] = [];
+
+  if (todo.subject) {
+    parts.push(todo.subject);
+  }
+
+  if (todo.assignmentTitle) {
+    parts.push(todo.assignmentTitle);
+  }
+
+  return parts.join(" · ");
+}
+
+/**
+ * Group todos by student for the Teacher To-Do panel.
+ *
+ * For todos with multiple studentIds, creates a separate entry
+ * for each student (splits them).
+ */
+export function groupTodosByStudent(todos: TeacherTodo[]): TodosByStudent[] {
+  const studentMap = new Map<string, {
+    studentId: string;
+    studentName: string;
+    todos: TodoWithContext[];
+  }>();
+
+  for (const todo of todos) {
+    const contextLine = buildContextLine(todo);
+
+    // If todo has studentIds, create entry per student
+    if (todo.studentIds && todo.studentIds.length > 0) {
+      // Parse studentNames (comma-separated) to match with studentIds
+      const names = todo.studentNames?.split(",").map(n => n.trim()) || [];
+
+      for (let i = 0; i < todo.studentIds.length; i++) {
+        const studentId = todo.studentIds[i];
+        const studentName = names[i] || studentId;
+
+        if (!studentMap.has(studentId)) {
+          studentMap.set(studentId, {
+            studentId,
+            studentName,
+            todos: [],
+          });
+        }
+
+        studentMap.get(studentId)!.todos.push({
+          todo,
+          contextLine,
+        });
+      }
+    } else if (todo.studentNames) {
+      // Fallback: use studentNames as key if no studentIds
+      const key = todo.studentNames;
+      if (!studentMap.has(key)) {
+        studentMap.set(key, {
+          studentId: key,
+          studentName: todo.studentNames,
+          todos: [],
+        });
+      }
+      studentMap.get(key)!.todos.push({
+        todo,
+        contextLine,
+      });
+    } else {
+      // No student info - put under "General"
+      const key = "__no_student__";
+      if (!studentMap.has(key)) {
+        studentMap.set(key, {
+          studentId: key,
+          studentName: "General",
+          todos: [],
+        });
+      }
+      studentMap.get(key)!.todos.push({
+        todo,
+        contextLine,
+      });
+    }
+  }
+
+  // Convert to array and sort by student name
+  const result = Array.from(studentMap.values());
+  result.sort((a, b) => {
+    // Put "General" at the end
+    if (a.studentName === "General") return 1;
+    if (b.studentName === "General") return -1;
+    return a.studentName.localeCompare(b.studentName);
+  });
 
   return result;
 }

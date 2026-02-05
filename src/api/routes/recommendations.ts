@@ -17,6 +17,7 @@ import {
   RECOMMENDATION_CONFIG,
   FeedbackType,
   BadgeType,
+  BADGE_TYPES,
   isBadgeType,
   getBadgeTypeName,
   RecommendationStatus,
@@ -40,7 +41,29 @@ import {
 } from "../../stores/actionHandlers";
 import { teacherSettingsStore } from "../../stores/teacherSettingsStore";
 import { teacherTodoStore } from "../../stores/teacherTodoStore";
-import { TeacherTodo } from "../../domain/teacherTodo";
+import { TeacherTodo, RecommendationCategory } from "../../domain/teacherTodo";
+
+/**
+ * Map recommendation rule name to human-readable category
+ */
+function getRuleCategory(ruleName: string): RecommendationCategory {
+  switch (ruleName) {
+    case "needs-support":
+      return "Needs Support";
+    case "developing":
+      return "Developing";
+    case "group-support":
+      return "Group Support";
+    case "ready-for-challenge":
+      return "Ready for Challenge";
+    case "notable-improvement":
+      return "Celebrate Progress";
+    case "watch-progress":
+      return "Monitor";
+    default:
+      return "Needs Support"; // Default fallback
+  }
+}
 
 const router = Router();
 const sessionStore = new SessionStore();
@@ -211,11 +234,12 @@ function gatherAssignmentAggregates(): AssignmentAggregateData[] {
  * - status: "active" | "pending" | "resolved" | "all" (default: "active")
  * - limit: number (default: MAX_ACTIVE_RECOMMENDATIONS)
  * - assignmentId: string (optional filter)
+ * - studentId: string (optional filter - matches recommendations containing this student)
  * - includeReviewed: "true" (legacy, same as status=all)
  */
 router.get("/", (req, res) => {
   try {
-    const { limit, assignmentId, includeReviewed, status } = req.query;
+    const { limit, assignmentId, studentId, includeReviewed, status } = req.query;
 
     let recommendations: ReturnType<typeof recommendationStore.getActive>;
 
@@ -241,6 +265,11 @@ router.get("/", (req, res) => {
     // Filter by assignment if specified
     if (assignmentId && typeof assignmentId === "string") {
       recommendations = recommendations.filter((r) => r.assignmentId === assignmentId);
+    }
+
+    // Filter by student if specified (matches any recommendation that includes this student)
+    if (studentId && typeof studentId === "string") {
+      recommendations = recommendations.filter((r) => r.studentIds.includes(studentId));
     }
 
     // Sort by priority
@@ -325,6 +354,27 @@ router.post("/:id/dismiss", (req, res) => {
   } catch (error) {
     console.error("Error dismissing recommendation:", error);
     res.status(500).json({ error: "Failed to dismiss recommendation" });
+  }
+});
+
+/**
+ * POST /api/recommendations/:id/reactivate
+ * Return a recommendation to active status (e.g., from pending or reviewed)
+ */
+router.post("/:id/reactivate", (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const recommendation = recommendationStore.reactivate(id);
+
+    if (!recommendation) {
+      return res.status(404).json({ error: "Recommendation not found" });
+    }
+
+    res.json({ success: true, recommendation });
+  } catch (error) {
+    console.error("Error reactivating recommendation:", error);
+    res.status(500).json({ error: "Failed to reactivate recommendation" });
   }
 });
 
@@ -465,7 +515,7 @@ router.post("/:id/actions/award-badge", (req, res) => {
     // Validate badge type
     if (!isBadgeType(badgeType)) {
       return res.status(400).json({
-        error: `Invalid badge type: ${badgeType}. Valid types: progress_star, mastery_badge, focus_badge, creativity_badge, collaboration_badge`,
+        error: `Invalid badge type: ${badgeType}. Valid types: ${Object.keys(BADGE_TYPES).join(", ")}`,
       });
     }
 
@@ -746,17 +796,32 @@ router.post("/:id/actions/submit-checklist", async (req, res) => {
       const className = recommendation.triggerData.signals.className as string
         || undefined;
 
+      // Look up lesson to get subject
+      let subject: string | undefined;
+      if (recommendation.assignmentId) {
+        const lessons = getAllLessons();
+        const lesson = lessons.find(l => l.id === recommendation.assignmentId);
+        if (lesson?.subject) {
+          subject = lesson.subject;
+        }
+      }
+
+      // Get category from recommendation rule
+      const category = getRuleCategory(recommendation.triggerData.ruleName);
+
       // Create todos for each soft action
       const todoInputs = softActionEntries.map(entry => ({
         teacherId,
         recommendationId: id,
         actionKey: entry.actionKey,
         label: entry.label,
+        category,
         assignmentId: recommendation.assignmentId,
         assignmentTitle,
         studentIds: recommendation.studentIds,
         studentNames,
         className,
+        subject,
       }));
 
       createdTodos = teacherTodoStore.createMany(todoInputs);

@@ -7,7 +7,7 @@
  */
 
 import { useState, useEffect } from "react";
-import { Link } from "react-router-dom";
+import EducatorHeader from "../components/EducatorHeader";
 import {
   getArchivedAssignments,
   restoreAssignment,
@@ -62,9 +62,7 @@ export default function ArchivedLessons() {
 
   return (
     <div className="container">
-      <Link to="/educator" className="back-btn">
-        ← Back to Dashboard
-      </Link>
+      <EducatorHeader breadcrumbs={[{ label: "Archived Assignments" }]} />
 
       <div className="header">
         <h1>Archived Assignments</h1>

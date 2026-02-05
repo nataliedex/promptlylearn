@@ -63,6 +63,9 @@ export interface ComputedAssignmentState {
   // For resolved check
   allStudentsComplete: boolean;
   allFlaggedReviewed: boolean;
+
+  // Assignment metadata
+  assignedAt?: string; // ISO date string of earliest assignment
 }
 
 export interface TeacherSummary {

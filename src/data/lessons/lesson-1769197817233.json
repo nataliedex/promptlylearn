@@ -1,0 +1,111 @@
+{
+  "id": "lesson-1769197817233",
+  "title": "Ocean Ecosystems",
+  "description": "Types of creatures, homes, how they breathe",
+  "difficulty": "beginner",
+  "gradeLevel": "2",
+  "standards": [
+    "RL.2.1",
+    "RL.2.3",
+    "RL.2.7"
+  ],
+  "prompts": [
+    {
+      "id": "q1",
+      "type": "explain",
+      "input": "What are some different types of creatures that live in the ocean? Why do you think they live there?",
+      "hints": [
+        "Think about what you already know about ocean animals.",
+        "Consider what makes the ocean a good home for them."
+      ],
+      "standards": [
+        "RL.2.1"
+      ]
+    },
+    {
+      "id": "q2",
+      "type": "explain",
+      "input": "How do ocean creatures breathe? Can you explain why this is important for their survival?",
+      "hints": [
+        "Think about how you breathe and how it might be different for fish.",
+        "Consider how the water helps them breathe."
+      ],
+      "standards": [
+        "RL.2.3"
+      ]
+    },
+    {
+      "id": "q3",
+      "type": "explain",
+      "input": "Can you describe some homes that ocean animals live in? How do these homes help them?",
+      "hints": [
+        "Think about what materials are found in the ocean.",
+        "Consider how these homes protect the animals."
+      ],
+      "standards": [
+        "RL.2.2"
+      ]
+    },
+    {
+      "id": "q4",
+      "type": "explain",
+      "input": "Why do you think some animals can live in deeper parts of the ocean while others stay close to the surface?",
+      "hints": [
+        "Think about the conditions in deeper water compared to shallow water.",
+        "Consider what creatures need to survive."
+      ],
+      "standards": [
+        "RL.2.1"
+      ]
+    },
+    {
+      "id": "q5",
+      "type": "explain",
+      "input": "How might the ocean ecosystem change if one type of creature disappeared? Why is every creature important?",
+      "hints": [
+        "Think about how animals depend on each other.",
+        "Consider what might happen to their food sources."
+      ],
+      "standards": [
+        "RL.2.3"
+      ]
+    },
+    {
+      "id": "q6",
+      "type": "explain",
+      "input": "What do you think the ocean would look like if it had no plants? How would that affect the animals?",
+      "hints": [
+        "Consider what plants provide for the ocean ecosystem.",
+        "Think about how animals depend on plants for food and shelter."
+      ],
+      "standards": [
+        "RL.2.2"
+      ]
+    },
+    {
+      "id": "q7",
+      "type": "explain",
+      "input": "How do ocean animals communicate with each other? Why do you think communication is important for them?",
+      "hints": [
+        "Think about sounds and movements that animals make.",
+        "Consider how they might find food or warn each other of danger."
+      ],
+      "standards": [
+        "RL.2.6"
+      ]
+    },
+    {
+      "id": "q8",
+      "type": "explain",
+      "input": "Can you compare two ocean creatures from different ecosystems? How are they similar and different?",
+      "hints": [
+        "Look at their homes and how they breathe.",
+        "Think about their size, color, and what they eat."
+      ],
+      "standards": [
+        "RL.2.9"
+      ]
+    }
+  ],
+  "subject": "Science"
+}

@@ -11,12 +11,18 @@ import {
   getStudent,
   sendCoachChat,
   saveCoachSession,
+  getCoachingInvite,
+  startCoachingInvite,
+  completeCoachingInvite,
+  updateCoachingInviteActivity,
   type Student,
   type ConversationMessage,
   type CoachMessage,
+  type CoachingInvite,
 } from "../services/api";
 import { useVoice } from "../hooks/useVoice";
 import ModeToggle from "../components/ModeToggle";
+import { buildCoachIntro, getCoachName } from "../utils/coachIntro";
 
 type SessionMode = "voice" | "type";
 type VoiceState = "idle" | "speaking" | "listening" | "processing";
@@ -26,6 +32,7 @@ export default function CoachSession() {
   const [searchParams] = useSearchParams();
   const initialMode = (searchParams.get("mode") as SessionMode) || "type";
   const topicsParam = searchParams.get("topics");
+  const inviteId = searchParams.get("inviteId");
   const topics = topicsParam ? JSON.parse(decodeURIComponent(topicsParam)) : [];
   const gradeLevel = searchParams.get("gradeLevel") ? decodeURIComponent(searchParams.get("gradeLevel")!) : undefined;
 
@@ -33,6 +40,7 @@ export default function CoachSession() {
   const [mode, setMode] = useState<SessionMode>(initialMode);
 
   const [student, setStudent] = useState<Student | null>(null);
+  const [coachingInvite, setCoachingInvite] = useState<CoachingInvite | null>(null);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
   const [conversationHistory, setConversationHistory] = useState<ConversationMessage[]>([]);
@@ -104,15 +112,22 @@ export default function CoachSession() {
         saveCoachSession({
           studentId: student?.id || "",
           studentName: student?.name || "",
-          topics,
+          topics: coachingInvite ? [coachingInvite.title, coachingInvite.subject] : topics,
           messages: messagesWithTimestamps,
           mode,
           startedAt: sessionStartedAt,
           endedAt: new Date().toISOString(),
         }).catch((err) => console.error("Failed to save coach session on unmount:", err));
+
+        // Mark coaching invite as completed if navigating away
+        if (coachingInvite && messagesWithTimestamps.length > 1) {
+          completeCoachingInvite(coachingInvite.id, messagesWithTimestamps.length).catch((err) =>
+            console.error("Failed to complete coaching invite on unmount:", err)
+          );
+        }
       }
     };
-  }, [sessionStartedAt, messagesWithTimestamps, student, topics, mode]);
+  }, [sessionStartedAt, messagesWithTimestamps, student, topics, mode, coachingInvite]);
 
   // Update voice state based on hook states
   useEffect(() => {
@@ -127,7 +142,7 @@ export default function CoachSession() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [conversationHistory]);
 
-  // Load student data
+  // Load student data and coaching invite (if present)
   useEffect(() => {
     async function loadData() {
       if (!studentId) return;
@@ -135,6 +150,16 @@ export default function CoachSession() {
       try {
         const studentData = await getStudent(studentId);
         setStudent(studentData);
+
+        // Load coaching invite if inviteId is present
+        if (inviteId) {
+          try {
+            const inviteResponse = await getCoachingInvite(inviteId);
+            setCoachingInvite(inviteResponse.invite);
+          } catch (err) {
+            console.error("Failed to load coaching invite:", err);
+          }
+        }
       } catch (err) {
         console.error("Failed to load student:", err);
       } finally {
@@ -143,7 +168,7 @@ export default function CoachSession() {
     }
 
     loadData();
-  }, [studentId]);
+  }, [studentId, inviteId]);
 
   // Start session with greeting
   const handleStartSession = async () => {
@@ -151,9 +176,38 @@ export default function CoachSession() {
     const now = new Date().toISOString();
     setSessionStartedAt(now);
 
-    const greeting = topics.length > 0
-      ? `Hi ${student?.name}! I'm excited to chat with you about ${topics.join(" and ")}. What would you like to explore or ask about?`
-      : `Hi ${student?.name}! I'm here to help you learn. What's on your mind today?`;
+    // Mark coaching invite as started if present
+    if (coachingInvite) {
+      try {
+        const result = await startCoachingInvite(coachingInvite.id);
+        setCoachingInvite(result.invite);
+      } catch (err) {
+        console.error("Failed to mark coaching invite as started:", err);
+      }
+    }
+
+    // Build greeting using the coach intro helper
+    let greeting: string;
+    if (coachingInvite) {
+      // Teacher-invited session (support or enrichment)
+      const sessionType = coachingInvite.guardrails?.mode === "support" ? "support"
+        : coachingInvite.guardrails?.mode === "enrichment" ? "enrichment"
+        : "general";
+      greeting = buildCoachIntro({
+        studentName: student?.name || "",
+        preferredName: student?.preferredName,
+        pronouns: student?.pronouns,
+        assignmentTitle: coachingInvite.assignmentTitle || coachingInvite.title,
+        sessionFocus: coachingInvite.teacherNote,
+        sessionType,
+      });
+    } else if (topics.length > 0) {
+      const firstName = getCoachName(student?.name || "", student?.preferredName);
+      greeting = `Hey ${firstName}! Welcome back. I'm excited to chat with you about ${topics.join(" and ")}. What would you like to explore or ask about?`;
+    } else {
+      const firstName = getCoachName(student?.name || "", student?.preferredName);
+      greeting = `Hey ${firstName}! Welcome back. I'm here to help you learn today. What's on your mind?`;
+    }
 
     setConversationHistory([{ role: "coach", message: greeting }]);
     setMessagesWithTimestamps([{ role: "coach", message: greeting, timestamp: now }]);
@@ -192,12 +246,18 @@ export default function CoachSession() {
     ]);
 
     try {
+      // Use coaching invite topics if available
+      const sessionTopics = coachingInvite
+        ? [coachingInvite.title, coachingInvite.subject, ...(coachingInvite.assignmentTitle ? [coachingInvite.assignmentTitle] : [])]
+        : topics;
+
       const response = await sendCoachChat(
-        student.name,
-        topics,
+        getCoachName(student.name, student.preferredName),
+        sessionTopics,
         msgToSend,
         updatedHistory,
-        gradeLevel
+        gradeLevel,
+        !!coachingInvite // Enable enrichment mode if this is an invited session
       );
 
       const coachTimestamp = new Date().toISOString();
@@ -209,13 +269,30 @@ export default function CoachSession() {
       ]);
 
       // Track coach response with timestamp
-      setMessagesWithTimestamps((prev) => [
-        ...prev,
-        { role: "coach", message: response.response, timestamp: coachTimestamp },
-      ]);
+      setMessagesWithTimestamps((prev) => {
+        const newMessages = [
+          ...prev,
+          { role: "coach", message: response.response, timestamp: coachTimestamp },
+        ];
+
+        // Update coaching invite activity with message count
+        if (coachingInvite) {
+          updateCoachingInviteActivity(coachingInvite.id, newMessages.length).catch((err) =>
+            console.error("Failed to update coaching invite activity:", err)
+          );
+        }
+
+        return newMessages;
+      });
 
       if (!response.shouldContinue) {
         setSessionEnded(true);
+        // Mark coaching invite as completed
+        if (coachingInvite) {
+          completeCoachingInvite(coachingInvite.id, messagesWithTimestamps.length + 2).catch((err) =>
+            console.error("Failed to complete coaching invite:", err)
+          );
+        }
       }
 
       // In voice mode, speak the response and listen for next input
@@ -323,6 +400,8 @@ export default function CoachSession() {
 
   // Pre-session: Start button
   if (!sessionStarted) {
+    const isEnrichmentSession = !!coachingInvite;
+
     return (
       <div className="container">
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
@@ -338,30 +417,118 @@ export default function CoachSession() {
         </div>
 
         <div className="header">
-          <h1>Ask Coach</h1>
-          <p>Have a conversation about your learning</p>
+          <h1>{isEnrichmentSession ? "Special Coaching Session" : "Ask Coach"}</h1>
+          <p>{isEnrichmentSession ? "An enrichment session from your teacher" : "Have a conversation about your learning"}</p>
         </div>
 
-        <div className="card" style={{ textAlign: "center", padding: "48px" }}>
+        {/* Teacher Invite Banner (Enrichment Mode) */}
+        {coachingInvite && (
+          <div
+            className="card"
+            style={{
+              background: "linear-gradient(135deg, #e8f5e9, #c8e6c9)",
+              border: "2px solid #4caf50",
+              marginBottom: "16px",
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "flex-start", gap: "16px" }}>
+              <div
+                style={{
+                  fontSize: "2.5rem",
+                  background: "#4caf50",
+                  borderRadius: "50%",
+                  width: "56px",
+                  height: "56px",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  flexShrink: 0,
+                }}
+              >
+                🎓
+              </div>
+              <div style={{ flex: 1 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "4px" }}>
+                  <span
+                    style={{
+                      fontSize: "0.7rem",
+                      fontWeight: 600,
+                      color: "#166534",
+                      background: "#fff",
+                      padding: "2px 8px",
+                      borderRadius: "4px",
+                      textTransform: "uppercase",
+                    }}
+                  >
+                    Enrichment Session
+                  </span>
+                </div>
+                <h3 style={{ margin: "8px 0", color: "#1b5e20" }}>
+                  {coachingInvite.title}
+                </h3>
+                <p style={{ margin: "0 0 8px 0", color: "#166534", fontSize: "0.9rem" }}>
+                  {coachingInvite.subject}
+                  {coachingInvite.assignmentTitle && ` • ${coachingInvite.assignmentTitle}`}
+                </p>
+                {coachingInvite.teacherNote && (
+                  <div
+                    style={{
+                      background: "rgba(255,255,255,0.8)",
+                      padding: "12px",
+                      borderRadius: "8px",
+                      borderLeft: "4px solid #4caf50",
+                      marginTop: "12px",
+                    }}
+                  >
+                    <p style={{ margin: 0, color: "#333", fontStyle: "italic", fontSize: "0.9rem" }}>
+                      "{coachingInvite.teacherNote}"
+                    </p>
+                    <p style={{ margin: "4px 0 0 0", color: "#666", fontSize: "0.8rem" }}>
+                      — Your Teacher
+                    </p>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        <div
+          className="card"
+          style={{
+            textAlign: "center",
+            padding: "48px",
+            background: isEnrichmentSession ? "linear-gradient(135deg, #f1f8e9, #dcedc8)" : undefined,
+            border: isEnrichmentSession ? "2px solid #8bc34a" : undefined,
+          }}
+        >
           <div style={{ fontSize: "4rem", marginBottom: "24px" }}>
-            {mode === "voice" ? "🎤" : "💬"}
+            {isEnrichmentSession ? "🚀" : mode === "voice" ? "🎤" : "💬"}
           </div>
           <h2 style={{ marginBottom: "16px" }}>
-            {topics.length > 0
+            {isEnrichmentSession
+              ? "Ready for a Challenge?"
+              : topics.length > 0
               ? `Let's talk about ${topics.join(" and ")}`
               : "Ready to chat?"}
           </h2>
           <p style={{ color: "#666", marginBottom: "32px" }}>
-            {mode === "voice"
+            {isEnrichmentSession
+              ? "This is a special enrichment session! We'll explore deeper challenges and go beyond the basics."
+              : mode === "voice"
               ? "Click start to begin a voice conversation with your coach."
               : "Click start to begin chatting with your coach."}
           </p>
           <button
             className="btn btn-primary"
             onClick={handleStartSession}
-            style={{ padding: "16px 48px", fontSize: "1.2rem" }}
+            style={{
+              padding: "16px 48px",
+              fontSize: "1.2rem",
+              background: isEnrichmentSession ? "#166534" : undefined,
+            }}
           >
-            Start Conversation
+            {isEnrichmentSession ? "Start Enrichment Session" : "Start Conversation"}
           </button>
         </div>
       </div>
@@ -384,10 +551,26 @@ export default function CoachSession() {
       </div>
 
       <div className="header">
-        <h1>Ask Coach</h1>
-        {topics.length > 0 && (
+        <h1>{coachingInvite ? "Enrichment Session" : "Ask Coach"}</h1>
+        {coachingInvite ? (
+          <p style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+            <span
+              style={{
+                background: "#4caf50",
+                color: "white",
+                padding: "2px 8px",
+                borderRadius: "4px",
+                fontSize: "0.75rem",
+                fontWeight: 600,
+              }}
+            >
+              🎓 ENRICHMENT
+            </span>
+            {coachingInvite.title}
+          </p>
+        ) : topics.length > 0 ? (
           <p>Discussing: {topics.join(", ")}</p>
-        )}
+        ) : null}
       </div>
 
       {/* Voice State Indicator */}
@@ -453,7 +636,7 @@ export default function CoachSession() {
                   maxWidth: "80%",
                   padding: "12px 16px",
                   borderRadius: msg.role === "student" ? "16px 16px 4px 16px" : "16px 16px 16px 4px",
-                  background: msg.role === "student" ? "#667eea" : "#f5f5f5",
+                  background: msg.role === "student" ? "#7c8fce" : "#f5f5f5",
                   color: msg.role === "student" ? "white" : "#333",
                 }}
               >
@@ -494,7 +677,7 @@ export default function CoachSession() {
               style={{
                 flex: 1,
                 padding: "16px",
-                borderRadius: "12px",
+                borderRadius: "8px",
                 border: "2px solid #e0e0e0",
                 fontSize: "1rem",
               }}

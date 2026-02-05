@@ -2,36 +2,89 @@
  * TeacherTodosPrint - Printable Teacher To-Do Sheet
  *
  * A clean, print-optimized page showing all open teacher to-dos
- * organized by class > subject > assignment.
+ * organized by student.
  *
  * Features:
  * - Print-optimized layout (no navigation, minimal styling)
- * - Grouped by class, then subject, then assignment
+ * - Grouped by student with context lines
  * - Checkbox format for easy printing
- * - Date header
+ * - Date header with total count
  * - Print button triggers browser print dialog
  */
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { Link } from "react-router-dom";
 import {
   getTeacherTodos,
   type TeacherTodo,
-  type TodosByClass,
+  type TodosByStudent,
+  type RecommendationCategory,
+  groupTodosByStudent,
 } from "../services/api";
+
+// Priority ordering (same as panel)
+const CATEGORY_PRIORITY: Record<RecommendationCategory, number> = {
+  "Needs Support": 1,
+  "Group Support": 2,
+  "Developing": 3,
+  "Monitor": 4,
+  "Ready for Challenge": 5,
+  "Celebrate Progress": 6,
+};
+
+/**
+ * Map backend category values to display labels.
+ * Updates terminology to match Recommended Actions panel.
+ */
+const CATEGORY_DISPLAY_LABELS: Record<string, string> = {
+  "Celebrate Progress": "Acknowledge Progress",
+  "Ready for Challenge": "Extend Learning",
+};
+
+function getCategoryDisplayLabel(category: string): string {
+  return CATEGORY_DISPLAY_LABELS[category] || category;
+}
+
+function getStudentPriority(group: TodosByStudent): number {
+  let highestPriority = 999;
+  for (const { todo } of group.todos) {
+    if (todo.category) {
+      const priority = CATEGORY_PRIORITY[todo.category] ?? 999;
+      if (priority < highestPriority) {
+        highestPriority = priority;
+      }
+    }
+  }
+  return highestPriority;
+}
+
+function sortByPriority(groups: TodosByStudent[]): TodosByStudent[] {
+  return [...groups].sort((a, b) => {
+    const priorityA = getStudentPriority(a);
+    const priorityB = getStudentPriority(b);
+    if (priorityA !== priorityB) {
+      return priorityA - priorityB;
+    }
+    return a.studentName.localeCompare(b.studentName);
+  });
+}
 
 export default function TeacherTodosPrint() {
   const [todos, setTodos] = useState<TeacherTodo[]>([]);
-  const [groupedTodos, setGroupedTodos] = useState<TodosByClass[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // Group todos by student and sort by priority
+  const groupedByStudent = useMemo(
+    () => sortByPriority(groupTodosByStudent(todos)),
+    [todos]
+  );
 
   useEffect(() => {
     async function loadTodos() {
       try {
-        const data = await getTeacherTodos({ status: "open", grouped: true });
+        const data = await getTeacherTodos({ status: "open" });
         setTodos(data.todos);
-        setGroupedTodos(data.grouped || []);
       } catch (err) {
         console.error("Failed to load todos:", err);
         setError("Failed to load to-do items");
@@ -136,57 +189,41 @@ export default function TeacherTodosPrint() {
             margin-top: 4px;
           }
 
-          .class-section {
-            margin-bottom: 32px;
+          .student-section {
+            padding-top: 16px;
+            margin-top: 16px;
+            border-top: 1px solid #ccc;
+            page-break-inside: avoid;
           }
 
-          .class-header {
-            font-size: 18px;
+          .student-section:first-child {
+            padding-top: 0;
+            margin-top: 0;
+            border-top: none;
+          }
+
+          .student-header {
+            font-size: 15px;
             font-weight: bold;
-            color: #333;
-            border-bottom: 1px solid #ddd;
-            padding-bottom: 8px;
-            margin-bottom: 16px;
-          }
-
-          .subject-section {
-            margin-bottom: 20px;
-            margin-left: 16px;
-          }
-
-          .subject-header {
-            font-size: 14px;
-            font-weight: 600;
-            color: #666;
-            margin-bottom: 12px;
-          }
-
-          .assignment-section {
-            margin-bottom: 16px;
-            margin-left: 16px;
-          }
-
-          .assignment-header {
-            font-size: 13px;
-            color: #888;
+            color: #222;
             margin-bottom: 8px;
-            font-style: italic;
           }
 
           .todo-item {
             display: flex;
             align-items: flex-start;
-            margin-bottom: 12px;
+            margin-bottom: 6px;
+            margin-left: 4px;
             page-break-inside: avoid;
           }
 
           .todo-checkbox {
-            width: 16px;
-            height: 16px;
-            border: 2px solid #333;
+            width: 12px;
+            height: 12px;
+            border: 1.5px solid #444;
             border-radius: 2px;
-            margin-right: 12px;
-            margin-top: 2px;
+            margin-right: 8px;
+            margin-top: 3px;
             flex-shrink: 0;
           }
 
@@ -194,15 +231,22 @@ export default function TeacherTodosPrint() {
             flex: 1;
           }
 
-          .todo-label {
-            font-size: 14px;
+          .todo-context {
+            font-size: 12px;
             color: #333;
-            margin-bottom: 2px;
+            font-weight: 500;
           }
 
-          .todo-students {
-            font-size: 12px;
+          .todo-action {
+            font-size: 11px;
             color: #666;
+            margin-top: 1px;
+          }
+
+          .todo-category {
+            font-weight: normal;
+            color: #888;
+            font-size: 10px;
           }
 
           .empty-state {
@@ -279,7 +323,7 @@ export default function TeacherTodosPrint() {
             </div>
           </div>
 
-          {/* Content */}
+          {/* Content - Grouped by Student, sorted by priority */}
           {todos.length === 0 ? (
             <div className="empty-state">
               <p>No to-do items pending.</p>
@@ -287,66 +331,31 @@ export default function TeacherTodosPrint() {
                 To-do items are created when you select soft actions from recommendation checklists.
               </p>
             </div>
-          ) : groupedTodos.length > 0 ? (
-            // Grouped view
-            groupedTodos.map((classGroup) => (
-              <div key={classGroup.classId || "general"} className="class-section">
-                <h2 className="class-header">{classGroup.className}</h2>
+          ) : (
+            groupedByStudent.map((studentGroup) => (
+              <div key={studentGroup.studentId} className="student-section">
+                <div className="student-header">{studentGroup.studentName}</div>
 
-                {classGroup.subjects.map((subjectGroup, sIdx) => (
-                  <div key={sIdx} className="subject-section">
-                    {subjectGroup.subject && (
-                      <h3 className="subject-header">{subjectGroup.subject}</h3>
-                    )}
-
-                    {subjectGroup.assignments.map((assignmentGroup, aIdx) => (
-                      <div key={aIdx} className="assignment-section">
-                        {assignmentGroup.assignmentTitle && (
-                          <div className="assignment-header">
-                            {assignmentGroup.assignmentTitle}
-                          </div>
+                {studentGroup.todos.map(({ todo, contextLine }) => (
+                  <div key={todo.id} className="todo-item">
+                    <div className="todo-checkbox" />
+                    <div className="todo-content">
+                      {/* Context line - EMPHASIZED */}
+                      {contextLine && (
+                        <div className="todo-context">{contextLine}</div>
+                      )}
+                      {/* Action + category - DE-EMPHASIZED */}
+                      <div className="todo-action">
+                        {todo.label}
+                        {todo.category && (
+                          <span className="todo-category"> · {getCategoryDisplayLabel(todo.category)}</span>
                         )}
-
-                        {assignmentGroup.todos.map((todo) => (
-                          <div key={todo.id} className="todo-item">
-                            <div className="todo-checkbox" />
-                            <div className="todo-content">
-                              <div className="todo-label">{todo.label}</div>
-                              {todo.studentNames && (
-                                <div className="todo-students">
-                                  Students: {todo.studentNames}
-                                </div>
-                              )}
-                            </div>
-                          </div>
-                        ))}
                       </div>
-                    ))}
+                    </div>
                   </div>
                 ))}
               </div>
             ))
-          ) : (
-            // Flat view (fallback)
-            <div className="class-section">
-              {todos.map((todo) => (
-                <div key={todo.id} className="todo-item">
-                  <div className="todo-checkbox" />
-                  <div className="todo-content">
-                    <div className="todo-label">{todo.label}</div>
-                    <div className="todo-students">
-                      {[
-                        todo.className,
-                        todo.assignmentTitle,
-                        todo.studentNames && `Students: ${todo.studentNames}`,
-                      ]
-                        .filter(Boolean)
-                        .join(" • ")}
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
           )}
 
           {/* Footer */}

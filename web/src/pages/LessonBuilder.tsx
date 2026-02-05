@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { useNavigate, Link } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
+import EducatorHeader from "../components/EducatorHeader";
 import {
   generateLesson,
   generateQuestion,
@@ -171,9 +172,7 @@ export default function LessonBuilder() {
 
   return (
     <div className="container">
-      <Link to="/educator" className="back-btn">
-        ← Back to Dashboard
-      </Link>
+      <EducatorHeader breadcrumbs={[{ label: "Create New Lesson" }]} />
 
       <div className="header">
         <h1>Create New Lesson</h1>
@@ -519,7 +518,7 @@ export default function LessonBuilder() {
       {step === "saved" && lesson && (
         <div className="card" style={{ textAlign: "center", padding: "48px" }}>
           <div style={{ fontSize: "3rem", marginBottom: "16px" }}>✓</div>
-          <h2 style={{ marginBottom: "8px", color: "#2e7d32" }}>Lesson Saved!</h2>
+          <h2 style={{ marginBottom: "8px", color: "#2e7d32" }}>Lesson Saved</h2>
           <p style={{ color: "#666", marginBottom: "32px" }}>
             "{lesson.title}" has been created with {lesson.prompts.length} question{lesson.prompts.length !== 1 ? "s" : ""}.
           </p>

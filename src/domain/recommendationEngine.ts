@@ -25,9 +25,19 @@ import {
   mustRemainIndividual,
   ruleAllowsGrouping,
   GROUPING_RULES,
+  BadgeType,
 } from "./recommendation";
 import { recommendationStore } from "../stores/recommendationStore";
 import { actionOutcomeStore } from "../stores/actionOutcomeStore";
+import {
+  evaluateProgressStar,
+  evaluateMasteryBadge,
+  evaluateFocusBadge,
+  BadgeSuggestion,
+  StudentBadgeContext,
+  BADGE_CRITERIA,
+} from "./badgeCriteria";
+import { badgeStore } from "../stores/badgeStore";
 
 // ============================================
 // Priority Calculation
@@ -115,6 +125,11 @@ interface CreateInsightParams {
   assignmentId?: string;
   ruleName: string;
   signals: Record<string, any>;
+  suggestedBadge?: {
+    badgeType: BadgeType;
+    reason: string;
+    evidence?: Record<string, any>;
+  };
 }
 
 /**
@@ -123,7 +138,7 @@ interface CreateInsightParams {
 function createInsight(params: CreateInsightParams): Recommendation {
   const now = new Date().toISOString();
 
-  return {
+  const rec: Recommendation = {
     id: randomUUID(),
     insightType: params.insightType,
     type: params.legacyType,
@@ -161,6 +176,13 @@ function createInsight(params: CreateInsightParams): Recommendation {
     status: "active",
     createdAt: now,
   };
+
+  // Add badge suggestion if provided
+  if (params.suggestedBadge) {
+    rec.suggestedBadge = params.suggestedBadge;
+  }
+
+  return rec;
 }
 
 // ============================================
@@ -513,17 +535,55 @@ function detectChallengeOpportunities(students: StudentPerformanceData[]): Recom
         continue;
       }
 
+      // Check for Mastery Badge eligibility (subject-level excellence)
+      let suggestedBadge: CreateInsightParams["suggestedBadge"] | undefined;
+
+      // Build badge context for Mastery evaluation
+      // Note: This requires subject history which we build from the student's data
+      if (student.subjectHistory && student.subjectHistory.length > 0) {
+        const badgeContext: StudentBadgeContext = {
+          studentId: student.studentId,
+          studentName: student.studentName,
+          currentAttempt: {
+            assignmentId: student.assignmentId || "",
+            assignmentTitle: student.assignmentTitle,
+            subject: student.subject,
+            score: student.score,
+            hintUsageRate: student.hintUsageRate,
+            questionCount: student.questionCount || 0,
+            completedAt: student.completedAt || new Date().toISOString(),
+          },
+          subjectHistory: student.subjectHistory,
+          awardedBadges: badgeStore.getForCooldownCheck(student.studentId),
+        };
+
+        const masteryBadgeSuggestion = evaluateMasteryBadge(badgeContext);
+        if (masteryBadgeSuggestion) {
+          suggestedBadge = {
+            badgeType: "mastery_badge",
+            reason: masteryBadgeSuggestion.reason,
+            evidence: masteryBadgeSuggestion.evidence,
+          };
+        }
+      }
+
       const rec = createInsight({
         insightType: "challenge_opportunity",
         legacyType: "enrichment",
         summary: `${student.studentName} shows readiness for additional challenge`,
         evidence,
-        suggestedTeacherActions: [
-          "Consider offering extension activities on this topic",
-          "Explore peer tutoring opportunities",
-          "Discuss advanced materials or independent projects",
-        ],
-        priorityLevel,
+        suggestedTeacherActions: suggestedBadge
+          ? [
+              `Award a Mastery Badge for ${student.subject || "this subject"}`,
+              "Consider offering extension activities on this topic",
+              "Explore peer tutoring opportunities",
+            ]
+          : [
+              "Consider offering extension activities on this topic",
+              "Explore peer tutoring opportunities",
+              "Discuss advanced materials or independent projects",
+            ],
+        priorityLevel: suggestedBadge ? "high" : priorityLevel,
         confidenceScore,
         studentIds: [student.studentId],
         assignmentId: student.assignmentId,
@@ -534,6 +594,7 @@ function detectChallengeOpportunities(students: StudentPerformanceData[]): Recom
           hintUsageRate: student.hintUsageRate,
           coachIntent: student.coachIntent,
         },
+        suggestedBadge,
       });
 
       recommendations.push(rec);
@@ -577,6 +638,39 @@ function detectCelebrateProgress(students: StudentPerformanceData[]): Recommenda
       // Calculate confidence based on improvement magnitude
       const confidenceScore: ConfidenceScore = improvement >= 30 ? 0.9 : 0.85;
 
+      // Check for Progress Star badge eligibility
+      let suggestedBadge: CreateInsightParams["suggestedBadge"] | undefined;
+
+      // Build badge context for Progress Star evaluation
+      const badgeContext: StudentBadgeContext = {
+        studentId: student.studentId,
+        studentName: student.studentName,
+        currentAttempt: {
+          assignmentId: student.assignmentId || "",
+          assignmentTitle: student.assignmentTitle,
+          subject: student.subject,
+          score: student.score,
+          hintUsageRate: student.hintUsageRate,
+          questionCount: student.questionCount || 0,
+          completedAt: student.completedAt || new Date().toISOString(),
+        },
+        previousAttempts: student.previousScore !== undefined ? [{
+          assignmentId: student.assignmentId || "",
+          score: student.previousScore,
+          completedAt: student.previousCompletedAt || new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString(),
+        }] : [],
+        awardedBadges: badgeStore.getForCooldownCheck(student.studentId),
+      };
+
+      const progressStarSuggestion = evaluateProgressStar(badgeContext);
+      if (progressStarSuggestion) {
+        suggestedBadge = {
+          badgeType: "progress_star",
+          reason: progressStarSuggestion.reason,
+          evidence: progressStarSuggestion.evidence,
+        };
+      }
+
       const rec = createInsight({
         insightType: "celebrate_progress",
         legacyType: "celebrate",
@@ -585,11 +679,17 @@ function detectCelebrateProgress(students: StudentPerformanceData[]): Recommenda
           `Improved from ${Math.round(student.previousScore!)}% to ${Math.round(student.score)}% (+${Math.round(improvement)} points)`,
           `Assignment: ${student.assignmentTitle}`,
         ],
-        suggestedTeacherActions: [
-          "Brief acknowledgment can reinforce their effort and growth",
-          "Consider sharing what strategies they used that worked well",
-        ],
-        priorityLevel: "medium",
+        suggestedTeacherActions: suggestedBadge
+          ? [
+              "Award a Progress Star badge to celebrate their growth",
+              "Brief acknowledgment can reinforce their effort and growth",
+              "Consider sharing what strategies they used that worked well",
+            ]
+          : [
+              "Brief acknowledgment can reinforce their effort and growth",
+              "Consider sharing what strategies they used that worked well",
+            ],
+        priorityLevel: suggestedBadge ? "high" : "medium",
         confidenceScore,
         studentIds: [student.studentId],
         assignmentId: student.assignmentId,
@@ -600,10 +700,106 @@ function detectCelebrateProgress(students: StudentPerformanceData[]): Recommenda
           currentScore: student.score,
           improvement,
         },
+        suggestedBadge,
       });
 
       recommendations.push(rec);
     }
+  }
+
+  return recommendations;
+}
+
+// ============================================
+// Rule 4b: Focus Badge (Persistence Through Difficulty)
+// ============================================
+
+/**
+ * Detect students who showed persistence by completing despite heavy hint usage.
+ *
+ * Focus Badge criteria:
+ * - Hint usage >= 60% of questions
+ * - Completed the assignment
+ * - Score >= 50%
+ * - Time spent >= 10 minutes (if available)
+ *
+ * This celebrates students who persevered through challenging material.
+ */
+function detectPersistence(students: StudentPerformanceData[]): Recommendation[] {
+  const recommendations: Recommendation[] = [];
+  const focusCriteria = BADGE_CRITERIA.focusBadge;
+
+  for (const student of students) {
+    // Check basic Focus Badge criteria
+    if (student.hintUsageRate < focusCriteria.minHintUsageRate) continue;
+    if (student.score < focusCriteria.minScore) continue;
+
+    // Check for duplicate
+    if (
+      recommendationStore.exists("persistence", [student.studentId], student.assignmentId)
+    ) {
+      continue;
+    }
+
+    // Build badge context for Focus Badge evaluation
+    const badgeContext: StudentBadgeContext = {
+      studentId: student.studentId,
+      studentName: student.studentName,
+      currentAttempt: {
+        assignmentId: student.assignmentId || "",
+        assignmentTitle: student.assignmentTitle,
+        subject: student.subject,
+        score: student.score,
+        hintUsageRate: student.hintUsageRate,
+        timeSpentMinutes: student.timeSpentMinutes,
+        questionCount: student.questionCount || 0,
+        completedAt: student.completedAt || new Date().toISOString(),
+      },
+      awardedBadges: badgeStore.getForCooldownCheck(student.studentId),
+    };
+
+    const focusBadgeSuggestion = evaluateFocusBadge(badgeContext);
+
+    // Only create recommendation if badge is eligible (passes cooldown checks)
+    if (!focusBadgeSuggestion) continue;
+
+    const suggestedBadge: CreateInsightParams["suggestedBadge"] = {
+      badgeType: "persistence",
+      reason: focusBadgeSuggestion.reason,
+      evidence: focusBadgeSuggestion.evidence,
+    };
+
+    const confidenceScore: ConfidenceScore = student.score >= 70 ? 0.9 : 0.8;
+
+    const rec = createInsight({
+      insightType: "celebrate_progress",
+      legacyType: "celebrate",
+      summary: `${student.studentName} showed great persistence`,
+      evidence: [
+        `Used coaching on ${Math.round(student.hintUsageRate * 100)}% of questions but completed the assignment`,
+        `Achieved ${Math.round(student.score)}% on ${student.assignmentTitle}`,
+        "Demonstrates perseverance through challenging material",
+      ],
+      suggestedTeacherActions: [
+        "Award a Focus Badge to celebrate their persistence",
+        "Acknowledge their effort in working through the challenge",
+        "Consider pairing with a peer for future collaborative work",
+      ],
+      priorityLevel: "medium",
+      confidenceScore,
+      studentIds: [student.studentId],
+      assignmentId: student.assignmentId,
+      ruleName: "persistence",
+      signals: {
+        studentName: student.studentName,
+        score: student.score,
+        hintUsageRate: student.hintUsageRate,
+        timeSpentMinutes: student.timeSpentMinutes,
+      },
+      suggestedBadge,
+    });
+
+    recommendations.push(rec);
   }
 
   return recommendations;
@@ -846,6 +1042,7 @@ export function generateRecommendations(
   const groupCheckIns = detectGroupCheckIn(students, aggregates);
   const challenges = detectChallengeOpportunities(students);
   const celebrations = detectCelebrateProgress(students);
+  const persistence = detectPersistence(students);        // Focus Badge
   const monitors = detectMonitorSituations(aggregates);
 
   const rawRecommendations = [
@@ -854,6 +1051,7 @@ export function generateRecommendations(
     ...groupCheckIns,
     ...challenges,
     ...celebrations,
+    ...persistence,
     ...monitors,
   ];
 

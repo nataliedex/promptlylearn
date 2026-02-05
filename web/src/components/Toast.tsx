@@ -6,19 +6,25 @@
  * Auto-dismisses after a configurable duration.
  */
 
-import { createContext, useContext, useState, useCallback, type ReactNode } from "react";
+import { createContext, useContext, useState, useCallback, useRef, type ReactNode } from "react";
 
 type ToastVariant = "success" | "error" | "info";
+
+interface ToastAction {
+  label: string;
+  onClick: () => void;
+}
 
 interface Toast {
   id: string;
   message: string;
   variant: ToastVariant;
+  action?: ToastAction;
 }
 
 interface ToastContextType {
-  showToast: (message: string, variant?: ToastVariant) => void;
-  showSuccess: (message: string) => void;
+  showToast: (message: string, variant?: ToastVariant, options?: { action?: ToastAction; duration?: number }) => void;
+  showSuccess: (message: string, options?: { action?: ToastAction; duration?: number }) => void;
   showError: (message: string) => void;
 }
 
@@ -38,25 +44,28 @@ interface ToastProviderProps {
 
 export function ToastProvider({ children }: ToastProviderProps) {
   const [toasts, setToasts] = useState<Toast[]>([]);
+  const dismissTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const removeToast = useCallback((id: string) => {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   }, []);
 
-  const showToast = useCallback((message: string, variant: ToastVariant = "info") => {
+  const showToast = useCallback((message: string, variant: ToastVariant = "info", options?: { action?: ToastAction; duration?: number }) => {
     const id = `toast-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-    const toast: Toast = { id, message, variant };
+    const toast: Toast = { id, message, variant, action: options?.action };
 
-    setToasts((prev) => [...prev, toast]);
+    // Clear previous dismiss timer and replace all existing toasts
+    if (dismissTimerRef.current) clearTimeout(dismissTimerRef.current);
+    setToasts([toast]);
 
-    // Auto-dismiss after 4 seconds
-    setTimeout(() => {
+    // Auto-dismiss (default 4s, configurable)
+    dismissTimerRef.current = setTimeout(() => {
       removeToast(id);
-    }, 4000);
+    }, options?.duration ?? 4000);
   }, [removeToast]);
 
-  const showSuccess = useCallback((message: string) => {
-    showToast(message, "success");
+  const showSuccess = useCallback((message: string, options?: { action?: ToastAction; duration?: number }) => {
+    showToast(message, "success", options);
   }, [showToast]);
 
   const showError = useCallback((message: string) => {
@@ -113,24 +122,25 @@ interface ToastItemProps {
 }
 
 function ToastItem({ toast, onDismiss }: ToastItemProps) {
+  // Softer, more muted color palette
   const config = {
     success: {
-      bg: "#e8f5e9",
-      border: "#4caf50",
-      color: "#2e7d32",
+      bg: "#f0fdf4",
+      border: "#4ade80",
+      color: "#166534",
       icon: "✓",
     },
     error: {
-      bg: "#ffebee",
-      border: "#f44336",
-      color: "#c62828",
+      bg: "#fef2f2",
+      border: "#f87171",
+      color: "#991b1b",
       icon: "✕",
     },
     info: {
-      bg: "#e3f2fd",
-      border: "#2196f3",
-      color: "#1565c0",
-      icon: "ℹ",
+      bg: "#f8fafc",
+      border: "#7c8fce",
+      color: "#475569",
+      icon: "i",
     },
   };
 
@@ -140,43 +150,73 @@ function ToastItem({ toast, onDismiss }: ToastItemProps) {
     <div
       style={{
         background: bg,
-        borderLeft: `4px solid ${border}`,
-        borderRadius: "8px",
-        padding: "12px 16px",
-        boxShadow: "0 4px 12px rgba(0,0,0,0.15)",
+        borderLeft: `3px solid ${border}`,
+        borderRadius: "6px",
+        padding: "12px 14px",
+        boxShadow: "0 4px 16px rgba(0,0,0,0.08)",
         display: "flex",
         alignItems: "flex-start",
-        gap: "12px",
-        animation: "slideIn 0.3s ease-out",
+        gap: "10px",
+        animation: "slideIn 0.25s ease-out",
       }}
     >
       <span
         style={{
           color: border,
-          fontWeight: "bold",
-          fontSize: "1rem",
+          fontWeight: "600",
+          fontSize: "0.8rem",
           lineHeight: 1,
+          width: "16px",
+          height: "16px",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
         }}
       >
         {icon}
       </span>
-      <p
-        style={{
-          margin: 0,
-          color: color,
-          fontSize: "0.9rem",
-          flex: 1,
-          lineHeight: 1.4,
-        }}
-      >
-        {toast.message}
-      </p>
+      <div style={{ flex: 1, display: "flex", alignItems: "center", gap: "10px" }}>
+        <p
+          style={{
+            margin: 0,
+            color: color,
+            fontSize: "0.875rem",
+            flex: 1,
+            lineHeight: 1.5,
+            fontWeight: "500",
+          }}
+        >
+          {toast.message}
+        </p>
+        {toast.action && (
+          <button
+            onClick={() => {
+              toast.action!.onClick();
+              onDismiss();
+            }}
+            style={{
+              background: "none",
+              border: "none",
+              color: border,
+              cursor: "pointer",
+              fontWeight: 600,
+              fontSize: "0.85rem",
+              textDecoration: "underline",
+              padding: "2px 4px",
+              whiteSpace: "nowrap",
+              flexShrink: 0,
+            }}
+          >
+            {toast.action.label}
+          </button>
+        )}
+      </div>
       <button
         onClick={onDismiss}
         style={{
           background: "none",
           border: "none",
-          color: "#999",
+          color: "#94a3b8",
           cursor: "pointer",
           padding: "0",
           fontSize: "1rem",

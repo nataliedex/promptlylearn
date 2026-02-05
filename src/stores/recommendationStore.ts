@@ -201,6 +201,28 @@ export class RecommendationStore {
   }
 
   /**
+   * Reactivate a recommendation (return to active status)
+   * Used when removing a to-do to return the recommendation to the list
+   */
+  reactivate(id: string): Recommendation | null {
+    const rec = this.load(id);
+    if (!rec) return null;
+
+    rec.status = "active";
+    // Clear resolution tracking
+    delete rec.reviewedAt;
+    delete rec.reviewedBy;
+    delete rec.resolvedAt;
+    delete rec.resolutionStatus;
+    delete rec.outcomeId;
+    // Clear submitted actions
+    delete rec.submittedActions;
+
+    this.save(rec);
+    return rec;
+  }
+
+  /**
    * Add feedback to a recommendation
    */
   addFeedback(id: string, feedback: FeedbackType, note?: string): Recommendation | null {
@@ -278,6 +300,97 @@ export class RecommendationStore {
         r.studentIds.includes(studentId) &&
         r.assignmentId === assignmentId
     );
+  }
+
+  /**
+   * Resolve all active recommendations for a student+assignment combination.
+   * This is called when a teacher reviews a student from the assignment page,
+   * ensuring that global "What Should I Do Next?" recommendations don't show
+   * insights that have already been addressed at the assignment level.
+   *
+   * @param studentId - The student being reviewed
+   * @param assignmentId - The assignment being reviewed
+   * @param reviewedBy - Optional teacher ID who performed the review
+   * @returns Array of resolved recommendation IDs
+   */
+  resolveByStudentAssignment(
+    studentId: string,
+    assignmentId: string,
+    reviewedBy?: string
+  ): string[] {
+    const data = this.loadAll();
+    const resolvedIds: string[] = [];
+    const now = new Date().toISOString();
+
+    // Find all active recommendations for this student+assignment
+    for (const rec of data.recommendations) {
+      // Only resolve active recommendations
+      if (rec.status !== "active") continue;
+
+      // Must match the student
+      if (!rec.studentIds.includes(studentId)) continue;
+
+      // Must match the assignment (if specified on the recommendation)
+      // Also resolve recommendations without assignmentId if they're for this student
+      // (global insights that may have been generated from this assignment's data)
+      if (rec.assignmentId && rec.assignmentId !== assignmentId) continue;
+
+      // Mark as resolved
+      rec.status = "resolved";
+      rec.resolutionStatus = "completed";
+      rec.resolvedAt = now;
+      rec.reviewedAt = rec.reviewedAt || now;
+      if (reviewedBy) {
+        rec.reviewedBy = reviewedBy;
+      }
+
+      resolvedIds.push(rec.id);
+    }
+
+    if (resolvedIds.length > 0) {
+      this.writeData(data);
+      console.log(
+        `Resolved ${resolvedIds.length} recommendations for student ${studentId} on assignment ${assignmentId}`
+      );
+    }
+
+    return resolvedIds;
+  }
+
+  /**
+   * Resolve all active recommendations for a student across all assignments.
+   * Used when taking a global action on a student (e.g., from "What Should I Do Next?").
+   *
+   * @param studentId - The student
+   * @param reviewedBy - Optional teacher ID
+   * @returns Array of resolved recommendation IDs
+   */
+  resolveByStudent(studentId: string, reviewedBy?: string): string[] {
+    const data = this.loadAll();
+    const resolvedIds: string[] = [];
+    const now = new Date().toISOString();
+
+    for (const rec of data.recommendations) {
+      if (rec.status !== "active") continue;
+      if (!rec.studentIds.includes(studentId)) continue;
+
+      rec.status = "resolved";
+      rec.resolutionStatus = "completed";
+      rec.resolvedAt = now;
+      rec.reviewedAt = rec.reviewedAt || now;
+      if (reviewedBy) {
+        rec.reviewedBy = reviewedBy;
+      }
+
+      resolvedIds.push(rec.id);
+    }
+
+    if (resolvedIds.length > 0) {
+      this.writeData(data);
+      console.log(`Resolved ${resolvedIds.length} recommendations for student ${studentId}`);
+    }
+
+    return resolvedIds;
   }
 
   // ============================================
