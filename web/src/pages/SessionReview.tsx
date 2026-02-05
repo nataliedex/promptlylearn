@@ -4,6 +4,7 @@ import EducatorHeader from "../components/EducatorHeader";
 import {
   getSession,
   getLesson,
+  getStudent,
   updateSession,
   textToSpeech,
   type Session,
@@ -14,6 +15,7 @@ export default function SessionReview() {
   const { sessionId } = useParams<{ sessionId: string }>();
   const [session, setSession] = useState<Session | null>(null);
   const [lesson, setLesson] = useState<Lesson | null>(null);
+  const [studentFullName, setStudentFullName] = useState<string>("");
   const [loading, setLoading] = useState(true);
   const [playingIndex, setPlayingIndex] = useState<number | null>(null);
   const [speakingType, setSpeakingType] = useState<"question" | "response" | null>(null);
@@ -46,6 +48,15 @@ export default function SessionReview() {
 
         const lessonData = await getLesson(sessionData.lessonId);
         setLesson(lessonData);
+
+        // Fetch student's full name for educator display
+        try {
+          const studentData = await getStudent(sessionData.studentId);
+          setStudentFullName(studentData.name);
+        } catch {
+          // Fallback to session's stored name if student fetch fails
+          setStudentFullName(sessionData.studentName);
+        }
       } catch (err) {
         console.error("Failed to load session:", err);
       } finally {
@@ -255,7 +266,7 @@ export default function SessionReview() {
     <div className="container">
       <EducatorHeader
         breadcrumbs={[
-          { label: session.studentName || "Student", to: `/educator/student/${session.studentId}` },
+          { label: studentFullName || session.studentName || "Student", to: `/educator/student/${session.studentId}` },
           { label: session.lessonTitle || "Session" },
         ]}
       />
@@ -263,7 +274,7 @@ export default function SessionReview() {
       <div className="header">
         <h1>{session.lessonTitle}</h1>
         <p>
-          {session.studentName} • {new Date(session.completedAt || session.startedAt).toLocaleDateString()}
+          {studentFullName || session.studentName} • {new Date(session.completedAt || session.startedAt).toLocaleDateString()}
         </p>
       </div>
 
@@ -294,7 +305,7 @@ export default function SessionReview() {
       {/* Educator Notes for Overall Session */}
       <div className="card" style={{ marginTop: "24px" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px" }}>
-          <h3 style={{ margin: 0 }}>📝 Educator Notes</h3>
+          <h3 style={{ margin: 0 }}>Educator Notes</h3>
           {saving && <span style={{ color: "#666", fontSize: "0.85rem" }}>Saving...</span>}
           {!saving && lastSaved && (
             <span style={{ color: "#4caf50", fontSize: "0.85rem" }}>
@@ -371,7 +382,7 @@ export default function SessionReview() {
                   }}
                   title="Listen to question"
                 >
-                  {playingIndex === index && speakingType === "question" ? "⏹" : "🔊"}
+                  {playingIndex === index && speakingType === "question" ? "Stop" : "Play"}
                 </button>
               </div>
             </div>
@@ -386,7 +397,7 @@ export default function SessionReview() {
               }}
             >
               <div style={{ display: "flex", alignItems: "flex-start", gap: "12px" }}>
-                <span style={{ fontSize: "1.2rem" }}>👤</span>
+                <span style={{ fontSize: "0.85rem", fontWeight: 600, color: "#666" }}>Student</span>
                 <div style={{ flex: 1 }}>
                   <p style={{ margin: 0, fontSize: "0.85rem", color: "#666", marginBottom: "4px" }}>
                     Student's Response
@@ -404,7 +415,7 @@ export default function SessionReview() {
                           fontSize: "0.8rem",
                         }}
                       >
-                        🎤 Voice recording
+                        Voice recording
                       </span>
                     )}
                     {response.hintUsed && (
@@ -442,7 +453,7 @@ export default function SessionReview() {
                     }}
                     title="Listen to student's voice recording"
                   >
-                    {playingIndex === index && speakingType === "response" ? "⏹" : "🎤"}
+                    {playingIndex === index && speakingType === "response" ? "Stop" : "Play"}
                   </button>
                 ) : (
                   <button
@@ -462,7 +473,7 @@ export default function SessionReview() {
                     }}
                     title="Listen to response (text-to-speech)"
                   >
-                    {playingIndex === index && speakingType === "response" ? "⏹" : "🔊"}
+                    {playingIndex === index && speakingType === "response" ? "Stop" : "Play"}
                   </button>
                 )}
               </div>
@@ -486,7 +497,7 @@ export default function SessionReview() {
                 }}
               >
                 <span style={{ fontSize: "1rem" }}>
-                  {criteriaScore.score >= 70 ? "✅" : criteriaScore.score >= 50 ? "💭" : "📝"}
+                  {criteriaScore.score >= 70 ? "Good" : criteriaScore.score >= 50 ? "OK" : "Review"}
                 </span>
                 <span
                   style={{
@@ -529,7 +540,7 @@ export default function SessionReview() {
             {/* Educator note for this response */}
             <div style={{ marginTop: "12px" }}>
               <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "6px" }}>
-                <span style={{ fontSize: "0.85rem", color: "#666" }}>✏️ Your note for this response:</span>
+                <span style={{ fontSize: "0.85rem", color: "#666" }}>Your note for this response:</span>
               </div>
               <textarea
                 value={responseNotes[response.promptId] || ""}

@@ -517,7 +517,7 @@ export default function LessonBuilder() {
       {/* Step 7: Saved - Prompt to Assign */}
       {step === "saved" && lesson && (
         <div className="card" style={{ textAlign: "center", padding: "48px" }}>
-          <div style={{ fontSize: "3rem", marginBottom: "16px" }}>✓</div>
+          <div style={{ fontSize: "1rem", marginBottom: "16px", fontWeight: 600, color: "#2e7d32" }}>Saved</div>
           <h2 style={{ marginBottom: "8px", color: "#2e7d32" }}>Lesson Saved</h2>
           <p style={{ color: "#666", marginBottom: "32px" }}>
             "{lesson.title}" has been created with {lesson.prompts.length} question{lesson.prompts.length !== 1 ? "s" : ""}.

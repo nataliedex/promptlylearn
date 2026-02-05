@@ -570,7 +570,6 @@ export default function AssignmentReview() {
         )}
 
         <div className="card" style={{ textAlign: "center", padding: "48px" }}>
-          <div style={{ fontSize: "3rem", marginBottom: "16px" }}>📋</div>
           <h3 style={{ margin: 0, marginBottom: "8px" }}>No students assigned yet</h3>
           <p style={{ color: "#666", margin: 0 }}>
             Students will appear here once they are assigned to this lesson.
@@ -1005,7 +1004,7 @@ export default function AssignmentReview() {
                   border: "1px solid #bbf7d0",
                 }}
               >
-                <span style={{ color: "#16a34a", fontSize: "1.1rem" }}>✓</span>
+                <span style={{ color: "#16a34a", fontSize: "0.9rem", fontWeight: 600 }}>Done</span>
                 <span style={{ color: "#166534", fontSize: "0.9rem" }}>
                   No students currently need review for this assignment.
                 </span>
@@ -1588,7 +1587,7 @@ function EditLessonModal({
               color: "#92400e",
             }}
           >
-            <span>⚠</span>
+            <span style={{ fontWeight: 600 }}>Note:</span>
             <span>This assignment already has student responses. Changes may affect grading.</span>
           </div>
         )}
@@ -2469,7 +2468,6 @@ function StudentRow({ student, onReview, onViewStudent, showReviewButton, recomm
                 }}
                 title={`${openTodos.length} open follow-up${openTodos.length !== 1 ? "s" : ""}`}
               >
-                <span>📋</span>
                 <span>{openTodos.length} follow-up{openTodos.length !== 1 ? "s" : ""}</span>
               </button>
             )}
@@ -2491,7 +2489,6 @@ function StudentRow({ student, onReview, onViewStudent, showReviewButton, recomm
                   whiteSpace: "nowrap",
                 }}
               >
-                <span>⭐</span>
                 <span>Badge awarded</span>
               </span>
             )}
@@ -2513,7 +2510,6 @@ function StudentRow({ student, onReview, onViewStudent, showReviewButton, recomm
                   whiteSpace: "nowrap",
                 }}
               >
-                <span>✓</span>
                 <span>Action taken</span>
               </span>
             )}
@@ -2624,9 +2620,9 @@ interface TeacherStatusStyle {
 const TEACHER_STATUS_CONFIG: Record<TeacherStatusValue, TeacherStatusStyle> = {
   "not-started": { bg: "#f1f5f9", color: "#94a3b8", label: "Not started", icon: "" },
   "pending-review": { bg: "#fff7ed", color: "#ea580c", label: "Needs review", icon: "" },
-  "reviewed": { bg: "#e8f5e9", color: "#166534", label: "Reviewed", icon: "✓" },
-  "followup-scheduled": { bg: "#fef3c7", color: "#b45309", label: "Follow-up scheduled", icon: "📋" },
-  "resolved": { bg: "#e8f5e9", color: "#166534", label: "Reviewed", icon: "✓" },
+  "reviewed": { bg: "#e8f5e9", color: "#166534", label: "Reviewed", icon: "" },
+  "followup-scheduled": { bg: "#fef3c7", color: "#b45309", label: "Follow-up scheduled", icon: "" },
+  "resolved": { bg: "#e8f5e9", color: "#166534", label: "Reviewed", icon: "" },
 };
 
 /** Type-safe label lookup — never returns undefined or "—" */
@@ -2661,7 +2657,7 @@ function TeacherStatusBadge({ status }: { status: TeacherStatusInfo }) {
         {label}
       </span>
       {status.hasNote && (
-        <span style={{ fontSize: "0.75rem" }} title="Has teacher notes">📝</span>
+        <span style={{ fontSize: "0.7rem", color: "#64748b", fontStyle: "italic" }} title="Has teacher notes">noted</span>
       )}
     </div>
   );
@@ -2729,8 +2725,7 @@ function StudentProgressBadge({
           color: color,
         }}
       >
-        {progressStatus === "resubmitted" && <span>↻</span>}
-        {progressStatus === "submitted" && <span>✓</span>}
+        {progressStatus === "resubmitted" && <span style={{ fontWeight: 600 }}>Re:</span>}
         {label}
       </span>
     );

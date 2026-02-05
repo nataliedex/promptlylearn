@@ -75,6 +75,13 @@ export class SessionStore {
   }
 
   /**
+   * Get paused sessions for a student (for "Take a break" resume feature)
+   */
+  getPausedByStudentId(studentId: string): Session[] {
+    return this.getByStudentId(studentId).filter(s => s.status === "paused");
+  }
+
+  /**
    * Delete a session by ID
    */
   delete(sessionId: string): boolean {

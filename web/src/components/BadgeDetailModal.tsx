@@ -17,49 +17,49 @@ const BADGE_CONFIG: Record<string, {
   encouragement: string;
 }> = {
   progress_star: {
-    icon: "⭐",
+    icon: "",
     name: "Progress Star",
     color: "#ffc107",
     defaultReason: "You worked hard and improved your score on this assignment!",
     encouragement: "Your hard work is paying off. Keep practicing!",
   },
   mastery_badge: {
-    icon: "🏆",
+    icon: "",
     name: "Mastery Badge",
     color: "#ff9800",
     defaultReason: "You showed great understanding across multiple lessons in this subject!",
     encouragement: "You really know your stuff. Amazing work!",
   },
   effort_award: {
-    icon: "💪",
+    icon: "",
     name: "Effort Award",
     color: "#4caf50",
     defaultReason: "You put in great effort on your work!",
     encouragement: "Effort is what matters most. Keep it up!",
   },
   helper_badge: {
-    icon: "🤝",
+    icon: "",
     name: "Helper Badge",
     color: "#2196f3",
     defaultReason: "You helped others learn!",
     encouragement: "Helping others is a wonderful skill!",
   },
   persistence: {
-    icon: "🎯",
+    icon: "",
     name: "Focus Badge",
     color: "#9c27b0",
     defaultReason: "You didn't give up, even when it was challenging!",
     encouragement: "Sticking with hard things is how we grow!",
   },
   curiosity: {
-    icon: "🔍",
+    icon: "",
     name: "Curiosity Award",
     color: "#00bcd4",
     defaultReason: "You asked great questions and explored new ideas!",
     encouragement: "Curious minds discover amazing things!",
   },
   custom: {
-    icon: "🌟",
+    icon: "",
     name: "Special Badge",
     color: "#e91e63",
     defaultReason: "Your teacher gave you this special recognition!",
@@ -250,7 +250,7 @@ export default function BadgeDetailModal({ badge, studentId, onClose }: BadgeDet
               gap: "8px",
             }}
           >
-            <span>🎉</span> Why you earned it
+            Why you earned it
           </h3>
           <p
             style={{
@@ -284,7 +284,7 @@ export default function BadgeDetailModal({ badge, studentId, onClose }: BadgeDet
                 gap: "8px",
               }}
             >
-              <span>📊</span> Here's what you did
+              Here's what you did
             </h3>
             <ul
               style={{
@@ -322,7 +322,7 @@ export default function BadgeDetailModal({ badge, studentId, onClose }: BadgeDet
                 gap: "8px",
               }}
             >
-              <span>📝</span> Linked work
+              Linked work
             </h3>
             {badge.assignmentTitle ? (
               <p

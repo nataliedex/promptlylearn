@@ -47,6 +47,11 @@ import {
   dismissCoachingInvite,
   generateLesson,
   saveLesson,
+  getTeacherProfile,
+  getLessonDrafts,
+  createLessonDraft,
+  updateLessonDraft,
+  deleteLessonDraft,
   type ComputedAssignmentState,
   type AssignmentDashboardData,
   type ClassSummary,
@@ -65,12 +70,15 @@ import {
   type CreationMode,
   type CreateClassInput,
   type CoachingInvite,
+  type TeacherProfile,
+  type LessonDraft,
 } from "../services/api";
 import RecommendationPanel from "../components/RecommendationPanel";
 import TeacherTodosPanel from "../components/TeacherTodosPanel";
 import ArchivedRecommendationsPanel from "../components/ArchivedRecommendationsPanel";
 import Drawer from "../components/Drawer";
 import EducatorHeader from "../components/EducatorHeader";
+import TeacherProfileDrawer from "../components/TeacherProfileDrawer";
 import {
   getLastUsedSettings,
   saveLastUsedSettings,
@@ -81,7 +89,7 @@ import {
 import { useToast } from "../components/Toast";
 
 // Drawer type enum
-type DrawerType = "todos" | "coach" | "unassigned" | "classes" | "create-lesson" | null;
+type DrawerType = "todos" | "coach" | "unassigned" | "classes" | "create-lesson" | "assign-lesson" | null;
 
 // Type for assignments grouped by class
 interface ClassAssignmentGroup {
@@ -117,8 +125,12 @@ export default function EducatorDashboard() {
   const [todoCounts, setTodoCounts] = useState<TeacherTodoCounts>({ total: 0, open: 0, done: 0 });
   const [attentionState, setAttentionState] = useState<DashboardAttentionState | null>(null);
   const [unassignedLessons, setUnassignedLessons] = useState<LessonSummary[]>([]);
+  const [lessonDrafts, setLessonDrafts] = useState<LessonDraft[]>([]);
+  const [editingDraft, setEditingDraft] = useState<LessonDraft | null>(null);
+  const [assigningLesson, setAssigningLesson] = useState<LessonSummary | null>(null);
   const [coachingInvites, setCoachingInvites] = useState<CoachingInvite[]>([]);
   const [lessonSubjects, setLessonSubjects] = useState<Map<string, string | undefined>>(new Map());
+  const [teacherProfile, setTeacherProfile] = useState<TeacherProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -132,6 +144,9 @@ export default function EducatorDashboard() {
   // Drawer state - initialize from URL param if present
   const initialDrawer = searchParams.get("drawer") as DrawerType;
   const [openDrawer, setOpenDrawer] = useState<DrawerType>(initialDrawer);
+
+  // Profile drawer state (separate from main drawer)
+  const [profileDrawerOpen, setProfileDrawerOpen] = useState(false);
 
   // Ref for scrolling to assignments section
   const assignmentsSectionRef = useRef<HTMLDivElement>(null);
@@ -188,18 +203,20 @@ export default function EducatorDashboard() {
         console.log("Auto-archive check skipped");
       });
 
-      const [dashData, classesData, studentsData, unassignedData, allLessonsData] = await Promise.all([
+      const [dashData, classesData, studentsData, unassignedData, allLessonsData, draftsData] = await Promise.all([
         getAssignmentDashboard(),
         getClasses(),
         getStudents(),
         getUnassignedLessons(),
         getLessons(),
+        getLessonDrafts(),
       ]);
 
       setDashboardData(dashData);
       setClasses(classesData);
       setAllStudents(studentsData);
       setUnassignedLessons(unassignedData);
+      setLessonDrafts(draftsData.drafts);
 
       // Build lesson subjects map
       const subjectsMap = new Map<string, string | undefined>();
@@ -306,6 +323,14 @@ export default function EducatorDashboard() {
         setCoachingInvites(filtered);
       } catch (invErr) {
         console.log("Coaching invites not available:", invErr);
+      }
+
+      // Load teacher profile for header display
+      try {
+        const profile = await getTeacherProfile();
+        setTeacherProfile(profile);
+      } catch (profileErr) {
+        console.log("Teacher profile not available:", profileErr);
       }
     } catch (err) {
       console.error("Failed to load educator dashboard:", err);
@@ -588,8 +613,14 @@ export default function EducatorDashboard() {
           (t) => t.assignmentId === assignment.assignmentId && t.status === "open"
         ).length;
 
-        // Calculate unreviewed (completed but not reviewed)
-        const unreviewed = assignment.completedCount - (assignment.allFlaggedReviewed ? assignment.completedCount : 0);
+        // Check if all completed submissions have been reviewed
+        const completedStudents = assignment.studentStatuses.filter(s => s.isComplete);
+        const hasCompletedSubmissions = completedStudents.length > 0;
+        const allCompletedReviewed = hasCompletedSubmissions &&
+          completedStudents.every(s => s.hasTeacherNote);
+
+        // Calculate unreviewed count
+        const unreviewed = completedStudents.filter(s => !s.hasTeacherNote).length;
 
         const prioritizedItem: PrioritizedAssignment = {
           assignment,
@@ -608,14 +639,16 @@ export default function EducatorDashboard() {
         if (hasAttention) {
           prioritizedItem.priority = "needs-attention";
           needsAttention.push(prioritizedItem);
-        } else if (hasActivity && !assignment.allFlaggedReviewed) {
-          prioritizedItem.priority = "in-progress";
-          inProgress.push(prioritizedItem);
         } else if (!hasActivity) {
+          // No submissions yet
           prioritizedItem.priority = "awaiting-submissions";
           awaitingSubmissions.push(prioritizedItem);
+        } else if (!allCompletedReviewed || !assignment.allFlaggedReviewed) {
+          // Has submissions but not all reviewed, OR has outstanding flagged items
+          prioritizedItem.priority = "in-progress";
+          inProgress.push(prioritizedItem);
         } else {
-          // Has activity, all reviewed - shouldn't be in "active" but handle anyway
+          // All conditions met: has submissions, all reviewed, no outstanding flagged items
           prioritizedItem.priority = "reviewed";
           reviewed.push(prioritizedItem);
         }
@@ -664,29 +697,18 @@ export default function EducatorDashboard() {
 
   return (
     <div className="container">
-      <EducatorHeader />
+      <EducatorHeader
+        teacherDisplayName={teacherProfile?.studentFacingName}
+        onOpenProfile={() => setProfileDrawerOpen(true)}
+        onOpenClasses={() => setOpenDrawer("classes")}
+        onOpenCreateLesson={() => setOpenDrawer("create-lesson")}
+      />
 
       <div className="header">
         {/* Row 1: Primary Header - Title + Actions */}
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: "16px", marginBottom: "16px" }}>
-          <div>
-            <h1>Educator Dashboard</h1>
-            <p>Student progress, patterns, and recommended actions</p>
-          </div>
-          <div style={{ display: "flex", gap: "10px", alignItems: "center" }}>
-            <button
-              className="btn btn-primary"
-              onClick={() => setOpenDrawer("classes")}
-            >
-              My Classes
-            </button>
-            <button
-              className="btn btn-primary"
-              onClick={() => setOpenDrawer("create-lesson")}
-            >
-              + Create Lesson
-            </button>
-          </div>
+        <div style={{ marginBottom: "16px" }}>
+          <h1>Your Teaching Hub</h1>
+          <p>Student progress, patterns, and recommended actions</p>
         </div>
 
         {/* Row 2: System Status Indicators */}
@@ -840,7 +862,6 @@ export default function EducatorDashboard() {
             boxShadow: "0 1px 3px rgba(0,0,0,0.1)",
           }}
         >
-          <span style={{ fontSize: "1.1rem" }}>✓</span>
           <span style={{ fontWeight: 500 }}>All students on track — no one needs attention right now</span>
         </div>
       )}
@@ -938,9 +959,20 @@ export default function EducatorDashboard() {
         }}
       >
         <button
-          className="btn btn-secondary"
+          className="btn"
           onClick={() => navigate("/educator/archived")}
-          style={{ marginLeft: "auto" }}
+          style={{
+            marginLeft: "auto",
+            background: "rgba(255, 255, 255, 0.18)",
+            color: "white",
+            border: "1px solid rgba(255, 255, 255, 0.45)",
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.background = "rgba(255, 255, 255, 0.28)";
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.background = "rgba(255, 255, 255, 0.18)";
+          }}
         >
           Archived ({archivedCount})
         </button>
@@ -983,7 +1015,6 @@ export default function EducatorDashboard() {
               gap: "4px",
             }}
           >
-            <span>🖨️</span>
             Print
           </button>
         }
@@ -1035,10 +1066,14 @@ export default function EducatorDashboard() {
       >
         <UnassignedLessonsDrawerContent
           lessons={unassignedLessons}
+          drafts={lessonDrafts}
           availableSubjects={[...new Set(classes.flatMap(c => c.subjects || []))]}
           onAssign={(lessonId) => {
-            setOpenDrawer(null);
-            navigate(`/educator/assign-lesson?lessonId=${lessonId}`);
+            const lesson = unassignedLessons.find(l => l.id === lessonId);
+            if (lesson) {
+              setAssigningLesson(lesson);
+              setOpenDrawer("assign-lesson");
+            }
           }}
           onEdit={(lessonId) => {
             setOpenDrawer(null);
@@ -1055,6 +1090,20 @@ export default function EducatorDashboard() {
             } catch (err) {
               console.error("Failed to update lesson subject:", err);
               showError("Failed to update subject. Please try again.");
+            }
+          }}
+          onContinueDraft={(draft) => {
+            setEditingDraft(draft);
+            setOpenDrawer("create-lesson");
+          }}
+          onDeleteDraft={async (draftId) => {
+            try {
+              await deleteLessonDraft(draftId);
+              setLessonDrafts(prev => prev.filter(d => d.id !== draftId));
+              showSuccess("Draft deleted");
+            } catch (err) {
+              console.error("Failed to delete draft:", err);
+              showError("Failed to delete draft. Please try again.");
             }
           }}
         />
@@ -1086,19 +1135,68 @@ export default function EducatorDashboard() {
       {/* Create Lesson Drawer */}
       <Drawer
         isOpen={openDrawer === "create-lesson"}
-        onClose={() => setOpenDrawer(null)}
-        title="Create Lesson"
+        onClose={() => {
+          setOpenDrawer(null);
+          setEditingDraft(null);
+        }}
+        title={editingDraft ? "Continue Draft" : "Create Lesson"}
         width="520px"
       >
         <CreateLessonDrawerContent
-          onClose={() => setOpenDrawer(null)}
+          onClose={() => {
+            setOpenDrawer(null);
+            setEditingDraft(null);
+          }}
           onLessonCreated={(lessonId: string) => {
             setOpenDrawer(null);
+            setEditingDraft(null);
+            // Reload drafts in case one was deleted
+            getLessonDrafts().then(data => setLessonDrafts(data.drafts)).catch(console.error);
             navigate(`/educator/lesson/${lessonId}/edit`, { state: { justCreated: true } });
           }}
           classes={classes}
+          editingDraft={editingDraft}
+          onDraftSaved={() => {
+            // Reload drafts when saved
+            getLessonDrafts().then(data => setLessonDrafts(data.drafts)).catch(console.error);
+          }}
         />
       </Drawer>
+
+      {/* Assign Lesson Drawer */}
+      <Drawer
+        isOpen={openDrawer === "assign-lesson"}
+        onClose={() => {
+          setOpenDrawer("unassigned");
+          setAssigningLesson(null);
+        }}
+        title={assigningLesson ? `Assign: ${assigningLesson.title}` : "Assign Lesson"}
+        width="520px"
+      >
+        {assigningLesson && (
+          <AssignLessonDrawerContent
+            lesson={assigningLesson}
+            classes={classes}
+            onCancel={() => {
+              setOpenDrawer("unassigned");
+              setAssigningLesson(null);
+            }}
+            onAssigned={() => {
+              // Reload unassigned lessons
+              getUnassignedLessons().then(data => setUnassignedLessons(data)).catch(console.error);
+              setOpenDrawer(null);
+              setAssigningLesson(null);
+            }}
+          />
+        )}
+      </Drawer>
+
+      {/* Teacher Profile Drawer */}
+      <TeacherProfileDrawer
+        isOpen={profileDrawerOpen}
+        onClose={() => setProfileDrawerOpen(false)}
+        onProfileUpdated={(updated) => setTeacherProfile(updated)}
+      />
     </div>
   );
 }
@@ -1551,13 +1649,6 @@ function CoachingActivitySection({ activities, onNavigate }: CoachingActivitySec
             }}
           >
             <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-              <span style={{ fontSize: "1.2rem" }}>
-                {activity.insight.intentLabel === "support-seeking"
-                  ? "🆘"
-                  : activity.insight.intentLabel === "enrichment-seeking"
-                  ? "🚀"
-                  : "💬"}
-              </span>
               <div>
                 <span style={{ fontWeight: 600, color: "#333" }}>{activity.studentName}</span>
               </div>
@@ -2053,28 +2144,35 @@ function UnassignedLessonsSection({ lessons, availableSubjects, onAssign, onArch
 
 interface UnassignedLessonsDrawerContentProps {
   lessons: LessonSummary[];
+  drafts: LessonDraft[];
   availableSubjects: string[];
   onAssign: (lessonId: string) => void;
   onEdit: (lessonId: string) => void;
   onArchive: (lessonId: string, title: string) => void;
   onDelete: (lessonId: string, title: string) => void;
   onSubjectChange: (lessonId: string, subject: string | null) => Promise<void>;
+  onContinueDraft: (draft: LessonDraft) => void;
+  onDeleteDraft: (draftId: string) => void;
 }
 
 function UnassignedLessonsDrawerContent({
   lessons,
+  drafts,
   availableSubjects,
   onAssign,
   onEdit,
   onArchive,
   onDelete,
-  onSubjectChange
+  onSubjectChange,
+  onContinueDraft,
+  onDeleteDraft,
 }: UnassignedLessonsDrawerContentProps) {
   const [editingSubject, setEditingSubject] = useState<string | null>(null);
   const [subjectValue, setSubjectValue] = useState("");
   const [originalValue, setOriginalValue] = useState("");
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  const [confirmDeleteDraft, setConfirmDeleteDraft] = useState<string | null>(null);
 
   useEffect(() => {
     const handleClickOutside = () => setOpenMenuId(null);
@@ -2102,13 +2200,13 @@ function UnassignedLessonsDrawerContent({
     setOriginalValue("");
   };
 
-  if (lessons.length === 0) {
+  if (lessons.length === 0 && drafts.length === 0) {
     return (
       <div style={{ textAlign: "center", padding: "32px 16px", color: "#666" }}>
-        <span style={{ fontSize: "2rem", display: "block", marginBottom: "12px" }}>📚</span>
-        <p style={{ margin: 0, fontWeight: 500 }}>No unassigned lessons</p>
+        {/* Empty state indicator */}
+        <p style={{ margin: 0, fontWeight: 500 }}>No unassigned lessons or drafts</p>
         <p style={{ margin: "8px 0 0 0", fontSize: "0.9rem" }}>
-          All your lessons have been assigned to classes.
+          Create a lesson to get started.
         </p>
       </div>
     );
@@ -2116,9 +2214,117 @@ function UnassignedLessonsDrawerContent({
 
   return (
     <div>
-      <p style={{ margin: "0 0 16px 0", color: "#666", fontSize: "0.9rem" }}>
-        {lessons.length} lesson{lessons.length !== 1 ? "s" : ""} ready to assign
-      </p>
+      {/* Drafts Section */}
+      {drafts.length > 0 && (
+        <div style={{ marginBottom: lessons.length > 0 ? "24px" : 0 }}>
+          <h4 style={{ margin: "0 0 12px 0", fontSize: "0.9rem", fontWeight: 600, color: "#64748b" }}>
+            Drafts ({drafts.length})
+          </h4>
+          <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+            {drafts.map((draft) => (
+              <div
+                key={draft.id}
+                style={{
+                  padding: "14px 16px",
+                  background: "var(--status-pending-bg)",
+                  borderRadius: "8px",
+                  border: "1px solid var(--status-pending-text)",
+                  borderLeftWidth: "3px",
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "12px" }}>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontWeight: 600, color: "#374151" }}>
+                      {draft.title || "Untitled lesson"}
+                    </div>
+                    <div style={{ fontSize: "0.8rem", color: "#64748b", marginTop: "4px" }}>
+                      {[draft.subject, draft.gradeLevel ? `Grade ${draft.gradeLevel}` : null]
+                        .filter(Boolean)
+                        .join(" · ") || "No subject set"}
+                    </div>
+                    <div style={{ fontSize: "0.75rem", color: "#94a3b8", marginTop: "4px" }}>
+                      Last edited {new Date(draft.updatedAt).toLocaleDateString()}
+                    </div>
+                  </div>
+                  <div style={{ display: "flex", gap: "8px", flexShrink: 0 }}>
+                    <button
+                      onClick={() => onContinueDraft(draft)}
+                      style={{
+                        padding: "6px 12px",
+                        fontSize: "0.8rem",
+                        background: "var(--accent-primary)",
+                        color: "white",
+                        border: "none",
+                        borderRadius: "6px",
+                        cursor: "pointer",
+                      }}
+                    >
+                      Continue
+                    </button>
+                    {confirmDeleteDraft === draft.id ? (
+                      <div style={{ display: "flex", gap: "4px" }}>
+                        <button
+                          onClick={() => {
+                            onDeleteDraft(draft.id);
+                            setConfirmDeleteDraft(null);
+                          }}
+                          style={{
+                            padding: "6px 10px",
+                            fontSize: "0.75rem",
+                            background: "var(--status-danger)",
+                            color: "white",
+                            border: "none",
+                            borderRadius: "4px",
+                            cursor: "pointer",
+                          }}
+                        >
+                          Delete
+                        </button>
+                        <button
+                          onClick={() => setConfirmDeleteDraft(null)}
+                          style={{
+                            padding: "6px 10px",
+                            fontSize: "0.75rem",
+                            background: "#e5e7eb",
+                            color: "#374151",
+                            border: "none",
+                            borderRadius: "4px",
+                            cursor: "pointer",
+                          }}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={() => setConfirmDeleteDraft(draft.id)}
+                        style={{
+                          padding: "6px 10px",
+                          fontSize: "0.8rem",
+                          background: "transparent",
+                          color: "#94a3b8",
+                          border: "1px solid #e5e7eb",
+                          borderRadius: "6px",
+                          cursor: "pointer",
+                        }}
+                      >
+                        Delete
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Ready to Assign Section */}
+      {lessons.length > 0 && (
+        <>
+          <h4 style={{ margin: "0 0 12px 0", fontSize: "0.9rem", fontWeight: 600, color: "#64748b" }}>
+            Ready to Assign ({lessons.length})
+          </h4>
 
       <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
         {lessons.map((lesson) => (
@@ -2344,6 +2550,8 @@ function UnassignedLessonsDrawerContent({
           </div>
         ))}
       </div>
+        </>
+      )}
     </div>
   );
 }
@@ -2418,7 +2626,6 @@ function CoachingActivityDrawerContent({ activities, coachingInvites, allStudent
   if (activities.length === 0 && coachingInvites.length === 0) {
     return (
       <div style={{ textAlign: "center", padding: "32px 16px", color: "#666" }}>
-        <span style={{ fontSize: "2rem", display: "block", marginBottom: "12px" }}>💬</span>
         <p style={{ margin: 0 }}>No coaching activity yet</p>
         <p style={{ margin: "8px 0 0 0", fontSize: "0.9rem" }}>
           When students use Ask Coach or you assign coaching sessions, activity will appear here.
@@ -2555,9 +2762,9 @@ function CoachingActivityDrawerContent({ activities, coachingInvites, allStudent
       </p>
 
       {/* Categories */}
-      {renderActivityGroup("Support-Seeking", supportSeeking, "🆘", "var(--status-pending-text)", "var(--status-pending-bg)")}
-      {renderActivityGroup("Enrichment-Seeking", enrichmentSeeking, "🚀", "var(--status-success-text)", "var(--status-success-bg)")}
-      {mixed.length > 0 && renderActivityGroup("General Usage", mixed, "💬", "var(--text-secondary)", "var(--surface-muted)")}
+      {renderActivityGroup("Support-Seeking", supportSeeking, "", "var(--status-pending-text)", "var(--status-pending-bg)")}
+      {renderActivityGroup("Enrichment-Seeking", enrichmentSeeking, "", "var(--status-success-text)", "var(--status-success-bg)")}
+      {mixed.length > 0 && renderActivityGroup("General Usage", mixed, "", "var(--text-secondary)", "var(--surface-muted)")}
 
       {/* Teacher-Assigned Sessions */}
       {coachingInvites.length > 0 && (
@@ -2574,7 +2781,6 @@ function CoachingActivityDrawerContent({ activities, coachingInvites, allStudent
               borderRadius: "6px",
             }}
           >
-            <span style={{ fontSize: "1rem" }}>📋</span>
             <span style={{ fontWeight: 500, fontSize: "0.9rem", color: "var(--status-violet-text)" }}>Teacher-Assigned Sessions</span>
             <span
               style={{
@@ -2900,7 +3106,7 @@ function ClassListView({
   if (classes.length === 0) {
     return (
       <div style={{ textAlign: "center", padding: "32px 16px", color: "#666" }}>
-        <span style={{ fontSize: "2rem", display: "block", marginBottom: "12px" }}>📚</span>
+        {/* Empty state indicator */}
         <p style={{ margin: 0, fontWeight: 500 }}>No classes yet</p>
         <p style={{ margin: "8px 0 16px 0", fontSize: "0.9rem" }}>
           Create a class to organize your students and assignments.
@@ -3627,28 +3833,20 @@ function ClassDetailDrawerView({
 // Create Lesson Drawer Content
 // ============================================
 
-const DRAFT_STORAGE_KEY = "lesson-draft";
-
-interface LessonDraft {
-  title: string;
-  subject: string;
-  gradeLevel: string;
-  questionCount: number;
-  description: string;
-  assignToClassId?: string;
-  savedAt: string;
-}
-
 interface CreateLessonDrawerContentProps {
   onClose: () => void;
   onLessonCreated: (lessonId: string) => void;
   classes: ClassSummary[];
+  editingDraft?: LessonDraft | null;
+  onDraftSaved?: () => void;
 }
 
 function CreateLessonDrawerContent({
   onClose,
   onLessonCreated,
   classes,
+  editingDraft,
+  onDraftSaved,
 }: CreateLessonDrawerContentProps) {
   const { showError, showSuccess } = useToast();
 
@@ -3656,58 +3854,16 @@ function CreateLessonDrawerContent({
   const lastSettings = getLastUsedSettings();
   const suggestedQuestionCount = getSuggestedQuestionCount();
 
-  // Load draft from localStorage
-  const loadDraft = (): Partial<LessonDraft> => {
-    try {
-      const saved = localStorage.getItem(DRAFT_STORAGE_KEY);
-      if (saved) {
-        return JSON.parse(saved);
-      }
-    } catch (e) {
-      console.error("Failed to load draft:", e);
-    }
-    return {};
-  };
-
-  const draft = loadDraft();
-
-  // Form state - use last settings as defaults
-  const [title, setTitle] = useState(draft.title || "");
-  const [subject, setSubject] = useState(draft.subject || lastSettings.subject || "");
-  const [gradeLevel, setGradeLevel] = useState(draft.gradeLevel || lastSettings.gradeLevel || "");
-  const [questionCount, setQuestionCount] = useState(draft.questionCount || suggestedQuestionCount);
-  const [description, setDescription] = useState(draft.description || "");
-  const [assignToClassId, setAssignToClassId] = useState(draft.assignToClassId || "");
+  // Form state - use draft values if editing, otherwise use last settings
+  const [title, setTitle] = useState(editingDraft?.title || "");
+  const [subject, setSubject] = useState(editingDraft?.subject || lastSettings.subject || "");
+  const [gradeLevel, setGradeLevel] = useState(editingDraft?.gradeLevel || lastSettings.gradeLevel || "");
+  const [questionCount, setQuestionCount] = useState(editingDraft?.questionCount || suggestedQuestionCount);
+  const [description, setDescription] = useState(editingDraft?.description || "");
+  const [assignToClassId, setAssignToClassId] = useState(editingDraft?.assignToClassId || "");
   const [isCreating, setIsCreating] = useState(false);
-
-  // Save draft to localStorage
-  const saveDraft = () => {
-    const draftData: LessonDraft = {
-      title,
-      subject,
-      gradeLevel,
-      questionCount,
-      description,
-      assignToClassId: assignToClassId || undefined,
-      savedAt: new Date().toISOString(),
-    };
-    localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(draftData));
-  };
-
-  // Clear draft
-  const clearDraft = () => {
-    localStorage.removeItem(DRAFT_STORAGE_KEY);
-  };
-
-  // Auto-save draft when form changes
-  useEffect(() => {
-    const timeoutId = setTimeout(() => {
-      if (title || subject || description) {
-        saveDraft();
-      }
-    }, 1000);
-    return () => clearTimeout(timeoutId);
-  }, [title, subject, gradeLevel, questionCount, description, assignToClassId]);
+  const [isSavingDraft, setIsSavingDraft] = useState(false);
+  const [currentDraftId, setCurrentDraftId] = useState<string | null>(editingDraft?.id || null);
 
   // Validation - only title and subject are required
   const isValid = title.trim() && subject;
@@ -3789,7 +3945,16 @@ function CreateLessonDrawerContent({
         }
       }
 
-      clearDraft();
+      // Delete the draft if we were editing one
+      if (currentDraftId) {
+        try {
+          await deleteLessonDraft(currentDraftId);
+        } catch (err) {
+          console.error("Failed to delete draft:", err);
+          // Non-critical error, continue
+        }
+      }
+
       onLessonCreated(savedLesson.id);
     } catch (err) {
       console.error("Failed to create lesson:", err);
@@ -3798,10 +3963,43 @@ function CreateLessonDrawerContent({
     }
   };
 
-  // Handle save draft and close
-  const handleSaveDraft = () => {
-    saveDraft();
-    onClose();
+  // Handle save draft to server
+  const handleSaveDraft = async () => {
+    if (!title && !subject && !description) {
+      showError("Please add some content before saving a draft.");
+      return;
+    }
+
+    setIsSavingDraft(true);
+    try {
+      const draftInput = {
+        title,
+        subject,
+        gradeLevel,
+        questionCount,
+        description,
+        assignToClassId: assignToClassId || undefined,
+      };
+
+      if (currentDraftId) {
+        // Update existing draft
+        await updateLessonDraft(currentDraftId, draftInput);
+        showSuccess("Draft updated");
+      } else {
+        // Create new draft
+        const { draft } = await createLessonDraft(draftInput);
+        setCurrentDraftId(draft.id);
+        showSuccess("Draft saved");
+      }
+
+      onDraftSaved?.();
+      onClose();
+    } catch (err) {
+      console.error("Failed to save draft:", err);
+      showError("Failed to save draft. Please try again.");
+    } finally {
+      setIsSavingDraft(false);
+    }
   };
 
   // Common subjects for dropdown
@@ -4039,23 +4237,23 @@ function CreateLessonDrawerContent({
             alignItems: "center",
             gap: "12px",
           }}>
-            <span style={{ fontSize: "0.75rem", color: "#94a3b8", minWidth: "16px" }}>2</span>
+            <span style={{ fontSize: "0.75rem", color: "#94a3b8", minWidth: "16px" }}>1</span>
             <input
               type="range"
-              min={2}
-              max={8}
+              min={1}
+              max={10}
               value={questionCount}
               onChange={(e) => setQuestionCount(parseInt(e.target.value, 10))}
               style={{
                 flex: 1,
                 height: "6px",
                 borderRadius: "3px",
-                background: `linear-gradient(to right, var(--accent-primary) 0%, var(--accent-primary) ${((questionCount - 2) / 6) * 100}%, #e2e8f0 ${((questionCount - 2) / 6) * 100}%, #e2e8f0 100%)`,
+                background: `linear-gradient(to right, var(--accent-primary) 0%, var(--accent-primary) ${((questionCount - 1) / 9) * 100}%, #e2e8f0 ${((questionCount - 1) / 9) * 100}%, #e2e8f0 100%)`,
                 appearance: "none",
                 cursor: "pointer",
               }}
             />
-            <span style={{ fontSize: "0.75rem", color: "#94a3b8", minWidth: "16px" }}>8</span>
+            <span style={{ fontSize: "0.75rem", color: "#94a3b8", minWidth: "16px" }}>10</span>
           </div>
         </div>
 
@@ -4165,17 +4363,17 @@ function CreateLessonDrawerContent({
         >
           <button
             onClick={handleSaveDraft}
-            disabled={!hasContent}
+            disabled={!hasContent || isSavingDraft}
             style={{
               padding: "8px 16px",
               fontSize: "0.8rem",
-              color: hasContent ? "#64748b" : "#cbd5e1",
+              color: hasContent && !isSavingDraft ? "#64748b" : "#cbd5e1",
               background: "transparent",
               border: "none",
-              cursor: hasContent ? "pointer" : "not-allowed",
+              cursor: hasContent && !isSavingDraft ? "pointer" : "not-allowed",
             }}
           >
-            Save Draft
+            {isSavingDraft ? "Saving..." : currentDraftId ? "Update Draft" : "Save Draft"}
           </button>
           <button
             onClick={onClose}
@@ -4194,7 +4392,7 @@ function CreateLessonDrawerContent({
       </div>
 
       {/* Draft indicator */}
-      {draft.savedAt && (
+      {editingDraft && (
         <div
           style={{
             marginTop: "12px",
@@ -4203,9 +4401,397 @@ function CreateLessonDrawerContent({
             textAlign: "center",
           }}
         >
-          Draft from {new Date(draft.savedAt).toLocaleTimeString()}
+          Editing draft from {new Date(editingDraft.updatedAt).toLocaleDateString()}
         </div>
       )}
+    </div>
+  );
+}
+
+// ============================================
+// Assign Lesson Drawer Content
+// ============================================
+
+interface AssignLessonDrawerContentProps {
+  lesson: LessonSummary;
+  classes: ClassSummary[];
+  onCancel: () => void;
+  onAssigned: () => void;
+}
+
+function AssignLessonDrawerContent({
+  lesson,
+  classes,
+  onCancel,
+  onAssigned,
+}: AssignLessonDrawerContentProps) {
+  const { showSuccess, showError } = useToast();
+
+  const [selectedClassId, setSelectedClassId] = useState<string>("");
+  const [selectedClass, setSelectedClass] = useState<ClassWithStudents | null>(null);
+  const [assignMode, setAssignMode] = useState<"all" | "select">("all");
+  const [selectedStudentIds, setSelectedStudentIds] = useState<Set<string>>(new Set());
+  const [dueDate, setDueDate] = useState<string>("");
+  const [assigning, setAssigning] = useState(false);
+  const [loadingClass, setLoadingClass] = useState(false);
+
+  // Load class details when class selection changes
+  const handleClassChange = async (newClassId: string) => {
+    setSelectedClassId(newClassId);
+    setSelectedStudentIds(new Set());
+    setSelectedClass(null);
+
+    if (newClassId) {
+      setLoadingClass(true);
+      try {
+        const classData = await getClass(newClassId);
+        setSelectedClass(classData);
+      } catch (err) {
+        console.error("Failed to load class:", err);
+        showError("Failed to load class details");
+      } finally {
+        setLoadingClass(false);
+      }
+    }
+  };
+
+  const classStudents = selectedClass?.students || [];
+
+  const handleAssign = async () => {
+    if (!selectedClassId) return;
+
+    setAssigning(true);
+    try {
+      const studentIds = assignMode === "select"
+        ? Array.from(selectedStudentIds)
+        : undefined;
+
+      const result = await assignLessonToClass(
+        lesson.id,
+        selectedClassId,
+        studentIds,
+        dueDate || undefined
+      );
+
+      showSuccess(`Assigned to ${result.assignedCount} student${result.assignedCount !== 1 ? "s" : ""} in ${result.className}`);
+      onAssigned();
+    } catch (err) {
+      console.error("Failed to assign lesson:", err);
+      showError("Failed to assign lesson. Please try again.");
+      setAssigning(false);
+    }
+  };
+
+  const toggleStudent = (studentId: string) => {
+    const newSelected = new Set(selectedStudentIds);
+    if (newSelected.has(studentId)) {
+      newSelected.delete(studentId);
+    } else {
+      newSelected.add(studentId);
+    }
+    setSelectedStudentIds(newSelected);
+  };
+
+  const selectAllStudents = () => {
+    setSelectedStudentIds(new Set(classStudents.map((s) => s.id)));
+  };
+
+  const deselectAllStudents = () => {
+    setSelectedStudentIds(new Set());
+  };
+
+  const canAssign =
+    selectedClassId &&
+    classStudents.length > 0 &&
+    (assignMode === "all" || selectedStudentIds.size > 0);
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+      {/* Scrollable content */}
+      <div style={{ flex: 1, overflow: "auto" }}>
+        {/* Lesson info */}
+        <div
+          style={{
+            padding: "12px 16px",
+            background: "var(--status-info-bg)",
+            borderRadius: "8px",
+            marginBottom: "20px",
+          }}
+        >
+          <div style={{ fontWeight: 600, color: "var(--status-info-text)" }}>
+            {lesson.title}
+          </div>
+          <div style={{ fontSize: "0.85rem", color: "#64748b", marginTop: "4px" }}>
+            {lesson.promptCount} question{lesson.promptCount !== 1 ? "s" : ""}
+            {lesson.subject && ` · ${lesson.subject}`}
+          </div>
+        </div>
+
+        {/* Step 1: Select Class */}
+        <div style={{ marginBottom: "20px" }}>
+          <label
+            style={{
+              display: "block",
+              fontSize: "0.85rem",
+              fontWeight: 600,
+              color: "#374151",
+              marginBottom: "8px",
+            }}
+          >
+            1. Select Class
+          </label>
+
+          {classes.length === 0 ? (
+            <div style={{ padding: "16px", background: "#f9fafb", borderRadius: "8px", textAlign: "center" }}>
+              <p style={{ color: "#666", margin: "0 0 12px 0", fontSize: "0.9rem" }}>
+                No classes yet. Create a class first to assign lessons.
+              </p>
+            </div>
+          ) : (
+            <select
+              value={selectedClassId}
+              onChange={(e) => handleClassChange(e.target.value)}
+              style={{
+                width: "100%",
+                padding: "12px 14px",
+                fontSize: "0.9rem",
+                borderRadius: "8px",
+                border: "1px solid #e2e8f0",
+                background: "white",
+              }}
+            >
+              <option value="">Select a class...</option>
+              {classes.map((cls) => (
+                <option key={cls.id} value={cls.id}>
+                  {cls.name} ({cls.studentCount} students)
+                </option>
+              ))}
+            </select>
+          )}
+        </div>
+
+        {/* Loading class indicator */}
+        {loadingClass && (
+          <div style={{ textAlign: "center", padding: "16px", color: "#64748b" }}>
+            Loading class details...
+          </div>
+        )}
+
+        {/* Step 2: Choose Students */}
+        {selectedClass && classStudents.length > 0 && (
+          <div style={{ marginBottom: "20px" }}>
+            <label
+              style={{
+                display: "block",
+                fontSize: "0.85rem",
+                fontWeight: 600,
+                color: "#374151",
+                marginBottom: "8px",
+              }}
+            >
+              2. Choose Students
+            </label>
+
+            <div style={{ display: "flex", gap: "8px", marginBottom: "12px" }}>
+              <button
+                onClick={() => setAssignMode("all")}
+                style={{
+                  flex: 1,
+                  padding: "10px 12px",
+                  fontSize: "0.85rem",
+                  background: assignMode === "all" ? "var(--accent-primary)" : "#f1f5f9",
+                  color: assignMode === "all" ? "white" : "#374151",
+                  border: "none",
+                  borderRadius: "6px",
+                  cursor: "pointer",
+                }}
+              >
+                All Students ({classStudents.length})
+              </button>
+              <button
+                onClick={() => setAssignMode("select")}
+                style={{
+                  flex: 1,
+                  padding: "10px 12px",
+                  fontSize: "0.85rem",
+                  background: assignMode === "select" ? "var(--accent-primary)" : "#f1f5f9",
+                  color: assignMode === "select" ? "white" : "#374151",
+                  border: "none",
+                  borderRadius: "6px",
+                  cursor: "pointer",
+                }}
+              >
+                Select Students
+              </button>
+            </div>
+
+            {assignMode === "select" && (
+              <div>
+                <div style={{ display: "flex", gap: "12px", marginBottom: "8px" }}>
+                  <button
+                    onClick={selectAllStudents}
+                    style={{
+                      background: "transparent",
+                      border: "none",
+                      cursor: "pointer",
+                      color: "var(--accent-primary)",
+                      fontSize: "0.8rem",
+                    }}
+                  >
+                    Select All
+                  </button>
+                  <button
+                    onClick={deselectAllStudents}
+                    style={{
+                      background: "transparent",
+                      border: "none",
+                      cursor: "pointer",
+                      color: "var(--accent-primary)",
+                      fontSize: "0.8rem",
+                    }}
+                  >
+                    Deselect All
+                  </button>
+                  <span style={{ color: "#64748b", fontSize: "0.8rem" }}>
+                    {selectedStudentIds.size} selected
+                  </span>
+                </div>
+
+                <div style={{ display: "flex", flexDirection: "column", gap: "6px", maxHeight: "200px", overflow: "auto" }}>
+                  {classStudents.map((student) => (
+                    <label
+                      key={student.id}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "10px",
+                        padding: "10px 12px",
+                        background: selectedStudentIds.has(student.id) ? "#e8f5e9" : "#f9fafb",
+                        borderRadius: "6px",
+                        cursor: "pointer",
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={selectedStudentIds.has(student.id)}
+                        onChange={() => toggleStudent(student.id)}
+                        style={{ width: "16px", height: "16px" }}
+                      />
+                      <span style={{ fontSize: "0.9rem" }}>{student.name}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Empty class warning */}
+        {selectedClass && classStudents.length === 0 && (
+          <div
+            style={{
+              padding: "12px 16px",
+              background: "#fff3e0",
+              borderRadius: "8px",
+              borderLeft: "3px solid #ff9800",
+              marginBottom: "20px",
+            }}
+          >
+            <p style={{ margin: 0, color: "#e65100", fontSize: "0.9rem" }}>
+              This class has no students. Add students before assigning lessons.
+            </p>
+          </div>
+        )}
+
+        {/* Step 3: Due Date (Optional) */}
+        {selectedClass && classStudents.length > 0 && (
+          <div style={{ marginBottom: "20px" }}>
+            <label
+              style={{
+                display: "block",
+                fontSize: "0.85rem",
+                fontWeight: 600,
+                color: "#374151",
+                marginBottom: "8px",
+              }}
+            >
+              3. Due Date <span style={{ fontWeight: 400, color: "#94a3b8" }}>(optional)</span>
+            </label>
+
+            <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+              <input
+                type="date"
+                value={dueDate}
+                onChange={(e) => setDueDate(e.target.value)}
+                min={new Date().toISOString().split("T")[0]}
+                style={{
+                  padding: "10px 12px",
+                  fontSize: "0.9rem",
+                  borderRadius: "6px",
+                  border: "1px solid #e2e8f0",
+                  width: "180px",
+                }}
+              />
+              {dueDate && (
+                <button
+                  onClick={() => setDueDate("")}
+                  style={{
+                    background: "transparent",
+                    border: "none",
+                    cursor: "pointer",
+                    color: "#64748b",
+                    fontSize: "0.85rem",
+                  }}
+                >
+                  Clear
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Footer with actions */}
+      <div
+        style={{
+          padding: "16px 0 0 0",
+          borderTop: "1px solid #e2e8f0",
+          display: "flex",
+          gap: "12px",
+        }}
+      >
+        <button
+          onClick={onCancel}
+          style={{
+            flex: 1,
+            padding: "12px",
+            fontSize: "0.9rem",
+            background: "#f1f5f9",
+            color: "#374151",
+            border: "none",
+            borderRadius: "8px",
+            cursor: "pointer",
+          }}
+        >
+          Cancel
+        </button>
+        <button
+          onClick={handleAssign}
+          disabled={!canAssign || assigning}
+          style={{
+            flex: 1,
+            padding: "12px",
+            fontSize: "0.9rem",
+            background: canAssign && !assigning ? "var(--accent-primary)" : "#e2e8f0",
+            color: canAssign && !assigning ? "white" : "#94a3b8",
+            border: "none",
+            borderRadius: "8px",
+            cursor: canAssign && !assigning ? "pointer" : "not-allowed",
+          }}
+        >
+          {assigning ? "Assigning..." : "Assign Lesson"}
+        </button>
+      </div>
     </div>
   );
 }

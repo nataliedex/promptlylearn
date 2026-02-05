@@ -46,6 +46,7 @@ export default function Lesson() {
   const [voiceState, setVoiceState] = useState<VoiceState>("idle");
   const [voiceStarted, setVoiceStarted] = useState(false);
   const [lessonStarted, setLessonStarted] = useState(false); // User must click to start (browser autoplay policy)
+  const [isResuming, setIsResuming] = useState(false); // Track if resuming from a paused session
   const isProcessingRef = useRef(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -59,6 +60,7 @@ export default function Lesson() {
     startRecording,
     stopRecording,
     speak,
+    stopSpeaking,
     cancelRecording,
   } = useVoice();
 
@@ -88,6 +90,18 @@ export default function Lesson() {
         setLesson(lessonData);
         setSession(sessionData);
         setCurrentIndex(sessionData.currentPromptIndex || 0);
+
+        // Detect if this is a resumed session (was paused)
+        if (sessionData.status === "paused") {
+          setIsResuming(true);
+          // Restore mode from when paused
+          if (sessionData.mode) {
+            setMode(sessionData.mode);
+          }
+          // Update session status back to in_progress
+          await updateSession(sessionId, { status: "in_progress" });
+          setSession((prev) => prev ? { ...prev, status: "in_progress" } : null);
+        }
       } catch (err) {
         console.error("Failed to load lesson:", err);
       } finally {
@@ -136,6 +150,16 @@ export default function Lesson() {
     setVoiceState("speaking");
 
     console.log("=== START VOICE FLOW ===");
+
+    // If resuming from a paused session, speak a friendly welcome back message first
+    if (isResuming) {
+      console.log("Resuming session - speaking welcome back...");
+      const welcomeBack = "Welcome back! Let's keep going where we left off.";
+      await speak(welcomeBack);
+      await new Promise((r) => setTimeout(r, 300));
+      setIsResuming(false); // Clear the resuming flag after welcome
+    }
+
     console.log("Speaking QUESTION:", currentPrompt.input.substring(0, 50) + "...");
 
     // Speak the question - wait for it to complete
@@ -428,6 +452,63 @@ export default function Lesson() {
     }
   };
 
+  // Voice mode: Skip current voice activity and advance to next question
+  const handleSkipToNext = async () => {
+    // Stop any active audio playback (coach speaking)
+    if (isSpeaking) {
+      stopSpeaking();
+    }
+
+    // Stop any active recording without transcribing
+    if (isRecording) {
+      cancelRecording();
+    }
+
+    // Reset voice state
+    setVoiceState("idle");
+    isProcessingRef.current = false;
+
+    // Advance to next question
+    await handleNext();
+  };
+
+  // Take a break: Pause the lesson and save state for later resumption
+  const handleTakeBreak = async () => {
+    if (!session || !studentId) return;
+
+    // Stop any active audio playback (coach speaking)
+    if (isSpeaking) {
+      stopSpeaking();
+    }
+
+    // Stop any active recording without transcribing
+    if (isRecording) {
+      cancelRecording();
+    }
+
+    // Reset voice state immediately
+    setVoiceState("idle");
+    isProcessingRef.current = false;
+
+    try {
+      // Save session state as paused
+      await updateSession(session.id, {
+        status: "paused",
+        currentPromptIndex: currentIndex,
+        mode: mode,
+        wasRecording: isRecording,
+        pausedAt: new Date().toISOString(),
+      });
+
+      // Navigate back to dashboard
+      navigate(`/student/${studentId}`);
+    } catch (err) {
+      console.error("Failed to pause session:", err);
+      // Navigate anyway to avoid blocking the student
+      navigate(`/student/${studentId}`);
+    }
+  };
+
   if (loading) {
     return (
       <div className="loading">
@@ -500,7 +581,6 @@ export default function Lesson() {
           {/* Start Lesson Button - shown before lesson begins */}
           {!lessonStarted && (
             <div>
-              <div style={{ fontSize: "4rem", marginBottom: "24px" }}>🎤</div>
               <h2 style={{ marginBottom: "16px" }}>Ready for Voice Lesson</h2>
               <p style={{ color: "#666", marginBottom: "32px" }}>
                 The coach will read each question aloud, then listen for your answer.
@@ -531,7 +611,16 @@ export default function Lesson() {
           <div style={{ marginBottom: "24px" }}>
             {voiceState === "speaking" && (
               <div className="voice-indicator speaking">
-                <div style={{ fontSize: "4rem", marginBottom: "16px" }}>🔊</div>
+                <div
+                  style={{
+                    width: "48px",
+                    height: "48px",
+                    borderRadius: "50%",
+                    background: "#667eea",
+                    margin: "0 auto 16px",
+                    animation: "pulse 1.5s infinite",
+                  }}
+                />
                 <p style={{ fontSize: "1.2rem", color: "#667eea" }}>Coach is speaking...</p>
               </div>
             )}
@@ -543,13 +632,14 @@ export default function Lesson() {
               >
                 <div
                   style={{
-                    fontSize: "5rem",
-                    marginBottom: "16px",
+                    width: "64px",
+                    height: "64px",
+                    borderRadius: "50%",
+                    background: "#4caf50",
+                    margin: "0 auto 16px",
                     animation: "pulse 1.5s infinite",
                   }}
-                >
-                  🎤
-                </div>
+                />
                 <p style={{ fontSize: "1.2rem", color: "#4caf50", fontWeight: 600 }}>
                   Listening... ({recordingDuration}s)
                 </p>
@@ -589,7 +679,7 @@ export default function Lesson() {
                   borderRadius: "24px",
                 }}
               >
-                <span style={{ fontSize: "2rem" }}>{feedback.isCorrect ? "✨" : "💭"}</span>
+                <span style={{ fontSize: "2rem" }}>{feedback.isCorrect ? "" : ""}</span>
                 <span style={{ fontWeight: 600, fontSize: "1.2rem", color: feedback.isCorrect ? "#2e7d32" : "#ef6c00" }}>
                   {feedback.encouragement}
                 </span>
@@ -602,6 +692,37 @@ export default function Lesson() {
             <p style={{ color: "#f44336", marginTop: "16px" }}>{voiceError}</p>
           )}
 
+          {/* Skip/Next button - visible during voice activity */}
+          {lessonStarted && (voiceState === "speaking" || voiceState === "listening" || voiceState === "processing") && (
+            <button
+              className="btn btn-secondary"
+              onClick={handleSkipToNext}
+              style={{
+                marginTop: "24px",
+                padding: "12px 24px",
+                fontSize: "1rem",
+                opacity: 0.9,
+              }}
+            >
+              {currentIndex < lesson.prompts.length - 1 ? "Skip to Next Question →" : "Finish Lesson"}
+            </button>
+          )}
+
+          {/* Continue button - visible when follow-up is expected but student wants to skip */}
+          {lessonStarted && feedback && feedback.shouldContinue && voiceState === "idle" && (
+            <button
+              className="btn btn-secondary"
+              onClick={handleNext}
+              style={{
+                marginTop: "24px",
+                padding: "12px 24px",
+                fontSize: "1rem",
+              }}
+            >
+              {currentIndex < lesson.prompts.length - 1 ? "Continue to Next Question →" : "Finish Lesson"}
+            </button>
+          )}
+
           {/* Next button (shows when conversation is done) */}
           {lessonStarted && feedback && !feedback.shouldContinue && voiceState === "idle" && (
             <button
@@ -609,10 +730,47 @@ export default function Lesson() {
               onClick={handleNext}
               style={{ marginTop: "24px", padding: "16px 32px", fontSize: "1.1rem" }}
             >
-              {currentIndex < lesson.prompts.length - 1 ? "Next Question →" : "Finish Lesson 🎉"}
+              {currentIndex < lesson.prompts.length - 1 ? "Next Question →" : "Finish Lesson"}
             </button>
           )}
         </div>
+
+        {/* Take a break button - always visible during voice lesson */}
+        {lessonStarted && (
+          <div style={{ marginTop: "16px", textAlign: "center" }}>
+            <button
+              onClick={handleTakeBreak}
+              style={{
+                padding: "14px 28px",
+                fontSize: "1rem",
+                fontWeight: 600,
+                background: "#1a1a2e",
+                color: "#ffffff",
+                border: "none",
+                borderRadius: "10px",
+                cursor: "pointer",
+                display: "inline-flex",
+                alignItems: "center",
+                gap: "10px",
+                boxShadow: "0 2px 8px rgba(0,0,0,0.15)",
+                transition: "background 0.2s, transform 0.1s",
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background = "#2d2d44";
+                e.currentTarget.style.transform = "translateY(-1px)";
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = "#1a1a2e";
+                e.currentTarget.style.transform = "translateY(0)";
+              }}
+            >
+              Take a break
+            </button>
+            <p style={{ marginTop: "8px", fontSize: "0.85rem", color: "#888" }}>
+              Your progress is saved. Come back anytime!
+            </p>
+          </div>
+        )}
 
         {/* CSS for pulse animation */}
         <style>{`
@@ -673,7 +831,7 @@ export default function Lesson() {
             {/* Hints */}
             {showHint && currentPrompt.hints.length > 0 && (
               <div className="hint-section">
-                <h4>💡 Hint</h4>
+                <h4>Hint</h4>
                 {currentPrompt.hints.slice(0, hintIndex + 1).map((hint, i) => (
                   <p key={i} style={{ marginBottom: "8px" }}>
                     {hint}
@@ -715,7 +873,7 @@ export default function Lesson() {
                   borderRadius: "8px",
                 }}
               >
-                <span style={{ fontSize: "1.5rem" }}>{feedback.isCorrect ? "✨" : "💭"}</span>
+                <span style={{ fontSize: "1.5rem" }}>{feedback.isCorrect ? "" : ""}</span>
                 <div>
                   <p style={{ margin: 0, fontWeight: 600, color: feedback.isCorrect ? "#2e7d32" : "#ef6c00" }}>
                     {feedback.encouragement}
@@ -746,7 +904,7 @@ export default function Lesson() {
                         color: msg.role === "student" ? "white" : "#333",
                       }}
                     >
-                      {msg.role === "coach" && <span style={{ marginRight: "8px" }}>🤖</span>}
+                      {msg.role === "coach" && <span style={{ marginRight: "8px", fontWeight: 600 }}>Coach:</span>}
                       {msg.message}
                     </div>
                   </div>
@@ -792,7 +950,7 @@ export default function Lesson() {
 
             <div className="nav-buttons">
               <button className="btn btn-primary" onClick={handleNext}>
-                {currentIndex < lesson.prompts.length - 1 ? "Next Question →" : "Finish Lesson 🎉"}
+                {currentIndex < lesson.prompts.length - 1 ? "Next Question →" : "Finish Lesson"}
               </button>
             </div>
           </>

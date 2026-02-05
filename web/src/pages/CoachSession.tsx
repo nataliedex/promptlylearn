@@ -445,7 +445,7 @@ export default function CoachSession() {
                   flexShrink: 0,
                 }}
               >
-                🎓
+                {/* Enrichment indicator */}
               </div>
               <div style={{ flex: 1 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "4px" }}>
@@ -502,9 +502,7 @@ export default function CoachSession() {
             border: isEnrichmentSession ? "2px solid #8bc34a" : undefined,
           }}
         >
-          <div style={{ fontSize: "4rem", marginBottom: "24px" }}>
-            {isEnrichmentSession ? "🚀" : mode === "voice" ? "🎤" : "💬"}
-          </div>
+          {/* Session mode indicator */}
           <h2 style={{ marginBottom: "16px" }}>
             {isEnrichmentSession
               ? "Ready for a Challenge?"
@@ -564,7 +562,7 @@ export default function CoachSession() {
                 fontWeight: 600,
               }}
             >
-              🎓 ENRICHMENT
+              ENRICHMENT
             </span>
             {coachingInvite.title}
           </p>
@@ -592,11 +590,11 @@ export default function CoachSession() {
           }}
           onClick={voiceState === "listening" ? handleVoiceTap : undefined}
         >
-          <div style={{ fontSize: "3rem", marginBottom: "8px" }}>
-            {voiceState === "speaking" && "🔊"}
-            {voiceState === "listening" && "🎤"}
-            {voiceState === "processing" && "🤔"}
-            {voiceState === "idle" && "😊"}
+          <div style={{ fontSize: "1.1rem", marginBottom: "8px", fontWeight: 500, color: "#666" }}>
+            {voiceState === "speaking" && "Speaking"}
+            {voiceState === "listening" && ""}
+            {voiceState === "processing" && "Processing"}
+            {voiceState === "idle" && "Ready"}
           </div>
           <p style={{ margin: 0, fontWeight: 500, color: "#333" }}>
             {voiceState === "speaking" && "Coach is speaking..."}
@@ -694,7 +692,7 @@ export default function CoachSession() {
                   color: isRecording ? "white" : undefined,
                 }}
               >
-                {isRecording ? "⏹" : "🎤"}
+                {isRecording ? "Stop" : "Voice"}
               </button>
             )}
             <button

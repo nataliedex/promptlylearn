@@ -192,7 +192,7 @@ export default function TeacherTodosPanel({
     if (openTodos.length === 0) {
       return (
         <div style={{ textAlign: "center", padding: "32px 16px", color: "#666" }}>
-          <span style={{ fontSize: "2rem", display: "block", marginBottom: "12px" }}>✓</span>
+          <span style={{ fontSize: "1rem", display: "block", marginBottom: "12px", fontWeight: 600, color: "#16a34a" }}>Done</span>
           <p style={{ margin: 0, fontWeight: 500 }}>All to-dos completed</p>
           <p style={{ margin: "8px 0 0 0", fontSize: "0.9rem" }}>
             No pending actions at this time.
@@ -305,7 +305,6 @@ export default function TeacherTodosPanel({
             gap: "4px",
           }}
         >
-          <span>🖨️</span>
           Print Sheet
         </button>
       </button>

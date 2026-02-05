@@ -4,6 +4,8 @@ const API_BASE = "http://localhost:3001/api";
 export interface Student {
   id: string;
   name: string;
+  studentCode?: string;
+  isDemo?: boolean;
   preferredName?: string;
   pronouns?: string;
   notes?: string;
@@ -83,9 +85,14 @@ export interface Session {
   };
   startedAt: string;
   completedAt?: string;
-  status: "in_progress" | "completed";
+  status: "in_progress" | "paused" | "completed";
   currentPromptIndex?: number;
   educatorNotes?: string;
+
+  // Pause state fields (for "Take a break" feature)
+  pausedAt?: string;
+  mode?: "voice" | "type";
+  wasRecording?: boolean;
 }
 
 export interface EvaluationResult {
@@ -165,6 +172,7 @@ export interface StudentAssignmentRecord {
   classId: string;
   studentId: string;
   assignedAt: string;
+  dueDate?: string; // Optional due date (ISO string, date only)
   completedAt?: string;
   attempts: number;
   reviewState: ReviewState;
@@ -184,16 +192,31 @@ export async function getStudentAssignments(studentId: string): Promise<{
   return fetchJson(`${API_BASE}/students/${studentId}/assignments`);
 }
 
-export async function createOrFindStudent(name: string): Promise<{ student: Student; isNew: boolean }> {
+/**
+ * Login student by studentCode (primary login method)
+ */
+export async function loginWithCode(code: string): Promise<{ student: Student }> {
+  return fetchJson(`${API_BASE}/students/login/${encodeURIComponent(code)}`);
+}
+
+/**
+ * Create or find a student (demo mode only)
+ */
+export async function createOrFindStudent(
+  name: string,
+  isDemo?: boolean
+): Promise<{ student: Student; isNew: boolean }> {
   return fetchJson(`${API_BASE}/students`, {
     method: "POST",
-    body: JSON.stringify({ name }),
+    body: JSON.stringify({ name, isDemo }),
   });
 }
 
 export interface StudentLessonSummary extends LessonSummary {
   attempts: number;
   assignedAt?: string;
+  dueDate?: string; // Optional due date (ISO string, date only)
+  className?: string;
 }
 
 export interface StudentLessonsResponse {
@@ -366,10 +389,21 @@ export async function updateLessonSubject(
 }
 
 // Sessions
-export async function getSessions(studentId?: string, status?: string): Promise<Session[]> {
+/**
+ * Fetch sessions with optional filters.
+ * @param studentId - Filter by student ID
+ * @param status - Filter by status ("in_progress", "completed", "paused")
+ * @param audience - "student" for privacy-filtered data (no system notes), omit for full data
+ */
+export async function getSessions(
+  studentId?: string,
+  status?: string,
+  audience?: "student" | "educator"
+): Promise<Session[]> {
   const params = new URLSearchParams();
   if (studentId) params.set("studentId", studentId);
   if (status) params.set("status", status);
+  if (audience) params.set("audience", audience);
   const query = params.toString();
   return fetchJson(`${API_BASE}/sessions${query ? `?${query}` : ""}`);
 }
@@ -502,44 +536,6 @@ export async function textToSpeech(text: string, voice: string = "nova"): Promis
     }
   }
   throw lastError;
-}
-
-/**
- * Streaming TTS - Returns a ReadableStream for immediate playback
- * Reduces perceived latency by starting playback before full audio is ready
- */
-export async function textToSpeechStream(
-  text: string,
-  voice: string = "nova",
-  onFirstChunk?: (timeMs: number) => void
-): Promise<Response> {
-  const requestStart = performance.now();
-  console.log(`[TTS-Stream] Request starting, text length: ${text?.length}`);
-
-  const response = await fetch(`${API_BASE}/voice/speak/stream`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ text, voice }),
-  });
-
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({ error: "Unknown error" }));
-    throw new Error(error.error || `TTS stream failed: ${response.status}`);
-  }
-
-  // Log timing from server headers if available
-  const apiTime = response.headers.get("X-TTS-Api-Time-Ms");
-  if (apiTime) {
-    console.log(`[TTS-Stream] Server API time: ${apiTime}ms`);
-  }
-
-  if (onFirstChunk) {
-    const timeToFirstChunk = performance.now() - requestStart;
-    console.log(`[TTS-Stream] Client time-to-first-response: ${timeToFirstChunk.toFixed(0)}ms`);
-    onFirstChunk(timeToFirstChunk);
-  }
-
-  return response;
 }
 
 // Voice Settings Types
@@ -863,9 +859,9 @@ export const REVIEW_STATE_LABELS: Record<ReviewState, string> = {
 export const REVIEW_STATE_CONFIG: Record<ReviewState, { bg: string; color: string; icon: string }> = {
   not_started: { bg: "#f1f5f9", color: "#94a3b8", icon: "" },   // Muted - nothing to do
   pending_review: { bg: "#fff7ed", color: "#ea580c", icon: "" }, // Orange - action needed
-  reviewed: { bg: "#e8f5e9", color: "#166534", icon: "✓" },      // Green - done
-  followup_scheduled: { bg: "#fef3c7", color: "#b45309", icon: "📋" }, // Amber - has follow-up
-  resolved: { bg: "#e8f5e9", color: "#166534", icon: "✓" },      // Green - follow-ups complete
+  reviewed: { bg: "#e8f5e9", color: "#166534", icon: "" },      // Green - done
+  followup_scheduled: { bg: "#fef3c7", color: "#b45309", icon: "" }, // Amber - has follow-up
+  resolved: { bg: "#e8f5e9", color: "#166534", icon: "" },      // Green - follow-ups complete
 };
 
 /**
@@ -1058,6 +1054,7 @@ export interface StudentAssignment {
   studentId: string;
   assignedAt: string;
   assignedBy?: string;
+  dueDate?: string; // Optional due date (ISO string, date only)
   // Completion tracking
   completedAt?: string;
   attempts: number;
@@ -1286,11 +1283,12 @@ export async function getLessonAssignments(lessonId: string): Promise<LessonAssi
 export async function assignLessonToClass(
   lessonId: string,
   classId: string,
-  studentIds?: string[]
+  studentIds?: string[],
+  dueDate?: string
 ): Promise<AssignLessonResponse> {
   return fetchJson(`${API_BASE}/lessons/${lessonId}/assign`, {
     method: "POST",
-    body: JSON.stringify({ classId, studentIds }),
+    body: JSON.stringify({ classId, studentIds, dueDate }),
   });
 }
 
@@ -2861,5 +2859,284 @@ export async function updateCoachingInviteActivity(
   return fetchJson(`${API_BASE}/coaching-invites/${inviteId}/activity`, {
     method: "POST",
     body: JSON.stringify({ messageCount }),
+  });
+}
+
+// ============================================
+// Profile Types and API (v1)
+// ============================================
+
+/**
+ * Coach communication tone preference
+ */
+export type CoachTone = "supportive" | "direct" | "structured";
+
+/**
+ * Voice mode for coach
+ */
+export type CoachVoiceMode = "default_coach_voice" | "teacher_voice";
+
+/**
+ * Teacher voice configuration
+ */
+export interface TeacherVoiceConfig {
+  provider: "elevenlabs" | "openai" | "none";
+  voiceId?: string;
+  voiceName?: string;
+  consentGiven: boolean;
+  consentDate?: string;
+}
+
+/**
+ * Teacher Profile (educator view)
+ */
+export interface TeacherProfile {
+  id: string;
+  /** Internal/admin full name - not shown to students */
+  fullName: string;
+  /** What students see in the app (e.g., "Mrs. Blumen") */
+  studentFacingName: string;
+  /** Pronouns (shown to students) */
+  pronouns?: string;
+  coachTone: CoachTone;
+  coachVoiceMode: CoachVoiceMode;
+  teacherVoice?: TeacherVoiceConfig;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/**
+ * Teacher profile update payload
+ */
+export interface TeacherProfileUpdate {
+  fullName?: string;
+  studentFacingName?: string;
+  pronouns?: string;
+  coachTone?: CoachTone;
+  coachVoiceMode?: CoachVoiceMode;
+  teacherVoice?: TeacherVoiceConfig;
+}
+
+/**
+ * Student input preference
+ */
+export type InputPreference = "voice" | "typing" | "no_preference";
+
+/**
+ * Student pacing preference
+ */
+export type PacePreference = "take_my_time" | "keep_it_moving";
+
+/**
+ * Coach help style preference
+ */
+export type CoachHelpStyle = "hints_first" | "examples_first" | "ask_me_questions";
+
+/**
+ * Student accommodations (educator view includes notes)
+ */
+export interface StudentAccommodations {
+  extraTime?: boolean;
+  readAloud?: boolean;
+  reducedDistractions?: boolean;
+  notes?: string; // EDUCATOR ONLY - not in student view
+}
+
+/**
+ * Student Profile (educator view - full)
+ */
+export interface StudentProfileFull {
+  id: string;
+  legalName: string;
+  preferredName: string;
+  pronouns?: string;
+  classIds: string[];
+  gradeLevel?: string;
+  inputPreference: InputPreference;
+  pacePreference: PacePreference;
+  coachHelpStyle: CoachHelpStyle;
+  accommodations?: StudentAccommodations;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/**
+ * Student Profile (student view - sanitized)
+ * EXCLUDES: legalName, accommodations.notes
+ */
+export interface StudentProfilePublic {
+  id: string;
+  preferredName: string;
+  pronouns?: string;
+  inputPreference: InputPreference;
+  pacePreference: PacePreference;
+  coachHelpStyle: CoachHelpStyle;
+  accommodations?: Omit<StudentAccommodations, "notes">;
+}
+
+/**
+ * Student profile update payload (educator only)
+ */
+export interface StudentProfileUpdate {
+  legalName?: string;
+  preferredName?: string;
+  pronouns?: string;
+  gradeLevel?: string;
+  inputPreference?: InputPreference;
+  pacePreference?: PacePreference;
+  coachHelpStyle?: CoachHelpStyle;
+  accommodations?: StudentAccommodations;
+}
+
+// ============================================
+// Profile API Functions
+// ============================================
+
+/**
+ * Get the current teacher's profile
+ */
+export async function getTeacherProfile(): Promise<TeacherProfile> {
+  return fetchJson(`${API_BASE}/educator/profile`);
+}
+
+/**
+ * Update the current teacher's profile
+ */
+export async function updateTeacherProfile(
+  updates: TeacherProfileUpdate
+): Promise<TeacherProfile> {
+  return fetchJson(`${API_BASE}/educator/profile`, {
+    method: "PATCH",
+    body: JSON.stringify(updates),
+  });
+}
+
+/**
+ * Get a student's full profile (educator only)
+ */
+export async function getStudentProfileFull(
+  studentId: string
+): Promise<{
+  profile: StudentProfileFull;
+  student: { id: string; name: string; studentCode?: string; isDemo?: boolean };
+}> {
+  return fetchJson(`${API_BASE}/educator/students/${studentId}/profile`);
+}
+
+/**
+ * Regenerate a student's login code (educator only)
+ */
+export async function regenerateStudentCode(
+  studentId: string
+): Promise<{ studentCode: string }> {
+  return fetchJson(`${API_BASE}/students/${studentId}/regenerate-code`, {
+    method: "POST",
+  });
+}
+
+/**
+ * Update a student's profile (educator only)
+ */
+export async function updateStudentProfile(
+  studentId: string,
+  updates: StudentProfileUpdate
+): Promise<{ profile: StudentProfileFull }> {
+  return fetchJson(`${API_BASE}/educator/students/${studentId}/profile`, {
+    method: "PATCH",
+    body: JSON.stringify(updates),
+  });
+}
+
+/**
+ * Get a student's profile (student view - sanitized)
+ * PRIVACY: Does not include legalName or accommodations.notes
+ */
+export async function getStudentProfilePublic(
+  studentId: string
+): Promise<StudentProfilePublic> {
+  return fetchJson(`${API_BASE}/educator/student-profile/${studentId}`);
+}
+
+// ============================================
+// Lesson Drafts API
+// ============================================
+
+/**
+ * Lesson Draft - an in-progress lesson that hasn't been created yet
+ */
+export interface LessonDraft {
+  id: string;
+  title: string;
+  subject: string;
+  gradeLevel: string;
+  questionCount: number;
+  description: string;
+  assignToClassId?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/**
+ * Input for creating or updating a lesson draft
+ */
+export interface LessonDraftInput {
+  title?: string;
+  subject?: string;
+  gradeLevel?: string;
+  questionCount?: number;
+  description?: string;
+  assignToClassId?: string;
+}
+
+/**
+ * List all lesson drafts
+ */
+export async function getLessonDrafts(): Promise<{
+  drafts: LessonDraft[];
+  count: number;
+}> {
+  return fetchJson(`${API_BASE}/educator/lesson-drafts`);
+}
+
+/**
+ * Get a specific lesson draft by ID
+ */
+export async function getLessonDraft(id: string): Promise<{ draft: LessonDraft }> {
+  return fetchJson(`${API_BASE}/educator/lesson-drafts/${id}`);
+}
+
+/**
+ * Create a new lesson draft
+ */
+export async function createLessonDraft(
+  input: LessonDraftInput
+): Promise<{ draft: LessonDraft }> {
+  return fetchJson(`${API_BASE}/educator/lesson-drafts`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+/**
+ * Update an existing lesson draft
+ */
+export async function updateLessonDraft(
+  id: string,
+  updates: LessonDraftInput
+): Promise<{ draft: LessonDraft }> {
+  return fetchJson(`${API_BASE}/educator/lesson-drafts/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(updates),
+  });
+}
+
+/**
+ * Delete a lesson draft
+ */
+export async function deleteLessonDraft(
+  id: string
+): Promise<{ success: boolean; id: string }> {
+  return fetchJson(`${API_BASE}/educator/lesson-drafts/${id}`, {
+    method: "DELETE",
   });
 }

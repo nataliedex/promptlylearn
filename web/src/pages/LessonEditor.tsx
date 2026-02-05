@@ -327,7 +327,7 @@ export default function LessonEditor() {
             border: "1px solid #bbf7d0",
           }}
         >
-          <span style={{ fontSize: "1.25rem" }}>✨</span>
+          <span style={{ fontSize: "0.85rem", fontWeight: 600, color: "#166534" }}>Ready</span>
           <div>
             <p style={{ margin: 0, fontWeight: 500, color: "#166534", fontSize: "0.95rem" }}>
               Lesson ready for review
@@ -589,7 +589,7 @@ export default function LessonEditor() {
               }
             }}
           >
-            {saving ? "Saving..." : hasChanges ? "Save Changes" : "Saved ✓"}
+            {saving ? "Saving..." : hasChanges ? "Save Changes" : "Saved"}
           </button>
           {assignmentSummary && assignmentSummary.totalAssigned > 0 ? (
             <button
@@ -699,7 +699,7 @@ export default function LessonEditor() {
             color: "var(--text-secondary)",
           }}
         >
-          <span style={{ color: "var(--status-success-text)", fontWeight: 500 }}>✓ Assigned</span>
+          <span style={{ color: "var(--status-success-text)", fontWeight: 500 }}>Assigned</span>
           <span style={{ color: "var(--text-muted)" }}>·</span>
           {assignmentSummary.assignmentsByClass.map((cls, i) => (
             <span key={cls.classId}>
@@ -849,7 +849,7 @@ export default function LessonEditor() {
         })}
         {lesson.prompts.length === 0 && (
           <div className="card" style={{ textAlign: "center", padding: "48px", color: "var(--text-secondary)" }}>
-            <div style={{ fontSize: "2.5rem", marginBottom: "12px", opacity: 0.5 }}>📝</div>
+            <div style={{ fontSize: "1rem", marginBottom: "12px", opacity: 0.7, fontWeight: 500 }}>No questions</div>
             <p style={{ margin: "0 0 16px 0", fontWeight: 500 }}>No questions yet</p>
             <button
               onClick={() => {

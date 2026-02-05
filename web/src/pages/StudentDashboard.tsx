@@ -11,6 +11,7 @@ import {
   getLesson,
   markBadgeCelebrated,
   getStudentCoachingInvites,
+  getStudentAssignments,
   type Student,
   type StudentLessonSummary,
   type Session,
@@ -20,21 +21,32 @@ import {
   type Lesson,
   type Prompt,
   type CoachingInvite,
+  type StudentAssignmentRecord,
+  type ReviewState,
 } from "../services/api";
 import BadgeDetailModal from "../components/BadgeDetailModal";
 import BadgeCelebrationOverlay from "../components/BadgeCelebrationOverlay";
+import AskCoachDrawer from "../components/AskCoachDrawer";
+import AskCoachTopicDrawer from "../components/AskCoachTopicDrawer";
+import StudentProfileView from "../components/StudentProfileView";
 
 type SessionMode = "voice" | "type";
 
-// Badge display names and icons
-const BADGE_DISPLAY: Record<string, { name: string; icon: string }> = {
-  progress_star: { name: "Progress Star", icon: "⭐" },
-  mastery_badge: { name: "Mastery Badge", icon: "🏆" },
-  effort_award: { name: "Effort Award", icon: "💪" },
-  helper_badge: { name: "Helper Badge", icon: "🤝" },
-  persistence: { name: "Focus Badge", icon: "🎯" },
-  curiosity: { name: "Curiosity Award", icon: "🔍" },
-  custom: { name: "Special Badge", icon: "🌟" },
+/**
+ * DESIGN RULE: No emojis in UI.
+ * Use clean text labels and subtle visual indicators (colors, borders) instead.
+ * This applies to all student-facing and educator-facing views.
+ */
+
+// Badge display names (no emoji icons - use colored indicators instead)
+const BADGE_DISPLAY: Record<string, { name: string; color: string }> = {
+  progress_star: { name: "Progress Star", color: "#ffc107" },
+  mastery_badge: { name: "Mastery Badge", color: "#ff9800" },
+  effort_award: { name: "Effort Award", color: "#4caf50" },
+  helper_badge: { name: "Helper Badge", color: "#2196f3" },
+  persistence: { name: "Focus Badge", color: "#9c27b0" },
+  curiosity: { name: "Curiosity Award", color: "#00bcd4" },
+  custom: { name: "Special Badge", color: "#e91e63" },
 };
 
 // Subject grouping type
@@ -54,14 +66,22 @@ export default function StudentDashboard() {
   const [lessons, setLessons] = useState<StudentLessonSummary[]>([]);
   const [allLessons, setAllLessons] = useState<LessonSummary[]>([]); // All lessons for subject lookup
   const [sessions, setSessions] = useState<Session[]>([]);
+  const [pausedSessions, setPausedSessions] = useState<Session[]>([]); // Paused lessons for resume
   const [badges, setBadges] = useState<StudentBadge[]>([]);
   const [notes, setNotes] = useState<StudentNote[]>([]);
   const [coachingInvites, setCoachingInvites] = useState<CoachingInvite[]>([]);
+  const [studentAssignments, setStudentAssignments] = useState<StudentAssignmentRecord[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // Ask Coach modal state
-  const [showCoachModal, setShowCoachModal] = useState(false);
-  const [selectedTopics, setSelectedTopics] = useState<string[]>([]);
+  // Ask Coach topic drawer state
+  const [showCoachTopicDrawer, setShowCoachTopicDrawer] = useState(false);
+
+  // Ask Coach drawer state
+  const [showCoachDrawer, setShowCoachDrawer] = useState(false);
+  const [drawerInviteId, setDrawerInviteId] = useState<string | undefined>();
+  const [drawerMode, setDrawerMode] = useState<SessionMode>("type");
+  const [drawerTopics, setDrawerTopics] = useState<string[]>([]);
+  const [drawerGradeLevel, setDrawerGradeLevel] = useState<string | undefined>();
 
   // Completed Work section collapsed state
   const [completedExpanded, setCompletedExpanded] = useState(false);
@@ -69,10 +89,11 @@ export default function StudentDashboard() {
   const [expandedAssignments, setExpandedAssignments] = useState<Set<string>>(new Set());
   // Track which subjects are expanded
   const [expandedSubjects, setExpandedSubjects] = useState<Set<string>>(new Set());
-  // Track which subject note views are expanded
-  const [expandedSubjectNotes, setExpandedSubjectNotes] = useState<Set<string>>(new Set());
   // Track badge tooltip/modal state
   const [selectedBadge, setSelectedBadge] = useState<StudentBadge | null>(null);
+
+  // Student profile view state
+  const [showProfileView, setShowProfileView] = useState(false);
 
   // Lesson prompts cache for displaying student responses
   const [lessonPrompts, setLessonPrompts] = useState<Map<string, Prompt[]>>(new Map());
@@ -98,17 +119,20 @@ export default function StudentDashboard() {
 
     async function loadData() {
       try {
-        const [studentData, studentLessonsData, sessionsData, badgesData, notesData, allLessonsData, invitesData] = await Promise.all([
+        const [studentData, studentLessonsData, sessionsData, pausedSessionsData, badgesData, notesData, allLessonsData, invitesData, assignmentsData] = await Promise.all([
           getStudent(studentId!),
           getStudentLessons(studentId!),
-          getSessions(studentId, "completed"),
+          getSessions(studentId, "completed", "student"), // PRIVACY: Use student audience for filtered data
+          getSessions(studentId, "paused", "student").catch(() => [] as Session[]), // Fetch paused sessions for resume
           getStudentBadges(studentId!).catch(() => ({ badges: [] as StudentBadge[], count: 0, studentId: "", studentName: "" })),
           getStudentNotes(studentId!).catch(() => ({ notes: [] as StudentNote[], count: 0, studentId: "", studentName: "" })),
           getLessons().catch(() => [] as LessonSummary[]), // Fetch all lessons for subject lookup
           getStudentCoachingInvites(studentId!, "pending").catch(() => ({ invites: [] as CoachingInvite[], counts: { pending: 0, started: 0, completed: 0, dismissed: 0, total: 0 } })),
+          getStudentAssignments(studentId!).catch(() => ({ studentId: "", studentName: "", assignments: [] as StudentAssignmentRecord[], count: 0 })),
         ]);
         setStudent(studentData);
         setAllLessons(allLessonsData);
+        setPausedSessions(pausedSessionsData);
 
         // Deduplicate coaching invites by title + assignmentId, keeping the most recent
         const uniqueInvites = invitesData.invites.reduce((acc: CoachingInvite[], invite) => {
@@ -146,6 +170,7 @@ export default function StudentDashboard() {
         setSessions(sessionsData);
         setBadges(badgesData.badges);
         setNotes(notesData.notes);
+        setStudentAssignments(assignmentsData.assignments);
       } catch (err) {
         console.error("Failed to load dashboard:", err);
       } finally {
@@ -294,89 +319,64 @@ export default function StudentDashboard() {
     if (!student) return;
 
     try {
-      const session = await createSession({
-        studentId: student.id,
-        studentName: student.name,
-        lessonId: lesson.id,
-        lessonTitle: lesson.title,
-      });
-      navigate(`/student/${student.id}/lesson/${lesson.id}?session=${session.id}&mode=${mode}`);
+      // Check if there's a paused session for this lesson
+      const existingPausedSession = pausedSessions.find((s) => s.lessonId === lesson.id);
+
+      if (existingPausedSession) {
+        // Resume the paused session
+        navigate(`/student/${student.id}/lesson/${lesson.id}?session=${existingPausedSession.id}&mode=${mode}`);
+      } else {
+        // Create a new session
+        const session = await createSession({
+          studentId: student.id,
+          studentName: student.preferredName || student.name,
+          lessonId: lesson.id,
+          lessonTitle: lesson.title,
+        });
+        navigate(`/student/${student.id}/lesson/${lesson.id}?session=${session.id}&mode=${mode}`);
+      }
     } catch (err) {
       console.error("Failed to start lesson:", err);
     }
   };
 
-  // Get available topics from current lessons and completed sessions, grouped by subject
-  const getTopicsBySubject = (): Map<string, { title: string; lessonId?: string }[]> => {
-    const subjectMap = new Map<string, { title: string; lessonId?: string }[]>();
-
-    // Add current assignment titles with their subjects
-    lessons.forEach((l) => {
-      const subject = l.subject || "Other";
-      const existing = subjectMap.get(subject) || [];
-      // Avoid duplicates
-      if (!existing.some((t) => t.title === l.title)) {
-        existing.push({ title: l.title, lessonId: l.id });
-        subjectMap.set(subject, existing);
-      }
-    });
-
-    // Add completed session lesson titles
-    sessions.forEach((s) => {
-      // Look up subject from allLessons
-      const lessonInfo = allLessons.find((l) => l.id === s.lessonId);
-      const subject = lessonInfo?.subject || "Other";
-      const existing = subjectMap.get(subject) || [];
-      // Avoid duplicates
-      if (!existing.some((t) => t.title === s.lessonTitle)) {
-        existing.push({ title: s.lessonTitle, lessonId: s.lessonId });
-        subjectMap.set(subject, existing);
-      }
-    });
-
-    // Sort subjects alphabetically, but put "Other" last
-    const sortedMap = new Map<string, { title: string; lessonId?: string }[]>();
-    const subjects = Array.from(subjectMap.keys()).sort((a, b) => {
-      if (a === "Other") return 1;
-      if (b === "Other") return -1;
-      return a.localeCompare(b);
-    });
-    subjects.forEach((subject) => {
-      sortedMap.set(subject, subjectMap.get(subject)!);
-    });
-
-    return sortedMap;
+  // Check if a lesson has a paused session
+  const hasPausedSession = (lessonId: string): boolean => {
+    return pausedSessions.some((s) => s.lessonId === lessonId);
   };
 
-  // Get flat list of available topics (for backward compatibility)
-  const getAvailableTopics = (): string[] => {
-    const topics: string[] = [];
-    getTopicsBySubject().forEach((items) => {
-      items.forEach((item) => {
-        if (!topics.includes(item.title)) {
-          topics.push(item.title);
-        }
-      });
-    });
-    return topics;
+  // Get the paused session for a lesson
+  const getPausedSession = (lessonId: string): Session | undefined => {
+    return pausedSessions.find((s) => s.lessonId === lessonId);
   };
 
-  const handleTopicToggle = (topic: string) => {
-    setSelectedTopics((prev) =>
-      prev.includes(topic)
-        ? prev.filter((t) => t !== topic)
-        : [...prev, topic]
-    );
+  // Callback from AskCoachTopicDrawer when starting a session with selected topics
+  const handleStartCoachSession = (topics: string[], mode: SessionMode, gradeLevel: string) => {
+    setDrawerMode(mode);
+    setDrawerTopics(topics);
+    setDrawerGradeLevel(gradeLevel);
+    setDrawerInviteId(undefined);
+    setShowCoachDrawer(true);
+    setShowCoachTopicDrawer(false);
   };
 
-  const handleStartCoachSession = (mode: SessionMode) => {
-    const topicsParam = encodeURIComponent(JSON.stringify(selectedTopics));
-    // Get gradeLevel from selected lessons (use first selected topic's grade level)
-    const selectedLesson = lessons.find((l) => selectedTopics.includes(l.title));
-    const gradeLevel = selectedLesson?.gradeLevel || "";
-    navigate(`/student/${studentId}/coach?mode=${mode}&topics=${topicsParam}&gradeLevel=${encodeURIComponent(gradeLevel)}`);
-    setShowCoachModal(false);
-    setSelectedTopics([]);
+  // Open drawer for a coaching invite (from topic drawer)
+  const handleOpenCoachInvite = (inviteId: string, mode: SessionMode) => {
+    setDrawerMode(mode);
+    setDrawerInviteId(inviteId);
+    setDrawerTopics([]);
+    setDrawerGradeLevel(undefined);
+    setShowCoachDrawer(true);
+    setShowCoachTopicDrawer(false);
+  };
+
+  // Callback from AskCoachDrawer to change topics - closes coach drawer, opens topic drawer
+  const handleChangeTopics = () => {
+    setShowCoachDrawer(false);
+    setDrawerInviteId(undefined);
+    setDrawerTopics([]);
+    setDrawerGradeLevel(undefined);
+    setShowCoachTopicDrawer(true);
   };
 
   const toggleAssignmentExpanded = (lessonId: string) => {
@@ -393,18 +393,6 @@ export default function StudentDashboard() {
 
   const toggleSubjectExpanded = (subject: string) => {
     setExpandedSubjects((prev) => {
-      const next = new Set(prev);
-      if (next.has(subject)) {
-        next.delete(subject);
-      } else {
-        next.add(subject);
-      }
-      return next;
-    });
-  };
-
-  const toggleSubjectNotes = (subject: string) => {
-    setExpandedSubjectNotes((prev) => {
       const next = new Set(prev);
       if (next.has(subject)) {
         next.delete(subject);
@@ -524,6 +512,37 @@ export default function StudentDashboard() {
 
   const subjectGroups = getSubjectGroups();
 
+  // Build a map of lessonId -> reviewState for quick lookup
+  const reviewStateByLesson = new Map<string, ReviewState>();
+  studentAssignments.forEach((a) => {
+    reviewStateByLesson.set(a.lessonId, a.reviewState);
+  });
+
+  /**
+   * Get the feedback status display for a session.
+   * Returns { label, hasNote, isReviewed } based on reviewState and educatorNotes.
+   * - Not reviewed: subtle gray, "Not reviewed yet"
+   * - Reviewed without note: subtle gray, "Reviewed · No note"
+   * - Reviewed with note: colored (green), "Reviewed · Note from teacher"
+   */
+  const getFeedbackStatus = (session: Session): { label: string; hasNote: boolean; isReviewed: boolean } => {
+    const reviewState = reviewStateByLesson.get(session.lessonId);
+    const hasNote = !!session.educatorNotes;
+
+    // Check if teacher has reviewed (reviewState is not pending_review or not_started)
+    const isReviewed = reviewState && reviewState !== "pending_review" && reviewState !== "not_started";
+
+    if (!isReviewed) {
+      return { label: "Not reviewed yet", hasNote: false, isReviewed: false };
+    }
+
+    if (hasNote) {
+      return { label: "Reviewed · Note from teacher", hasNote: true, isReviewed: true };
+    }
+
+    return { label: "Reviewed · No note", hasNote: false, isReviewed: true };
+  };
+
   return (
     <>
       {/* Animations for badge indicators */}
@@ -560,12 +579,23 @@ export default function StudentDashboard() {
       <div className="header">
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
           <div>
-            <h1>Hi, {student.name}!</h1>
+            <h1
+              onClick={() => setShowProfileView(true)}
+              style={{
+                cursor: "pointer",
+                transition: "opacity 0.15s",
+              }}
+              onMouseEnter={(e) => { e.currentTarget.style.opacity = "0.8"; }}
+              onMouseLeave={(e) => { e.currentTarget.style.opacity = "1"; }}
+              title="View your profile"
+            >
+              Hi, {student.preferredName || student.name}!
+            </h1>
             <p>{lessons.length > 0 ? "Ready to learn? Pick an assignment below!" : "Welcome back!"}</p>
           </div>
           <button
             className={`btn btn-coach${coachingInvites.length > 0 ? " btn-coach--has-invite" : ""}`}
-            onClick={() => setShowCoachModal(true)}
+            onClick={() => setShowCoachTopicDrawer(true)}
             style={{
               display: "flex",
               alignItems: "center",
@@ -575,7 +605,6 @@ export default function StudentDashboard() {
               position: "relative",
             }}
           >
-            <span style={{ fontSize: "1.2rem", opacity: 0.9 }}>💬</span>
             <span style={{ fontWeight: 600 }}>Ask Coach</span>
             {/* Coaching invite badge */}
             {coachingInvites.length > 0 && (
@@ -603,281 +632,17 @@ export default function StudentDashboard() {
         </div>
       </div>
 
-      {/* Ask Coach Modal */}
-      {showCoachModal && (
-        <div
-          style={{
-            position: "fixed",
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            background: "rgba(45, 55, 72, 0.4)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            zIndex: 1000,
-          }}
-          onClick={() => setShowCoachModal(false)}
-        >
-          <div
-            className="card"
-            style={{ maxWidth: "480px", width: "90%", maxHeight: "80vh", overflow: "auto", position: "relative", boxShadow: "0 8px 32px rgba(0,0,0,0.12)" }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            {/* Close button */}
-            <button
-              onClick={() => {
-                setShowCoachModal(false);
-                setSelectedTopics([]);
-              }}
-              style={{
-                position: "absolute",
-                top: "12px",
-                right: "12px",
-                background: "none",
-                border: "none",
-                fontSize: "1.25rem",
-                color: "var(--text-muted)",
-                cursor: "pointer",
-                padding: "4px 8px",
-                lineHeight: 1,
-              }}
-            >
-              ×
-            </button>
-            <h2 style={{ marginTop: 0, marginBottom: "8px", color: "var(--text-primary)", fontWeight: 600 }}>Ask Coach</h2>
-            <p style={{ color: "var(--text-secondary)", marginBottom: "20px", fontSize: "0.9rem" }}>
-              Select topics you want to explore with your coach.
-            </p>
-
-            {/* Teacher Coaching Invitations */}
-            {coachingInvites.length > 0 && (
-              <div
-                style={{
-                  marginBottom: "24px",
-                  padding: "16px",
-                  background: "var(--status-success-bg)",
-                  borderRadius: "8px",
-                  borderLeft: "3px solid var(--status-success)",
-                }}
-              >
-                <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "12px" }}>
-                  <h4 style={{ margin: 0, color: "var(--status-success-text)", fontWeight: 600, fontSize: "0.95rem" }}>
-                    Special Invitation{coachingInvites.length > 1 ? "s" : ""} from Your Teacher
-                  </h4>
-                </div>
-                <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
-                  {coachingInvites.map((invite) => (
-                    <div
-                      key={invite.id}
-                      style={{
-                        background: "white",
-                        borderRadius: "6px",
-                        padding: "12px",
-                        boxShadow: "0 1px 3px rgba(0,0,0,0.06)",
-                      }}
-                    >
-                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-                        <div style={{ flex: 1 }}>
-                          <h5 style={{ margin: "0 0 4px 0", color: "var(--text-primary)", fontWeight: 600, fontSize: "0.9rem" }}>{invite.title}</h5>
-                          <p style={{ margin: 0, fontSize: "0.8rem", color: "var(--text-secondary)" }}>
-                            {invite.subject}
-                            {invite.assignmentTitle && ` • ${invite.assignmentTitle}`}
-                          </p>
-                          {invite.teacherNote && (
-                            <p
-                              style={{
-                                margin: "8px 0 0 0",
-                                padding: "8px 10px",
-                                background: "var(--surface-muted)",
-                                borderRadius: "6px",
-                                fontSize: "0.8rem",
-                                color: "var(--text-secondary)",
-                                fontStyle: "italic",
-                              }}
-                            >
-                              "{invite.teacherNote}"
-                            </p>
-                          )}
-                        </div>
-                      </div>
-                      <div style={{ display: "flex", gap: "8px", marginTop: "12px" }}>
-                        <button
-                          className="btn btn-primary"
-                          onClick={() => {
-                            navigate(`/student/${studentId}/coach?inviteId=${invite.id}&mode=voice`);
-                            setShowCoachModal(false);
-                          }}
-                          style={{
-                            flex: 1,
-                            display: "flex",
-                            alignItems: "center",
-                            justifyContent: "center",
-                            gap: "6px",
-                            padding: "9px",
-                            fontSize: "0.85rem",
-                            background: "var(--status-success-text)",
-                          }}
-                        >
-                          <span>🎤</span> Start Voice
-                        </button>
-                        <button
-                          className="btn btn-secondary"
-                          onClick={() => {
-                            navigate(`/student/${studentId}/coach?inviteId=${invite.id}&mode=type`);
-                            setShowCoachModal(false);
-                          }}
-                          style={{
-                            flex: 1,
-                            display: "flex",
-                            alignItems: "center",
-                            justifyContent: "center",
-                            gap: "6px",
-                            padding: "10px",
-                            fontSize: "0.9rem",
-                          }}
-                        >
-                          <span>⌨️</span> Start Typing
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Divider if there are both invites and regular topics */}
-            {coachingInvites.length > 0 && getAvailableTopics().length > 0 && (
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "12px",
-                  marginBottom: "16px",
-                  color: "var(--text-muted)",
-                  fontSize: "0.8rem",
-                }}
-              >
-                <div style={{ flex: 1, height: "1px", background: "var(--border-subtle)" }} />
-                <span>or explore on your own</span>
-                <div style={{ flex: 1, height: "1px", background: "var(--border-subtle)" }} />
-              </div>
-            )}
-
-            {/* Topic Selection - Grouped by Subject */}
-            <div style={{ marginBottom: "24px" }}>
-              <h4 style={{ margin: "0 0 12px 0", color: "var(--text-primary)", fontSize: "0.95rem", fontWeight: 600 }}>Choose Topics</h4>
-              {getAvailableTopics().length === 0 ? (
-                <p style={{ color: "var(--text-muted)", fontSize: "0.875rem" }}>
-                  No topics available yet. Complete some assignments first!
-                </p>
-              ) : (
-                <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
-                  {Array.from(getTopicsBySubject().entries()).map(([subject, topics]) => (
-                    <div key={subject}>
-                      {/* Subject Header */}
-                      <div
-                        style={{
-                          display: "flex",
-                          alignItems: "center",
-                          gap: "8px",
-                          marginBottom: "8px",
-                          paddingBottom: "4px",
-                          borderBottom: "1px solid var(--border-subtle)",
-                        }}
-                      >
-                        <span
-                          style={{
-                            fontSize: "0.8rem",
-                            fontWeight: 600,
-                            color: "var(--accent-primary)",
-                          }}
-                        >
-                          {subject}
-                        </span>
-                        <span style={{ fontSize: "0.7rem", color: "var(--text-muted)" }}>
-                          ({topics.length} {topics.length === 1 ? "topic" : "topics"})
-                        </span>
-                      </div>
-                      {/* Topics in this subject */}
-                      <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-                        {topics.map((topic) => (
-                          <label
-                            key={topic.title}
-                            style={{
-                              display: "flex",
-                              alignItems: "center",
-                              gap: "12px",
-                              padding: "10px 12px",
-                              background: selectedTopics.includes(topic.title) ? "var(--surface-accent-tint)" : "var(--surface-muted)",
-                              borderRadius: "6px",
-                              cursor: "pointer",
-                              border: selectedTopics.includes(topic.title) ? "1.5px solid var(--accent-primary)" : "1.5px solid transparent",
-                              marginLeft: "8px",
-                            }}
-                          >
-                            <input
-                              type="checkbox"
-                              checked={selectedTopics.includes(topic.title)}
-                              onChange={() => handleTopicToggle(topic.title)}
-                              style={{ width: "16px", height: "16px" }}
-                            />
-                            <span style={{ fontWeight: 500, fontSize: "0.9rem", color: "var(--text-primary)" }}>{topic.title}</span>
-                          </label>
-                        ))}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            {/* Mode Selection Buttons */}
-            {selectedTopics.length === 0 && (
-              <p style={{ color: "var(--text-muted)", textAlign: "center", marginBottom: "12px", fontSize: "0.85rem" }}>
-                Please select at least one topic to start
-              </p>
-            )}
-            <div style={{ display: "flex", gap: "12px" }}>
-              <button
-                className="btn btn-primary"
-                onClick={() => handleStartCoachSession("voice")}
-                disabled={selectedTopics.length === 0}
-                style={{
-                  flex: 1,
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  gap: "8px",
-                  padding: "14px",
-                  opacity: selectedTopics.length === 0 ? 0.5 : 1,
-                }}
-              >
-                <span style={{ fontSize: "1.2rem" }}>🎤</span>
-                Voice Chat
-              </button>
-              <button
-                className="btn btn-secondary"
-                onClick={() => handleStartCoachSession("type")}
-                disabled={selectedTopics.length === 0}
-                style={{
-                  flex: 1,
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  gap: "8px",
-                  padding: "14px",
-                  opacity: selectedTopics.length === 0 ? 0.5 : 1,
-                }}
-              >
-                <span style={{ fontSize: "1.2rem" }}>⌨️</span>
-                Type Chat
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Ask Coach Topic Drawer (Step 1: Topic selection) */}
+      <AskCoachTopicDrawer
+        isOpen={showCoachTopicDrawer}
+        onClose={() => setShowCoachTopicDrawer(false)}
+        studentId={studentId!}
+        lessons={lessons}
+        completedSessions={sessions}
+        coachingInvites={coachingInvites}
+        onStartInvite={handleOpenCoachInvite}
+        onStartSession={handleStartCoachSession}
+      />
 
       {/* Badge Detail Modal */}
       {selectedBadge && (
@@ -900,12 +665,20 @@ export default function StudentDashboard() {
         />
       )}
 
+      {/* Student Profile View */}
+      <StudentProfileView
+        isOpen={showProfileView}
+        onClose={() => setShowProfileView(false)}
+        studentId={studentId!}
+        studentFullName={student.name}
+        studentCode={student.studentCode}
+      />
+
       {/* Lessons */}
       <h2 style={{ color: "white", marginBottom: "16px" }}>Your Assignments</h2>
       {lessons.length === 0 ? (
         <div className="card" style={{ textAlign: "center", padding: "48px" }}>
-          <div style={{ fontSize: "3rem", marginBottom: "16px" }}>📚</div>
-          <h3 style={{ margin: 0, marginBottom: "8px" }}>No assignments yet!</h3>
+          <h3 style={{ margin: 0, marginBottom: "8px" }}>No assignments yet</h3>
           <p style={{ color: "var(--text-secondary)", margin: 0 }}>
             Your teacher will assign lessons for you to work on.
           </p>
@@ -915,80 +688,171 @@ export default function StudentDashboard() {
         </div>
       ) : (
         <div className="lesson-grid">
-          {lessons.map((lesson) => (
-            <div key={lesson.id} className="card lesson-card" style={{ cursor: "default" }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-                <h3 style={{ margin: 0 }}>{lesson.title}</h3>
-                {lesson.attempts > 1 && (
-                  <span
-                    style={{
-                      background: "var(--status-info-bg)",
-                      color: "var(--status-info-text)",
-                      padding: "4px 8px",
-                      borderRadius: "12px",
-                      fontSize: "0.75rem",
-                      fontWeight: 600,
-                    }}
-                  >
-                    Attempt #{lesson.attempts}
-                  </span>
-                )}
-              </div>
-              <div style={{ display: "flex", gap: "8px", alignItems: "center", marginTop: "8px", marginBottom: "16px", flexWrap: "wrap" }}>
-                {lesson.subject && (
-                  <span
-                    style={{
-                      background: "var(--surface-accent-tint)",
-                      color: "var(--accent-primary)",
-                      padding: "4px 10px",
-                      borderRadius: "12px",
-                      fontSize: "0.8rem",
-                      fontWeight: 500,
-                    }}
-                  >
-                    {lesson.subject}
-                  </span>
-                )}
-                {lesson.assignedAt && (
-                  <span style={{ color: "var(--text-muted)", fontSize: "0.85rem" }}>
-                    Assigned {new Date(lesson.assignedAt).toLocaleDateString()}
-                  </span>
-                )}
-              </div>
-              <div style={{ display: "flex", gap: "12px" }}>
-                <button
-                  className="btn btn-primary"
-                  onClick={() => handleStartLesson(lesson, "voice")}
+          {lessons.map((lesson) => {
+            // Estimate time based on question count
+            const questionCount = lesson.promptCount || 0;
+            const estimatedTime =
+              questionCount <= 3 ? "About 5 minutes" :
+              questionCount <= 5 ? "About 10 minutes" :
+              "About 15 minutes";
+
+            return (
+              <div key={lesson.id} className="card lesson-card" style={{ cursor: "default" }}>
+                {/* Title row with attempt/resume badge */}
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "6px" }}>
+                  <h3 style={{ margin: 0, color: "var(--text-primary)", fontSize: "1.15rem", fontWeight: 600, lineHeight: 1.3 }}>
+                    {lesson.title}
+                  </h3>
+                  <div style={{ display: "flex", gap: "6px", flexShrink: 0 }}>
+                    {hasPausedSession(lesson.id) && (
+                      <span
+                        style={{
+                          background: "var(--status-warning-bg)",
+                          color: "var(--status-warning-text)",
+                          padding: "3px 8px",
+                          borderRadius: "10px",
+                          fontSize: "0.7rem",
+                          fontWeight: 600,
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        Resume
+                      </span>
+                    )}
+                    {lesson.attempts > 1 && (
+                      <span
+                        style={{
+                          background: "var(--status-info-bg)",
+                          color: "var(--status-info-text)",
+                          padding: "3px 8px",
+                          borderRadius: "10px",
+                          fontSize: "0.7rem",
+                          fontWeight: 600,
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        Try #{lesson.attempts}
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                {/* Class name and subject - secondary text */}
+                <div style={{ marginBottom: "12px" }}>
+                  {lesson.className && (
+                    <p style={{ margin: "0 0 2px 0", color: "var(--text-secondary)", fontSize: "0.85rem" }}>
+                      {lesson.className}
+                    </p>
+                  )}
+                  {lesson.subject && (
+                    <p style={{ margin: 0, color: "var(--accent-primary)", fontSize: "0.8rem", fontWeight: 500 }}>
+                      {lesson.subject}
+                    </p>
+                  )}
+                </div>
+
+                {/* Question count and time estimate - metadata row */}
+                <div
                   style={{
-                    flex: 1,
                     display: "flex",
+                    gap: "16px",
                     alignItems: "center",
-                    justifyContent: "center",
-                    gap: "8px",
-                    padding: "12px 16px",
+                    marginBottom: "16px",
+                    color: "var(--text-muted)",
+                    fontSize: "0.8rem",
                   }}
                 >
-                  <span style={{ fontSize: "1.2rem" }}>🎤</span>
-                  <span>Voice</span>
-                </button>
-                <button
-                  className="btn btn-secondary"
-                  onClick={() => handleStartLesson(lesson, "type")}
-                  style={{
-                    flex: 1,
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    gap: "8px",
-                    padding: "12px 16px",
-                  }}
-                >
-                  <span style={{ fontSize: "1.2rem" }}>⌨️</span>
-                  <span>Type</span>
-                </button>
+                  <span>
+                    {questionCount} {questionCount === 1 ? "question" : "questions"}
+                  </span>
+                  <span style={{ color: "var(--text-muted)" }}>·</span>
+                  <span>{estimatedTime}</span>
+                </div>
+
+                {/* Due date indicator */}
+                {lesson.dueDate && (() => {
+                  const dueDate = new Date(lesson.dueDate + "T23:59:59"); // End of day
+                  const today = new Date();
+                  today.setHours(0, 0, 0, 0);
+                  const isPastDue = dueDate < today;
+                  const formattedDate = new Date(lesson.dueDate).toLocaleDateString("en-US", {
+                    month: "short",
+                    day: "numeric",
+                  });
+
+                  return (
+                    <div
+                      style={{
+                        marginBottom: "12px",
+                        padding: "8px 12px",
+                        background: isPastDue ? "var(--status-error-bg)" : "var(--surface-muted)",
+                        borderRadius: "8px",
+                        borderLeft: isPastDue ? "3px solid var(--status-error)" : "3px solid var(--border-muted)",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "8px",
+                      }}
+                    >
+                      <span
+                        style={{
+                          fontSize: "0.85rem",
+                          fontWeight: 500,
+                          color: isPastDue ? "var(--status-error-text)" : "var(--text-secondary)",
+                        }}
+                      >
+                        {isPastDue ? "Past due" : `Due ${formattedDate}`}
+                      </span>
+                    </div>
+                  );
+                })()}
+
+                {/* Progress indicator for paused lessons */}
+                {hasPausedSession(lesson.id) && (() => {
+                  const pausedSession = getPausedSession(lesson.id);
+                  const progress = pausedSession?.currentPromptIndex || 0;
+                  return (
+                    <div
+                      style={{
+                        marginBottom: "12px",
+                        padding: "10px 12px",
+                        background: "var(--status-warning-bg)",
+                        borderRadius: "8px",
+                        borderLeft: "3px solid var(--status-warning)",
+                      }}
+                    >
+                      <p style={{ margin: 0, fontSize: "0.85rem", color: "var(--status-warning-text)" }}>
+                        <strong>You're on question {progress + 1}</strong> — pick up where you left off!
+                      </p>
+                    </div>
+                  );
+                })()}
+
+                {/* Action buttons */}
+                <div style={{ display: "flex", gap: "12px" }}>
+                  <button
+                    className="btn btn-primary"
+                    onClick={() => handleStartLesson(lesson, "voice")}
+                    style={{
+                      flex: 1,
+                      padding: "12px 16px",
+                    }}
+                  >
+                    {hasPausedSession(lesson.id) ? "Resume talking" : "Start talking"}
+                  </button>
+                  <button
+                    className="btn btn-secondary"
+                    onClick={() => handleStartLesson(lesson, "type")}
+                    style={{
+                      flex: 1,
+                      padding: "12px 16px",
+                    }}
+                  >
+                    {hasPausedSession(lesson.id) ? "Resume typing" : "Start typing"}
+                  </button>
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
 
@@ -1030,7 +894,6 @@ export default function StudentDashboard() {
                 if (group.sessions.length === 0) return null;
 
                 const isSubjectExpanded = expandedSubjects.has(group.subject);
-                const isNotesExpanded = expandedSubjectNotes.has(group.subject);
 
                 // Group sessions by lessonId within subject
                 const sessionsByLesson = new Map<string, Session[]>();
@@ -1039,6 +902,21 @@ export default function StudentDashboard() {
                   existing.push(session);
                   sessionsByLesson.set(session.lessonId, existing);
                 });
+
+                // Count unique assignments, badges, and notes for this subject
+                const uniqueAssignments = sessionsByLesson.size;
+                const subjectBadgeCount = group.badges.length;
+                const subjectNoteCount = group.notes.length;
+
+                // Build metadata parts
+                const metadataParts: string[] = [];
+                metadataParts.push(`${uniqueAssignments} ${uniqueAssignments === 1 ? "assignment" : "assignments"}`);
+                if (subjectNoteCount > 0) {
+                  metadataParts.push(`${subjectNoteCount} ${subjectNoteCount === 1 ? "note" : "notes"}`);
+                }
+                if (subjectBadgeCount > 0) {
+                  metadataParts.push(`${subjectBadgeCount} ${subjectBadgeCount === 1 ? "badge" : "badges"}`);
+                }
 
                 return (
                   <div key={group.subject} className="card" style={{ padding: 0, overflow: "hidden" }}>
@@ -1054,98 +932,26 @@ export default function StudentDashboard() {
                         background: "var(--surface-muted)",
                         border: "none",
                         borderBottom: isSubjectExpanded ? "1px solid var(--border-muted)" : "none",
+                        borderLeft: "3px solid var(--accent-primary)",
                         cursor: "pointer",
                         textAlign: "left",
                       }}
                     >
                       <div style={{ flex: 1 }}>
-                        <div style={{ display: "flex", alignItems: "center", gap: "12px", flexWrap: "wrap" }}>
-                          <h3 style={{ margin: 0, color: "var(--text-primary)", fontSize: "1.1rem" }}>
-                            {group.subject}
-                          </h3>
-                          {/* Badge chips */}
-                          {group.badges.length > 0 && (
-                            <div style={{ display: "flex", gap: "4px", flexWrap: "wrap" }}>
-                              {group.badges.slice(0, 3).map((badge) => {
-                                const isNew = !badge.celebratedAt;
-                                return (
-                                  <button
-                                    key={badge.id}
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      setSelectedBadge(badge);
-                                      // Mark as celebrated when viewed
-                                      if (isNew && studentId) {
-                                        markBadgeCelebrated(studentId, badge.id).catch(console.error);
-                                        setBadges((prev) =>
-                                          prev.map((b) =>
-                                            b.id === badge.id
-                                              ? { ...b, celebratedAt: new Date().toISOString() }
-                                              : b
-                                          )
-                                        );
-                                      }
-                                    }}
-                                    style={{
-                                      display: "flex",
-                                      alignItems: "center",
-                                      gap: "4px",
-                                      padding: "2px 8px",
-                                      background: isNew ? "var(--status-warning-bg)" : "var(--status-warning-bg)",
-                                      border: isNew ? "2px solid var(--status-warning)" : "1px solid var(--status-warning)",
-                                      borderRadius: "12px",
-                                      fontSize: "0.75rem",
-                                      cursor: "pointer",
-                                      color: "var(--status-warning-text)",
-                                      position: "relative",
-                                    }}
-                                    title={badge.badgeTypeName}
-                                  >
-                                    {/* New badge sparkle indicator */}
-                                    {isNew && (
-                                      <span
-                                        style={{
-                                          position: "absolute",
-                                          top: "-4px",
-                                          right: "-4px",
-                                          fontSize: "0.6rem",
-                                          animation: "sparkle 1s ease-in-out infinite",
-                                        }}
-                                      >
-                                        ✨
-                                      </span>
-                                    )}
-                                    <span>{BADGE_DISPLAY[badge.badgeType]?.icon || "🌟"}</span>
-                                    <span>{BADGE_DISPLAY[badge.badgeType]?.name || badge.badgeTypeName}</span>
-                                  </button>
-                                );
-                              })}
-                              {group.badges.length > 3 && (
-                                <span
-                                  style={{
-                                    padding: "2px 8px",
-                                    background: "var(--surface-accent)",
-                                    borderRadius: "12px",
-                                    fontSize: "0.75rem",
-                                    color: "var(--text-secondary)",
-                                  }}
-                                >
-                                  +{group.badges.length - 3} more
-                                </span>
-                              )}
-                            </div>
-                          )}
-                        </div>
-                        <p style={{ color: "var(--text-secondary)", fontSize: "0.85rem", margin: "4px 0 0 0" }}>
-                          {group.sessions.length} {group.sessions.length === 1 ? "assignment" : "assignments"} completed
+                        <h3 style={{ margin: 0, color: "var(--text-primary)", fontSize: "1.1rem" }}>
+                          {group.subject}
+                        </h3>
+                        <p style={{ color: "var(--text-secondary)", fontSize: "0.8rem", margin: "4px 0 0 0" }}>
+                          {metadataParts.join(" · ")}
                         </p>
                       </div>
                       <span
                         style={{
-                          color: "var(--text-muted)",
-                          fontSize: "0.9rem",
+                          color: "var(--accent-primary)",
+                          fontSize: "0.85rem",
                           transition: "transform 0.2s",
                           transform: isSubjectExpanded ? "rotate(90deg)" : "rotate(0deg)",
+                          opacity: 0.7,
                         }}
                       >
                         ▶
@@ -1155,74 +961,15 @@ export default function StudentDashboard() {
                     {/* Subject Content */}
                     {isSubjectExpanded && (
                       <div style={{ padding: "16px 20px" }}>
-                        {/* Teacher Notes Section */}
-                        {group.notes.length > 0 && (
-                          <div style={{ marginBottom: "16px" }}>
-                            <div
-                              style={{
-                                display: "flex",
-                                alignItems: "center",
-                                gap: "8px",
-                                marginBottom: "8px",
-                              }}
-                            >
-                              <span style={{ fontSize: "1rem" }}>📝</span>
-                              <h4 style={{ margin: 0, color: "var(--text-primary)", fontSize: "0.95rem" }}>
-                                Teacher Notes
-                              </h4>
-                            </div>
-                            {/* Show most recent note(s) */}
-                            {group.notes.slice(0, isNotesExpanded ? undefined : 2).map((note) => (
-                              <div
-                                key={note.id}
-                                style={{
-                                  padding: "10px 12px",
-                                  background: "var(--status-success-bg)",
-                                  borderRadius: "8px",
-                                  borderLeft: "3px solid var(--status-success)",
-                                  marginBottom: "8px",
-                                }}
-                              >
-                                <p style={{ margin: 0, color: "var(--text-primary)", fontSize: "0.9rem" }}>
-                                  {note.noteText}
-                                </p>
-                                <p style={{ margin: "4px 0 0 0", color: "var(--text-muted)", fontSize: "0.8rem" }}>
-                                  {note.assignmentTitle && `On ${note.assignmentTitle}`}
-                                  {note.attemptNumber && ` (Attempt ${note.attemptNumber})`}
-                                  {" • "}
-                                  {new Date(note.createdAt).toLocaleDateString()}
-                                </p>
-                              </div>
-                            ))}
-                            {group.notes.length > 2 && (
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  toggleSubjectNotes(group.subject);
-                                }}
-                                style={{
-                                  background: "none",
-                                  border: "none",
-                                  color: "var(--accent-primary)",
-                                  cursor: "pointer",
-                                  fontSize: "0.85rem",
-                                  padding: "4px 0",
-                                }}
-                              >
-                                {isNotesExpanded
-                                  ? "Show less"
-                                  : `View all ${group.notes.length} notes`}
-                              </button>
-                            )}
-                          </div>
-                        )}
-
                         {/* Assignments in this subject */}
                         <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
                           {Array.from(sessionsByLesson.entries()).map(([lessonId, lessonSessions]) => {
                             const latestSession = lessonSessions[0];
                             const totalAttempts = lessonSessions.length;
                             const isExpanded = expandedAssignments.has(lessonId);
+                            const feedbackStatus = getFeedbackStatus(latestSession);
+                            // Get badges for this specific assignment
+                            const assignmentBadges = badges.filter((b) => b.assignmentId === lessonId);
 
                             return (
                               <div
@@ -1249,12 +996,93 @@ export default function StudentDashboard() {
                                   }}
                                 >
                                   <div style={{ flex: 1 }}>
-                                    <h4 style={{ margin: 0, color: "var(--accent-primary)", fontSize: "0.95rem" }}>
-                                      {latestSession.lessonTitle}
-                                    </h4>
-                                    <p style={{ color: "var(--text-secondary)", fontSize: "0.8rem", margin: "2px 0 0 0" }}>
+                                    <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+                                      <h4 style={{ margin: 0, color: "var(--accent-primary)", fontSize: "0.95rem" }}>
+                                        {latestSession.lessonTitle}
+                                      </h4>
+                                      {/* Feedback status badge */}
+                                      <span
+                                        style={{
+                                          fontSize: "0.7rem",
+                                          padding: "2px 8px",
+                                          borderRadius: "10px",
+                                          fontWeight: 500,
+                                          background: feedbackStatus.isReviewed
+                                            ? (feedbackStatus.hasNote ? "var(--status-success-bg)" : "var(--surface-accent)")
+                                            : "var(--surface-muted)",
+                                          color: feedbackStatus.isReviewed
+                                            ? (feedbackStatus.hasNote ? "var(--status-success-text)" : "var(--text-secondary)")
+                                            : "var(--text-muted)",
+                                        }}
+                                      >
+                                        {feedbackStatus.label}
+                                      </span>
+                                      {/* Badges earned for this assignment */}
+                                      {assignmentBadges.map((badge) => {
+                                        const isNew = !badge.celebratedAt;
+                                        return (
+                                          <button
+                                            key={badge.id}
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              setSelectedBadge(badge);
+                                              if (isNew && studentId) {
+                                                markBadgeCelebrated(studentId, badge.id).catch(console.error);
+                                                setBadges((prev) =>
+                                                  prev.map((b) =>
+                                                    b.id === badge.id
+                                                      ? { ...b, celebratedAt: new Date().toISOString() }
+                                                      : b
+                                                  )
+                                                );
+                                              }
+                                            }}
+                                            style={{
+                                              display: "flex",
+                                              alignItems: "center",
+                                              gap: "4px",
+                                              padding: "2px 8px",
+                                              background: "var(--status-warning-bg)",
+                                              border: isNew ? "2px solid var(--status-warning)" : "1px solid var(--status-warning)",
+                                              borderRadius: "12px",
+                                              fontSize: "0.7rem",
+                                              cursor: "pointer",
+                                              color: "var(--status-warning-text)",
+                                              position: "relative",
+                                            }}
+                                            title={badge.badgeTypeName}
+                                          >
+                                            {isNew && (
+                                              <span
+                                                style={{
+                                                  position: "absolute",
+                                                  top: "-2px",
+                                                  right: "-2px",
+                                                  width: "8px",
+                                                  height: "8px",
+                                                  background: "var(--status-success)",
+                                                  borderRadius: "50%",
+                                                  border: "2px solid white",
+                                                }}
+                                              />
+                                            )}
+                                            <span
+                                              style={{
+                                                width: "8px",
+                                                height: "8px",
+                                                borderRadius: "50%",
+                                                background: BADGE_DISPLAY[badge.badgeType]?.color || "#e91e63",
+                                                flexShrink: 0,
+                                              }}
+                                            />
+                                            <span>{BADGE_DISPLAY[badge.badgeType]?.name || badge.badgeTypeName}</span>
+                                          </button>
+                                        );
+                                      })}
+                                    </div>
+                                    <p style={{ color: "var(--text-secondary)", fontSize: "0.8rem", margin: "4px 0 0 0" }}>
                                       {totalAttempts > 1
-                                        ? `${totalAttempts} attempts • Last completed ${new Date(latestSession.completedAt || latestSession.startedAt).toLocaleDateString()}`
+                                        ? `${totalAttempts} attempts · Last completed ${new Date(latestSession.completedAt || latestSession.startedAt).toLocaleDateString()}`
                                         : `Completed ${new Date(latestSession.completedAt || latestSession.startedAt).toLocaleDateString()}`}
                                     </p>
                                   </div>
@@ -1276,6 +1104,7 @@ export default function StudentDashboard() {
                                     {lessonSessions.map((session, index) => {
                                       const attemptNumber = totalAttempts - index;
                                       const hasNotes = !!session.educatorNotes;
+                                      const sessionFeedback = getFeedbackStatus(session);
                                       const isHighlighted = session.id === highlightedSessionId;
                                       const isSessionExpanded = expandedSessions.has(session.id);
                                       const prompts = lessonPrompts.get(session.lessonId) || [];
@@ -1289,9 +1118,17 @@ export default function StudentDashboard() {
                                           }}
                                           style={{
                                             padding: "12px",
-                                            background: isHighlighted ? "var(--status-warning-bg)" : (hasNotes ? "var(--status-success-bg)" : "var(--surface-muted)"),
+                                            background: isHighlighted
+                                              ? "var(--status-warning-bg)"
+                                              : sessionFeedback.hasNote
+                                              ? "var(--status-success-bg)"
+                                              : "var(--surface-muted)",
                                             borderRadius: "8px",
-                                            borderLeft: isHighlighted ? "4px solid var(--status-warning)" : (hasNotes ? "4px solid var(--status-success)" : "4px solid var(--border-muted)"),
+                                            borderLeft: isHighlighted
+                                              ? "4px solid var(--status-warning)"
+                                              : sessionFeedback.hasNote
+                                              ? "4px solid var(--status-success)"
+                                              : "4px solid var(--border-muted)",
                                             boxShadow: isHighlighted ? "0 2px 8px rgba(255,193,7,0.3)" : "none",
                                           }}
                                         >
@@ -1306,12 +1143,9 @@ export default function StudentDashboard() {
                                                 border: "1px solid var(--status-warning)",
                                               }}
                                             >
-                                              <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "8px" }}>
-                                                <span style={{ fontSize: "1.2rem" }}>🏅</span>
-                                                <h4 style={{ margin: 0, color: "var(--status-warning-text)", fontSize: "0.95rem" }}>
-                                                  Badge Evidence
-                                                </h4>
-                                              </div>
+                                              <h4 style={{ margin: "0 0 8px 0", color: "var(--status-warning-text)", fontSize: "0.95rem" }}>
+                                                Badge Evidence
+                                              </h4>
                                               <p style={{ margin: 0, color: "var(--text-secondary)", fontSize: "0.9rem" }}>
                                                 This work is linked to your{" "}
                                                 <strong>{BADGE_DISPLAY[highlightBadge.badgeType]?.name || highlightBadge.badgeTypeName}</strong>
@@ -1364,28 +1198,72 @@ export default function StudentDashboard() {
                                                   borderRadius: "4px",
                                                 }}
                                               >
-                                                {session.submission.responses[0].inputSource === "voice" ? "🎤 Voice" : "⌨️ Typed"}
+                                                {session.submission.responses[0].inputSource === "voice" ? "Voice" : "Typed"}
                                               </span>
                                             )}
-                                            <span style={{ fontSize: "0.75rem", marginLeft: "auto" }}>
-                                              {hasNotes ? "📝" : "⏳"}
+                                            <span
+                                              style={{
+                                                fontSize: "0.7rem",
+                                                marginLeft: "auto",
+                                                padding: "2px 6px",
+                                                borderRadius: "8px",
+                                                background: sessionFeedback.isReviewed
+                                                  ? (sessionFeedback.hasNote ? "var(--status-success-bg)" : "var(--surface-accent)")
+                                                  : "transparent",
+                                                color: sessionFeedback.isReviewed
+                                                  ? (sessionFeedback.hasNote ? "var(--status-success-text)" : "var(--text-secondary)")
+                                                  : "var(--text-muted)",
+                                              }}
+                                            >
+                                              {sessionFeedback.label}
                                             </span>
                                           </div>
 
-                                          {/* Teacher feedback */}
-                                          <div style={{ marginBottom: "8px" }}>
-                                            <p
-                                              style={{
-                                                margin: 0,
-                                                fontSize: "0.85rem",
-                                                color: hasNotes ? "var(--text-primary)" : "var(--text-muted)",
-                                                fontStyle: hasNotes ? "normal" : "italic",
-                                              }}
-                                            >
-                                              <strong style={{ color: "var(--status-success)" }}>Teacher feedback:</strong>{" "}
-                                              {session.educatorNotes || "Not reviewed yet"}
-                                            </p>
-                                          </div>
+                                          {/* Teacher feedback - only show if reviewed */}
+                                          {sessionFeedback.isReviewed && (
+                                            <div style={{ marginBottom: "8px" }}>
+                                              {sessionFeedback.hasNote ? (
+                                                <div
+                                                  style={{
+                                                    padding: "10px 12px",
+                                                    background: "var(--status-success-bg)",
+                                                    borderRadius: "8px",
+                                                    borderLeft: "3px solid var(--status-success)",
+                                                  }}
+                                                >
+                                                  <p
+                                                    style={{
+                                                      margin: "0 0 4px 0",
+                                                      fontSize: "0.75rem",
+                                                      fontWeight: 600,
+                                                      color: "var(--status-success-text)",
+                                                    }}
+                                                  >
+                                                    Note from your teacher
+                                                  </p>
+                                                  <p
+                                                    style={{
+                                                      margin: 0,
+                                                      fontSize: "0.85rem",
+                                                      color: "var(--text-primary)",
+                                                    }}
+                                                  >
+                                                    {session.educatorNotes}
+                                                  </p>
+                                                </div>
+                                              ) : (
+                                                <p
+                                                  style={{
+                                                    margin: 0,
+                                                    fontSize: "0.8rem",
+                                                    color: "var(--text-muted)",
+                                                  }}
+                                                >
+                                                  Reviewed — no note
+                                                </p>
+                                              )}
+                                            </div>
+                                          )}
 
                                           {/* "See my answers" toggle */}
                                           <button
@@ -1429,12 +1307,9 @@ export default function StudentDashboard() {
                                                   margin: "0 0 12px 0",
                                                   color: "var(--text-primary)",
                                                   fontSize: "0.9rem",
-                                                  display: "flex",
-                                                  alignItems: "center",
-                                                  gap: "6px",
                                                 }}
                                               >
-                                                <span>✏️</span> My Answers
+                                                My Answers
                                               </h5>
 
                                               {isLoadingPrompts ? (
@@ -1481,12 +1356,12 @@ export default function StudentDashboard() {
                                                           {response.inputSource === "voice" ? (
                                                             response.response ? (
                                                               <p style={{ margin: 0, color: "var(--text-primary)", fontSize: "0.85rem" }}>
-                                                                <span style={{ color: "var(--text-muted)", fontSize: "0.75rem" }}>🎤</span>{" "}
+                                                                <span style={{ color: "var(--text-muted)", fontSize: "0.75rem" }}>(Voice)</span>{" "}
                                                                 {response.response}
                                                               </p>
                                                             ) : (
                                                               <p style={{ margin: 0, color: "var(--text-muted)", fontSize: "0.85rem", fontStyle: "italic" }}>
-                                                                <span>🎤</span> Voice response recorded
+                                                                Voice response recorded
                                                               </p>
                                                             )
                                                           ) : (
@@ -1499,7 +1374,7 @@ export default function StudentDashboard() {
                                                         {/* Hint indicator */}
                                                         {response.hintUsed && (
                                                           <p style={{ margin: "6px 0 0 0", color: "var(--text-muted)", fontSize: "0.75rem" }}>
-                                                            💡 Used a hint
+                                                            Used a hint
                                                           </p>
                                                         )}
                                                       </div>
@@ -1531,6 +1406,23 @@ export default function StudentDashboard() {
           )}
         </>
       )}
+
+      {/* Ask Coach Drawer */}
+      <AskCoachDrawer
+        isOpen={showCoachDrawer}
+        onClose={() => {
+          setShowCoachDrawer(false);
+          setDrawerInviteId(undefined);
+          setDrawerTopics([]);
+          setDrawerGradeLevel(undefined);
+        }}
+        studentId={studentId!}
+        topics={drawerTopics}
+        inviteId={drawerInviteId}
+        gradeLevel={drawerGradeLevel}
+        initialMode={drawerMode}
+        onChangeTopics={handleChangeTopics}
+      />
     </div>
     </>
   );

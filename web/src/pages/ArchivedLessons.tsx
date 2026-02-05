@@ -74,7 +74,7 @@ export default function ArchivedLessons() {
       {assignments.length === 0 ? (
         <div className="card">
           <div style={{ textAlign: "center", padding: "48px" }}>
-            <div style={{ fontSize: "3rem", marginBottom: "16px", opacity: 0.5 }}>📦</div>
+            <div style={{ fontSize: "1rem", marginBottom: "16px", opacity: 0.7, fontWeight: 500, color: "#666" }}>No items</div>
             <h2 style={{ color: "#666", marginBottom: "8px" }}>No archived assignments</h2>
             <p style={{ color: "#999" }}>
               Resolved assignments are automatically archived after 7 days of inactivity.
@@ -367,7 +367,7 @@ function TeacherSummaryView({ summary }: TeacherSummaryViewProps) {
           Students with notes: {teacherEngagement.studentsWithNotes}
         </span>
         {teacherEngagement.reviewedAllFlagged && (
-          <span style={{ color: "#4caf50" }}>✓ All flagged students reviewed</span>
+          <span style={{ color: "#4caf50" }}>All flagged students reviewed</span>
         )}
       </div>
     </div>

@@ -505,6 +505,10 @@ export function buildAssignmentReview(
   // Build rows for students who have sessions (using latest session)
   const studentRows = latestSessions.map((session) => {
     const row = buildStudentRow(session, lesson);
+    // Use full name from allStudentNames for educator view (overrides session's stored name)
+    if (allStudentNames[session.studentId]) {
+      row.studentName = allStudentNames[session.studentId];
+    }
     // Override with assignment details if available
     if (assignmentDetails && assignmentDetails[session.studentId]) {
       const details = assignmentDetails[session.studentId];

@@ -17,6 +17,8 @@ import recommendationsRouter from "./routes/recommendations";
 import teacherTodosRouter from "./routes/teacherTodos";
 import attentionRouter from "./routes/attention";
 import coachingInvitesRouter from "./routes/coachingInvites";
+import educatorProfileRouter from "./routes/educatorProfile";
+import lessonDraftsRouter from "./routes/lessonDrafts";
 
 dotenv.config();
 
@@ -46,10 +48,19 @@ app.use("/api/recommendations", recommendationsRouter);
 app.use("/api/teacher-todos", teacherTodosRouter);
 app.use("/api/attention", attentionRouter);
 app.use("/api/coaching-invites", coachingInvitesRouter);
+app.use("/api/educator", educatorProfileRouter);
+app.use("/api/educator/lesson-drafts", lessonDraftsRouter);
 
 // Health check
 app.get("/api/health", (req, res) => {
   res.json({ status: "ok", timestamp: new Date().toISOString() });
+});
+
+// Config endpoint (public settings for frontend)
+app.get("/api/config", (req, res) => {
+  res.json({
+    demoLoginEnabled: process.env.ENABLE_DEMO_LOGIN === "true",
+  });
 });
 
 // Start server

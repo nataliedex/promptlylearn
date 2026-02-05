@@ -1468,7 +1468,7 @@ export default function StudentAssignmentReview() {
         </div>
 
         <div className="card" style={{ textAlign: "center", padding: "48px" }}>
-          <div style={{ fontSize: "3rem", marginBottom: "16px" }}>📋</div>
+          <div style={{ fontSize: "1rem", marginBottom: "16px", fontWeight: 600, color: "#666" }}>Not started</div>
           <h2>Not Started Yet</h2>
           <p style={{ color: "#666" }}>
             {student.name} hasn't started this assignment yet.
@@ -1801,7 +1801,7 @@ export default function StudentAssignmentReview() {
                             type="text"
                             value={badgeMessage}
                             onChange={(e) => setBadgeMessage(e.target.value)}
-                            placeholder={`Great work, ${student.name}!`}
+                            placeholder={`Great work, ${student.preferredName || student.name}!`}
                             style={{
                               width: "100%",
                               padding: "8px",
@@ -1920,8 +1920,8 @@ export default function StudentAssignmentReview() {
                             value={coachingNote}
                             onChange={(e) => setCoachingNote(e.target.value)}
                             placeholder={isSupportSession
-                              ? `e.g., ${student.name}, I'd like to help you practice some of these concepts...`
-                              : `e.g., Great work on the basics, ${student.name}! I think you're ready for some extra challenges...`}
+                              ? `e.g., ${student.preferredName || student.name}, I'd like to help you practice some of these concepts...`
+                              : `e.g., Great work on the basics, ${student.preferredName || student.name}! I think you're ready for some extra challenges...`}
                             style={{
                               width: "100%",
                               padding: "8px",
@@ -2430,7 +2430,7 @@ export default function StudentAssignmentReview() {
               display: "flex", alignItems: "flex-start", gap: "10px",
               marginBottom: "12px", paddingBottom: "8px", borderBottom: "1px solid #f1f5f9",
             }}>
-              <span style={{ fontSize: "1.1rem" }}>📋</span>
+              <span style={{ fontSize: "0.85rem", fontWeight: 600, color: "#64748b" }}>Follow-up</span>
               <div>
                 <div style={{ fontWeight: 600, fontSize: "0.9rem", color: "#1e293b" }}>Scheduled Follow-up</div>
                 <div style={{ fontSize: "0.75rem", color: "#64748b", marginTop: "2px" }}>Action planned for this student</div>
@@ -2460,7 +2460,7 @@ export default function StudentAssignmentReview() {
                   }}
                   title={followupTodo.status === "open" ? "Mark as complete" : "Completed"}
                 >
-                  {followupTodo.status === "done" && <span style={{ color: "white", fontSize: "12px", fontWeight: "bold" }}>✓</span>}
+                  {followupTodo.status === "done" && <span style={{ color: "white", fontSize: "9px", fontWeight: "bold" }}>Done</span>}
                   {followupCompleting && <span style={{ fontSize: "10px" }}>...</span>}
                 </button>
                 <div style={{ flex: 1, minWidth: 0 }}>
@@ -2557,7 +2557,7 @@ export default function StudentAssignmentReview() {
           </div>
         ) : (
           <div style={{ textAlign: "center", padding: "48px 24px", color: "#64748b" }}>
-            <div style={{ fontSize: "2.5rem", marginBottom: "12px", opacity: 0.5 }}>📋</div>
+            <div style={{ fontSize: "1rem", marginBottom: "12px", opacity: 0.7, fontWeight: 500 }}>No data</div>
             <p style={{ margin: 0, fontSize: "0.95rem" }}>Could not load follow-up details.</p>
           </div>
         )}
@@ -2669,9 +2669,9 @@ function ReviewStateBadge({
   const config: Record<ReviewState, { bg: string; color: string; icon: string }> = {
     not_started: { bg: "#f1f5f9", color: "#64748b", icon: "" },
     pending_review: { bg: "#fff7ed", color: "#ea580c", icon: "" },
-    reviewed: { bg: "#e8f5e9", color: "#166534", icon: "✓" },
-    followup_scheduled: { bg: "#fef3c7", color: "#b45309", icon: "📋" },
-    resolved: { bg: "#e8f5e9", color: "#166534", icon: "✓" },
+    reviewed: { bg: "#e8f5e9", color: "#166534", icon: "" },
+    followup_scheduled: { bg: "#fef3c7", color: "#b45309", icon: "" },
+    resolved: { bg: "#e8f5e9", color: "#166534", icon: "" },
   };
 
   const state = reviewState || "pending_review";
@@ -2809,13 +2809,13 @@ function QuestionCardWithAttempts({
         <div style={{ display: "flex", alignItems: "center", gap: "8px", flexShrink: 0, marginLeft: "12px" }}>
           {/* Status indicators */}
           {anyUsedHint && (
-            <span style={{ fontSize: "0.8rem" }} title="Used hint">💡</span>
+            <span style={{ fontSize: "0.7rem", fontWeight: 500, color: "#9178a8" }} title="Used hint">Hint</span>
           )}
           {anyHasVoice && (
-            <span style={{ fontSize: "0.8rem" }} title="Voice recording">🎤</span>
+            <span style={{ fontSize: "0.7rem", fontWeight: 500, color: "#2e7d32" }} title="Voice recording">Voice</span>
           )}
           {hasNote && (
-            <span style={{ fontSize: "0.8rem" }} title="Has your note">📝</span>
+            <span style={{ fontSize: "0.7rem", fontWeight: 500, color: "#666" }} title="Has your note">Note</span>
           )}
 
           {/* Attempts count badge */}
@@ -2913,7 +2913,7 @@ function QuestionCardWithAttempts({
                       </div>
                       <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
                         {attempt.usedHint && (
-                          <span style={{ fontSize: "0.75rem", color: "#9178a8" }}>💡 Hint used</span>
+                          <span style={{ fontSize: "0.75rem", color: "#9178a8" }}>Hint used</span>
                         )}
                         <span
                           style={{
@@ -2933,7 +2933,7 @@ function QuestionCardWithAttempts({
 
                     {/* Student response */}
                     <div style={{ display: "flex", alignItems: "flex-start", gap: "12px" }}>
-                      <span style={{ fontSize: "1rem" }}>👤</span>
+                      <span style={{ fontSize: "0.8rem", fontWeight: 600, color: "#666" }}>Student</span>
                       <div style={{ flex: 1 }}>
                         <p style={{ margin: 0, lineHeight: 1.6, fontSize: "0.95rem" }}>
                           {attempt.response || <span style={{ color: "#999", fontStyle: "italic" }}>No response</span>}
@@ -2960,7 +2960,7 @@ function QuestionCardWithAttempts({
                           }}
                           title="Listen to student's voice"
                         >
-                          {isPlaying ? "⏹" : "🎤"}
+                          {isPlaying ? "Stop" : "Play"}
                         </button>
                       )}
                     </div>
@@ -2973,7 +2973,7 @@ function QuestionCardWithAttempts({
           {/* Teacher Note for this question */}
           <div style={{ marginTop: "16px" }}>
             <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "6px" }}>
-              <span style={{ fontSize: "0.85rem", color: "#666" }}>✏️ Your note for Q{question.questionNumber}:</span>
+              <span style={{ fontSize: "0.85rem", color: "#666" }}>Your note for Q{question.questionNumber}:</span>
             </div>
             <textarea
               value={note}

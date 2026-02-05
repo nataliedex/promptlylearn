@@ -130,7 +130,7 @@ export default function NeedsReviewList() {
       {students.length === 0 ? (
         <div className="card">
           <div style={{ textAlign: "center", padding: "32px" }}>
-            <div style={{ fontSize: "3rem", marginBottom: "16px" }}>✓</div>
+            <div style={{ fontSize: "1rem", marginBottom: "16px", fontWeight: 600, color: "#2e7d32" }}>All clear</div>
             <h2 style={{ marginBottom: "8px", color: "#2e7d32" }}>
               No students flagged for review
             </h2>
@@ -294,7 +294,6 @@ function StudentReviewCard({ student, onNavigate }: StudentReviewCardProps) {
             color: "#666",
           }}
         >
-          <span style={{ marginRight: "8px" }}>📝</span>
           Has teacher notes
         </div>
       )}

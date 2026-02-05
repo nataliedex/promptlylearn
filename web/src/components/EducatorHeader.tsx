@@ -3,6 +3,7 @@
  *
  * Replaces per-page "Back to X" buttons with structural breadcrumbs.
  * Provides persistent workflow entry points (Recommended Actions, To-Dos).
+ * Includes account dropdown for profile access.
  *
  * Usage:
  *   <EducatorHeader
@@ -11,6 +12,7 @@
  *       { label: "Division Basics" },   // current page — no `to`
  *     ]}
  *     actions={<button>Reassign</button>}
+ *     teacherDisplayName="Mrs. Blumen"
  *   />
  */
 
@@ -27,6 +29,10 @@ interface EducatorHeaderProps {
   actions?: React.ReactNode;
   onOpenRecommendations?: () => void;
   onOpenTodos?: () => void;
+  onOpenProfile?: () => void;
+  onOpenClasses?: () => void;
+  onOpenCreateLesson?: () => void;
+  teacherDisplayName?: string;
 }
 
 export default function EducatorHeader({
@@ -34,6 +40,10 @@ export default function EducatorHeader({
   actions,
   onOpenRecommendations,
   onOpenTodos,
+  onOpenProfile,
+  onOpenClasses,
+  onOpenCreateLesson,
+  teacherDisplayName,
 }: EducatorHeaderProps) {
   // "Home" is always the first crumb, linking to the educator dashboard
   const allCrumbs: BreadcrumbItem[] = [
@@ -136,7 +146,7 @@ export default function EducatorHeader({
         })}
       </div>
 
-      {/* Right: Workflow links + page actions */}
+      {/* Right: Workflow links + page actions + header actions */}
       <div style={{ display: "flex", alignItems: "center", gap: "8px", flexShrink: 0 }}>
         {/* Workflow links */}
         {onOpenRecommendations && (
@@ -202,6 +212,108 @@ export default function EducatorHeader({
 
         {/* Page-specific actions */}
         {actions}
+
+        {/* Separator before header actions */}
+        {(onOpenProfile || onOpenClasses || onOpenCreateLesson) && (
+          <div
+            style={{
+              width: "1px",
+              height: "20px",
+              background: "rgba(255,255,255,0.2)",
+              marginLeft: "4px",
+              marginRight: "4px",
+            }}
+          />
+        )}
+
+        {/* Header action buttons */}
+        {onOpenProfile && (
+          <button
+            onClick={onOpenProfile}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              padding: "5px 12px",
+              background: "rgba(255,255,255,0.08)",
+              color: "rgba(255,255,255,0.85)",
+              border: "1px solid rgba(255,255,255,0.15)",
+              borderRadius: "6px",
+              fontSize: "0.78rem",
+              fontWeight: 500,
+              cursor: "pointer",
+              whiteSpace: "nowrap",
+              transition: "background 0.15s, color 0.15s",
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = "rgba(255,255,255,0.18)";
+              e.currentTarget.style.color = "white";
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = "rgba(255,255,255,0.08)";
+              e.currentTarget.style.color = "rgba(255,255,255,0.85)";
+            }}
+          >
+            {teacherDisplayName || "Profile"}
+          </button>
+        )}
+        {onOpenClasses && (
+          <button
+            onClick={onOpenClasses}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              padding: "5px 12px",
+              background: "rgba(255,255,255,0.08)",
+              color: "rgba(255,255,255,0.85)",
+              border: "1px solid rgba(255,255,255,0.15)",
+              borderRadius: "6px",
+              fontSize: "0.78rem",
+              fontWeight: 500,
+              cursor: "pointer",
+              whiteSpace: "nowrap",
+              transition: "background 0.15s, color 0.15s",
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = "rgba(255,255,255,0.18)";
+              e.currentTarget.style.color = "white";
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = "rgba(255,255,255,0.08)";
+              e.currentTarget.style.color = "rgba(255,255,255,0.85)";
+            }}
+          >
+            My Classes
+          </button>
+        )}
+        {onOpenCreateLesson && (
+          <button
+            onClick={onOpenCreateLesson}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              padding: "5px 12px",
+              background: "rgba(255,255,255,0.08)",
+              color: "rgba(255,255,255,0.85)",
+              border: "1px solid rgba(255,255,255,0.15)",
+              borderRadius: "6px",
+              fontSize: "0.78rem",
+              fontWeight: 500,
+              cursor: "pointer",
+              whiteSpace: "nowrap",
+              transition: "background 0.15s, color 0.15s",
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = "rgba(255,255,255,0.18)";
+              e.currentTarget.style.color = "white";
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = "rgba(255,255,255,0.08)";
+              e.currentTarget.style.color = "rgba(255,255,255,0.85)";
+            }}
+          >
+            + Create Lesson
+          </button>
+        )}
       </div>
     </nav>
   );

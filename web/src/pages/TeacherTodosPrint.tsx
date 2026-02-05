@@ -309,7 +309,6 @@ export default function TeacherTodosPrint() {
                 gap: "8px",
               }}
             >
-              <span>🖨️</span>
               Print Sheet
             </button>
           </div>

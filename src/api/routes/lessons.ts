@@ -308,12 +308,13 @@ router.get("/:id/assignments", (req, res) => {
  * Body: {
  *   classId: string,
  *   studentIds?: string[]  // If omitted, assigns to ALL students in class
+ *   dueDate?: string       // Optional due date (ISO string, date only, e.g. "2024-02-12")
  * }
  */
 router.post("/:id/assign", (req, res) => {
   try {
     const { id } = req.params;
-    const { classId, studentIds } = req.body;
+    const { classId, studentIds, dueDate } = req.body;
 
     if (!classId) {
       return res.status(400).json({ error: "classId is required" });
@@ -353,7 +354,9 @@ router.post("/:id/assign", (req, res) => {
     const newAssignments = studentAssignmentStore.assignLesson(
       id,
       classId,
-      assignStudentIds
+      assignStudentIds,
+      undefined, // assignedBy
+      dueDate
     );
 
     res.status(201).json({

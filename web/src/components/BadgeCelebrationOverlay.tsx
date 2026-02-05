@@ -9,13 +9,13 @@ interface BadgeCelebrationOverlayProps {
 
 // Badge display configuration
 const BADGE_CONFIG: Record<string, { icon: string; color: string }> = {
-  progress_star: { icon: "⭐", color: "#ffc107" },
-  mastery_badge: { icon: "🏆", color: "#ff9800" },
-  effort_award: { icon: "💪", color: "#4caf50" },
-  helper_badge: { icon: "🤝", color: "#2196f3" },
-  persistence: { icon: "🎯", color: "#9c27b0" },
-  curiosity: { icon: "🔍", color: "#00bcd4" },
-  custom: { icon: "🌟", color: "#e91e63" },
+  progress_star: { icon: "", color: "#ffc107" },
+  mastery_badge: { icon: "", color: "#ff9800" },
+  effort_award: { icon: "", color: "#4caf50" },
+  helper_badge: { icon: "", color: "#2196f3" },
+  persistence: { icon: "", color: "#9c27b0" },
+  curiosity: { icon: "", color: "#00bcd4" },
+  custom: { icon: "", color: "#e91e63" },
 };
 
 // Confetti piece component
@@ -190,9 +190,9 @@ export default function BadgeCelebrationOverlay({
           </button>
 
           {/* Sparkle decorations */}
-          <div style={{ position: "absolute", top: "20px", left: "20px", fontSize: "1.5rem", animation: "sparkle 1s ease-in-out infinite" }}>✨</div>
-          <div style={{ position: "absolute", top: "40px", right: "40px", fontSize: "1rem", animation: "sparkle 1s ease-in-out 0.3s infinite" }}>✨</div>
-          <div style={{ position: "absolute", bottom: "60px", left: "30px", fontSize: "1.2rem", animation: "sparkle 1s ease-in-out 0.6s infinite" }}>✨</div>
+          <div style={{ position: "absolute", top: "20px", left: "20px", width: "8px", height: "8px", borderRadius: "50%", background: config.color, animation: "sparkle 1s ease-in-out infinite" }} />
+          <div style={{ position: "absolute", top: "40px", right: "40px", width: "6px", height: "6px", borderRadius: "50%", background: config.color, animation: "sparkle 1s ease-in-out 0.3s infinite" }} />
+          <div style={{ position: "absolute", bottom: "60px", left: "30px", width: "7px", height: "7px", borderRadius: "50%", background: config.color, animation: "sparkle 1s ease-in-out 0.6s infinite" }} />
 
           {/* Badge Icon */}
           <div
@@ -272,7 +272,7 @@ export default function BadgeCelebrationOverlay({
               e.currentTarget.style.boxShadow = `0 4px 12px ${config.color}40`;
             }}
           >
-            <span>🎉</span> View Badge
+            View Badge
           </button>
         </div>
       </div>

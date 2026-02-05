@@ -1,7 +1,7 @@
 /**
  * Student Domain Model
  *
- * Simple by design - students do NOT need logins at this stage.
+ * Students log in using a unique studentCode (human-typable identifier).
  * A student can belong to one or more classes.
  *
  * Relationships:
@@ -14,6 +14,13 @@
 export interface Student {
   id: string;
   name: string;
+
+  // Unique login code for student access (e.g., "ABC123")
+  // Human-typable, case-insensitive, educator can regenerate
+  studentCode?: string;
+
+  // True if this student was created via demo mode (not a real roster student)
+  isDemo?: boolean;
 
   // Name the coach (and other student-facing UI) should use.
   // Falls back to first token of `name` when absent.

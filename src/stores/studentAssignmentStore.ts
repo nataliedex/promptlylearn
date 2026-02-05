@@ -62,13 +62,15 @@ export class StudentAssignmentStore {
    * @param lessonId - The lesson to assign
    * @param classId - The class context
    * @param studentIds - Specific students (if omitted, use all students in class)
-   * @param classStudentIds - All students in the class (used if studentIds omitted)
+   * @param assignedBy - Teacher who assigned (optional)
+   * @param dueDate - Optional due date (ISO string)
    */
   assignLesson(
     lessonId: string,
     classId: string,
     studentIds: string[],
-    assignedBy?: string
+    assignedBy?: string,
+    dueDate?: string
   ): StudentAssignment[] {
     const data = loadData();
     const now = new Date().toISOString();
@@ -88,6 +90,7 @@ export class StudentAssignmentStore {
           studentId,
           assignedAt: now,
           assignedBy,
+          dueDate,
           attempts: 1,
           reviewState: "not_started", // New assignments start as not started (student hasn't submitted)
         };

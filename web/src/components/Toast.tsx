@@ -128,7 +128,7 @@ function ToastItem({ toast, onDismiss }: ToastItemProps) {
       bg: "#f0fdf4",
       border: "#4ade80",
       color: "#166534",
-      icon: "✓",
+      icon: "",
     },
     error: {
       bg: "#fef2f2",

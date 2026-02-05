@@ -69,7 +69,7 @@ export default function Progress() {
 
       <div className="header">
         <h1>Your Progress</h1>
-        <p>Keep up the great work, {student.name}!</p>
+        <p>Keep up the great work, {student.preferredName || student.name}!</p>
       </div>
 
       {/* Stats Grid */}
@@ -183,15 +183,15 @@ export default function Progress() {
         <div className="card">
           <h3 style={{ marginBottom: "16px" }}>Session Stats</h3>
           <p>
-            ⏱️ Average session time:{" "}
+            Average session time:{" "}
             <strong>{analytics.sessionDuration.averageMinutes} min</strong>
           </p>
           <p>
-            🚀 Fastest session:{" "}
+            Fastest session:{" "}
             <strong>{analytics.sessionDuration.fastestMinutes} min</strong>
           </p>
           <p>
-            💡 Hint usage rate:{" "}
+            Hint usage rate:{" "}
             <strong>{analytics.hintUsage.hintUsageRate}%</strong>
           </p>
         </div>
@@ -199,22 +199,19 @@ export default function Progress() {
 
       {/* Achievements placeholder */}
       <div className="card">
-        <h3 style={{ marginBottom: "16px" }}>🏆 Achievements</h3>
+        <h3 style={{ marginBottom: "16px" }}>Achievements</h3>
         {analytics.sessionCount >= 5 && (
           <div className="achievement">
-            <span className="achievement-icon">📖</span>
             <span>Getting Started - Completed 5+ lessons</span>
           </div>
         )}
         {analytics.avgScore >= 80 && (
           <div className="achievement">
-            <span className="achievement-icon">⭐</span>
             <span>High Achiever - Average score 80+</span>
           </div>
         )}
         {analytics.engagementScore >= 70 && (
           <div className="achievement">
-            <span className="achievement-icon">💪</span>
             <span>Super Engaged - Engagement score 70+</span>
           </div>
         )}

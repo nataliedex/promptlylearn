@@ -128,6 +128,7 @@ export interface StudentAssignment {
   studentId: string;
   assignedAt: string;
   assignedBy?: string; // For future: teacherId who assigned
+  dueDate?: string; // Optional due date (ISO string, date only)
 
   // Completion tracking
   completedAt?: string; // When student completed the assignment

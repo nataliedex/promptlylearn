@@ -43,7 +43,6 @@ export default function ModeToggle({ mode, onToggle, disabled }: ModeToggleProps
           opacity: disabled ? 0.6 : 1,
         }}
       >
-        <span>💬</span>
         <span>Text</span>
       </button>
       <button
@@ -65,7 +64,6 @@ export default function ModeToggle({ mode, onToggle, disabled }: ModeToggleProps
           opacity: disabled ? 0.6 : 1,
         }}
       >
-        <span>🎤</span>
         <span>Voice</span>
       </button>
     </div>

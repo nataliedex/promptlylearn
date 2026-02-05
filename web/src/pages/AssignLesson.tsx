@@ -40,9 +40,9 @@ export default function AssignLesson() {
   // Form state
   const [selectedLessonId, setSelectedLessonId] = useState<string>(lessonIdParam || "");
   const [selectedClassId, setSelectedClassId] = useState<string>(classId || "");
-  const [selectedSubject, setSelectedSubject] = useState<string>("");
   const [assignMode, setAssignMode] = useState<"all" | "select">("all");
   const [selectedStudentIds, setSelectedStudentIds] = useState<Set<string>>(new Set());
+  const [dueDate, setDueDate] = useState<string>(""); // Optional due date (YYYY-MM-DD)
   const [assigning, setAssigning] = useState(false);
   const [assignmentSummary, setAssignmentSummary] = useState<LessonAssignmentSummary | null>(null);
 
@@ -84,7 +84,6 @@ export default function AssignLesson() {
   const handleClassChange = async (newClassId: string) => {
     setSelectedClassId(newClassId);
     setSelectedStudentIds(new Set());
-    setSelectedSubject(""); // Reset subject when class changes
 
     if (newClassId) {
       try {
@@ -98,16 +97,13 @@ export default function AssignLesson() {
     }
   };
 
-  // Get students who participate in the selected subject (or all students if no subject selected)
-  const getParticipatingStudents = () => {
+  // Get all students in the selected class
+  const getClassStudents = () => {
     if (!selectedClass) return [];
-    if (!selectedSubject) return selectedClass.students;
-
-    const excludedIds = selectedClass.subjectExclusions?.[selectedSubject] || [];
-    return selectedClass.students.filter((s) => !excludedIds.includes(s.id));
+    return selectedClass.students;
   };
 
-  const participatingStudents = getParticipatingStudents();
+  const classStudents = getClassStudents();
 
   // Load assignment summary when lesson selection changes
   const handleLessonChange = async (newLessonId: string) => {
@@ -131,17 +127,17 @@ export default function AssignLesson() {
 
     setAssigning(true);
     try {
-      // If subject is selected, use participating students; otherwise, use selection or all
-      let studentIds: string[] | undefined;
-      if (assignMode === "select") {
-        studentIds = Array.from(selectedStudentIds);
-      } else if (selectedSubject) {
-        // "All" mode with subject filter: only assign to participating students
-        studentIds = participatingStudents.map((s) => s.id);
-      }
-      // else: undefined = all students in class (no subject filter)
+      // Determine which students to assign
+      const studentIds = assignMode === "select"
+        ? Array.from(selectedStudentIds)
+        : undefined; // undefined = all students in class
 
-      const result = await assignLessonToClass(selectedLessonId, selectedClassId, studentIds);
+      const result = await assignLessonToClass(
+        selectedLessonId,
+        selectedClassId,
+        studentIds,
+        dueDate || undefined
+      );
 
       // Show success and navigate
       showSuccess(`Successfully assigned lesson to ${result.assignedCount} student${result.assignedCount !== 1 ? "s" : ""} in ${result.className}`);
@@ -173,7 +169,7 @@ export default function AssignLesson() {
   };
 
   const selectAllStudents = () => {
-    setSelectedStudentIds(new Set(participatingStudents.map((s) => s.id)));
+    setSelectedStudentIds(new Set(classStudents.map((s) => s.id)));
   };
 
   const deselectAllStudents = () => {
@@ -193,7 +189,7 @@ export default function AssignLesson() {
   const canAssign =
     selectedLessonId &&
     selectedClassId &&
-    participatingStudents.length > 0 &&
+    classStudents.length > 0 &&
     (assignMode === "all" || selectedStudentIds.size > 0);
 
   return (
@@ -344,52 +340,8 @@ export default function AssignLesson() {
         )}
       </div>
 
-      {/* Step 2.5: Select Subject (optional) */}
-      {selectedClass && selectedClass.subjects && selectedClass.subjects.length > 0 && (
-        <div className="card" style={{ marginBottom: "16px" }}>
-          <h3 style={{ margin: 0, marginBottom: "8px" }}>Subject (Optional)</h3>
-          <p style={{ color: "#666", fontSize: "0.9rem", marginBottom: "16px" }}>
-            Select a subject to filter students based on their participation settings.
-          </p>
-
-          <select
-            value={selectedSubject}
-            onChange={(e) => {
-              setSelectedSubject(e.target.value);
-              setSelectedStudentIds(new Set()); // Reset selection when subject changes
-            }}
-            style={{
-              width: "100%",
-              padding: "12px",
-              fontSize: "1rem",
-              borderRadius: "8px",
-              border: "2px solid #e0e0e0",
-            }}
-          >
-            <option value="">All subjects (no filter)</option>
-            {selectedClass.subjects.map((subject) => {
-              const excludedCount = selectedClass.subjectExclusions?.[subject]?.length || 0;
-              const participatingCount = selectedClass.students.length - excludedCount;
-              return (
-                <option key={subject} value={subject}>
-                  {subject} ({participatingCount} of {selectedClass.students.length} students)
-                </option>
-              );
-            })}
-          </select>
-
-          {selectedSubject && participatingStudents.length < selectedClass.students.length && (
-            <div style={{ marginTop: "12px", padding: "12px", background: "#e3f2fd", borderRadius: "8px" }}>
-              <span style={{ color: "#1565c0", fontSize: "0.9rem" }}>
-                {participatingStudents.length} of {selectedClass.students.length} students participate in {selectedSubject}
-              </span>
-            </div>
-          )}
-        </div>
-      )}
-
       {/* Step 3: Choose Students */}
-      {selectedClass && participatingStudents.length > 0 && (
+      {selectedClass && classStudents.length > 0 && (
         <div className="card" style={{ marginBottom: "16px" }}>
           <h3 style={{ margin: 0, marginBottom: "16px" }}>3. Choose Students</h3>
 
@@ -398,7 +350,7 @@ export default function AssignLesson() {
               className={`btn ${assignMode === "all" ? "btn-primary" : "btn-secondary"}`}
               onClick={() => setAssignMode("all")}
             >
-              All{selectedSubject ? ` ${selectedSubject}` : ""} Students ({participatingStudents.length})
+              All Students ({classStudents.length})
             </button>
             <button
               className={`btn ${assignMode === "select" ? "btn-primary" : "btn-secondary"}`}
@@ -441,7 +393,7 @@ export default function AssignLesson() {
               </div>
 
               <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-                {participatingStudents.map((student) => (
+                {classStudents.map((student) => (
                   <label
                     key={student.id}
                     style={{
@@ -486,46 +438,89 @@ export default function AssignLesson() {
         </div>
       )}
 
-      {/* No participating students warning */}
-      {selectedClass && selectedClass.students.length > 0 && selectedSubject && participatingStudents.length === 0 && (
-        <div className="card" style={{ background: "#fff3e0", borderLeft: "4px solid #ff9800", marginBottom: "16px" }}>
-          <p style={{ margin: 0, color: "#e65100" }}>
-            No students are configured to participate in {selectedSubject}. You can manage subject participation in the class settings.
+      {/* Step 4: Due Date (Optional) */}
+      {selectedClass && classStudents.length > 0 && (
+        <div className="card" style={{ marginBottom: "16px" }}>
+          <h3 style={{ margin: 0, marginBottom: "8px" }}>4. Due Date (Optional)</h3>
+          <p style={{ color: "#666", fontSize: "0.9rem", marginBottom: "16px" }}>
+            Set a due date for this assignment, or leave blank for no deadline.
           </p>
-          <button
-            className="btn btn-secondary"
-            onClick={() => navigate(`/educator/class/${selectedClassId}`)}
-            style={{ marginTop: "12px" }}
-          >
-            Manage Class Settings
-          </button>
+
+          <input
+            type="date"
+            value={dueDate}
+            onChange={(e) => setDueDate(e.target.value)}
+            min={new Date().toISOString().split("T")[0]}
+            style={{
+              padding: "12px",
+              fontSize: "1rem",
+              borderRadius: "8px",
+              border: "2px solid #e0e0e0",
+              width: "200px",
+            }}
+          />
+
+          {dueDate && (
+            <button
+              onClick={() => setDueDate("")}
+              style={{
+                marginLeft: "12px",
+                background: "transparent",
+                border: "none",
+                cursor: "pointer",
+                color: "#666",
+                fontSize: "0.9rem",
+              }}
+            >
+              Clear
+            </button>
+          )}
         </div>
       )}
 
-      {/* Assign Button */}
-      <div style={{ display: "flex", gap: "16px", marginTop: "24px" }}>
+      {/* Action Buttons */}
+      <div style={{ display: "flex", justifyContent: "flex-end", gap: "12px", marginTop: "24px" }}>
+        <button
+          onClick={() => {
+            if (classId) {
+              navigate(`/educator/class/${classId}`);
+            } else {
+              navigate("/educator");
+            }
+          }}
+          style={{
+            padding: "14px 28px",
+            fontSize: "1rem",
+            background: "rgba(255, 255, 255, 0.18)",
+            color: "white",
+            border: "1px solid rgba(255, 255, 255, 0.45)",
+            borderRadius: "8px",
+            cursor: "pointer",
+            fontWeight: 500,
+            transition: "background 0.2s, border-color 0.2s",
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.background = "rgba(255, 255, 255, 0.28)";
+            e.currentTarget.style.borderColor = "rgba(255, 255, 255, 0.6)";
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.background = "rgba(255, 255, 255, 0.18)";
+            e.currentTarget.style.borderColor = "rgba(255, 255, 255, 0.45)";
+          }}
+        >
+          Cancel
+        </button>
         <button
           className="btn btn-primary"
           onClick={handleAssign}
           disabled={!canAssign || assigning}
           style={{
-            padding: "16px 32px",
-            fontSize: "1.1rem",
+            padding: "14px 28px",
+            fontSize: "1rem",
             opacity: canAssign ? 1 : 0.5,
           }}
         >
-          {assigning
-            ? "Assigning..."
-            : assignMode === "all"
-            ? `Assign to ${participatingStudents.length} Student${participatingStudents.length !== 1 ? "s" : ""}${selectedSubject ? ` in ${selectedSubject}` : ""}`
-            : `Assign to ${selectedStudentIds.size} Selected Student${selectedStudentIds.size !== 1 ? "s" : ""}`}
-        </button>
-        <button
-          className="btn btn-secondary"
-          onClick={() => navigate(backPath)}
-          style={{ padding: "16px 32px", fontSize: "1.1rem" }}
-        >
-          Cancel
+          {assigning ? "Assigning..." : "Assign Lesson"}
         </button>
       </div>
     </div>

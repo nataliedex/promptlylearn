@@ -149,12 +149,13 @@ export default function InsightsDrawer({
         >
           <div
             style={{
-              fontSize: "2.5rem",
+              fontSize: "1rem",
               marginBottom: "12px",
-              opacity: 0.5,
+              fontWeight: 600,
+              color: "#16a34a",
             }}
           >
-            ✓
+            All clear
           </div>
           <p style={{ margin: 0, fontSize: "0.95rem" }}>
             No insights for this student.
@@ -201,7 +202,7 @@ export default function InsightsDrawer({
               <SectionHeader
                 title="AI Insights"
                 subtitle="Recommendations based on student work"
-                icon="💡"
+                icon=""
               />
               {activeRecs.map((rec) => (
                 <InsightCard
@@ -222,7 +223,7 @@ export default function InsightsDrawer({
               <SectionHeader
                 title="Scheduled Follow-ups"
                 subtitle="Actions you've planned for this student"
-                icon="📋"
+                icon=""
               />
               {openTodos.map((todo) => (
                 <TodoCard key={todo.id} todo={todo} status="open" onComplete={handleTodoComplete} />
@@ -236,7 +237,7 @@ export default function InsightsDrawer({
               <SectionHeader
                 title="Action History"
                 subtitle="Completed actions and resolved insights"
-                icon="✓"
+                icon=""
                 collapsed
               />
 
@@ -283,7 +284,7 @@ export default function InsightsDrawer({
                 marginTop: "16px",
               }}
             >
-              <span style={{ color: "#16a34a", fontSize: "1.2rem" }}>✓</span>
+              <span style={{ color: "#16a34a", fontSize: "0.9rem", fontWeight: 600 }}>Done</span>
               <p style={{ margin: "8px 0 0 0", fontSize: "0.85rem", color: "#166534" }}>
                 All insights have been addressed
               </p>
@@ -401,7 +402,7 @@ function TodoCard({
           }}
           title={isDone ? "Completed" : "Mark as complete"}
         >
-          {isDone && <span style={{ color: "white", fontSize: "12px", fontWeight: "bold" }}>✓</span>}
+          {isDone && <span style={{ color: "white", fontSize: "10px", fontWeight: "bold" }}>Done</span>}
           {isCompleting && <span style={{ fontSize: "10px" }}>...</span>}
         </button>
         <div style={{ flex: 1 }}>
@@ -491,7 +492,7 @@ function HistoryCard({
             {category.icon}
           </span>
         ) : (
-          <span style={{ fontSize: "0.9rem" }}>{isBadge ? "⭐" : "✓"}</span>
+          <span style={{ fontSize: "0.75rem", fontWeight: 600, color: isBadge ? "#86198f" : "#16a34a" }}>{isBadge ? "Badge" : "Done"}</span>
         )}
         <div style={{ flex: 1 }}>
           <div

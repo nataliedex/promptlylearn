@@ -10,6 +10,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { useParams, Link, useNavigate, useLocation } from "react-router-dom";
 import EducatorHeader from "../components/EducatorHeader";
+import StudentProfileDrawer from "../components/StudentProfileDrawer";
 import {
   getStudent,
   getSessions,
@@ -82,6 +83,8 @@ export default function StudentDetails() {
   const [studentTodos, setStudentTodos] = useState<TeacherTodo[]>([]);
   const [loading, setLoading] = useState(true);
   const [showCompleted, setShowCompleted] = useState(false);
+  const [showProfileDrawer, setShowProfileDrawer] = useState(false);
+  const [refreshKey, setRefreshKey] = useState(0);
 
   useEffect(() => {
     if (!studentId) return;
@@ -172,7 +175,7 @@ export default function StudentDetails() {
     }
 
     loadData();
-  }, [studentId]);
+  }, [studentId, refreshKey]);
 
   // Reload recommendations
   const reloadRecommendations = async () => {
@@ -375,6 +378,35 @@ export default function StudentDetails() {
           ...(fromAssignmentTitle ? [{ label: fromAssignmentTitle, to: `/educator/assignment/${fromAssignmentId}` }] : []),
           { label: student.name },
         ]}
+        actions={
+          <button
+            onClick={() => setShowProfileDrawer(true)}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: "6px",
+              padding: "6px 14px",
+              background: "rgba(255,255,255,0.12)",
+              color: "rgba(255,255,255,0.9)",
+              border: "1px solid rgba(255,255,255,0.18)",
+              borderRadius: "6px",
+              fontSize: "0.8rem",
+              fontWeight: 500,
+              cursor: "pointer",
+              transition: "background 0.15s, color 0.15s",
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = "rgba(255,255,255,0.2)";
+              e.currentTarget.style.color = "white";
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = "rgba(255,255,255,0.12)";
+              e.currentTarget.style.color = "rgba(255,255,255,0.9)";
+            }}
+          >
+            Profile
+          </button>
+        }
       />
 
       {/* Contextual back link (only when navigated from an assignment) */}
@@ -446,9 +478,9 @@ export default function StudentDetails() {
           }}
         >
           <div style={{ display: "flex", alignItems: "center", gap: "12px", marginBottom: "8px" }}>
-            <span style={{ fontSize: "1.5rem" }}>
-              {coachingInsights.intentLabel === "support-seeking" ? "🆘" :
-               coachingInsights.intentLabel === "enrichment-seeking" ? "🚀" : "💬"}
+            <span style={{ fontSize: "0.85rem", fontWeight: 600, color: coachingInsights.intentLabel === "support-seeking" ? "#e65100" : coachingInsights.intentLabel === "enrichment-seeking" ? "#2e7d32" : "#666" }}>
+              {coachingInsights.intentLabel === "support-seeking" ? "Support" :
+               coachingInsights.intentLabel === "enrichment-seeking" ? "Enrichment" : "Mixed"}
             </span>
             <div>
               <h3 style={{ margin: 0, color: "#333" }}>Coaching Insights</h3>
@@ -588,6 +620,15 @@ export default function StudentDetails() {
           <p style={{ color: "#666" }}>No assignments found for this student.</p>
         </div>
       )}
+
+      {/* Student Profile Drawer */}
+      <StudentProfileDrawer
+        isOpen={showProfileDrawer}
+        onClose={() => setShowProfileDrawer(false)}
+        onSave={() => setRefreshKey((k) => k + 1)}
+        studentId={studentId!}
+        studentName={student.name}
+      />
     </div>
   );
 }
@@ -1354,7 +1395,7 @@ function StudentTodoCard({ todo, onComplete }: StudentTodoCardProps) {
         title="Mark as complete"
       >
         {isCompleting && (
-          <span style={{ color: "white", fontSize: "10px", fontWeight: "bold" }}>✓</span>
+          <span style={{ color: "white", fontSize: "8px", fontWeight: "bold" }}>OK</span>
         )}
       </button>
 

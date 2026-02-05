@@ -25,6 +25,13 @@ export interface ActionOutcome {
     badgeType?: string;
     badgeMessage?: string;
     noteText?: string;
+    /**
+     * Note visibility - determines who can see this note
+     * - "student": Visible to the student (teacher-to-student message)
+     * - "educator": Only visible to educators (internal notes, system tracking)
+     * Default: "educator" for backward compatibility
+     */
+    noteVisibility?: "student" | "educator";
     previousScore?: number;     // For tracking improvement after reassign
   };
 }
