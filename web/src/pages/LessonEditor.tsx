@@ -9,7 +9,7 @@
 
 import { useState, useEffect, useRef } from "react";
 import { useParams, Link, useNavigate, useLocation } from "react-router-dom";
-import EducatorHeader from "../components/EducatorHeader";
+import EducatorAppHeader from "../components/EducatorAppHeader";
 import { getLesson, saveLesson, generateQuestion, getLessonAssignments, deleteLesson, type Lesson, type Prompt, type LessonAssignmentSummary } from "../services/api";
 import { useToast } from "../components/Toast";
 import { recordQuestionsEdited, recordHintPatterns } from "../utils/teacherPreferences";
@@ -292,7 +292,7 @@ export default function LessonEditor() {
   if (!lesson) {
     return (
       <div className="container">
-        <EducatorHeader breadcrumbs={[{ label: "Lesson not found" }]} />
+        <EducatorAppHeader mode="focus" title="Lesson not found" backLink="/educator" />
         <div className="card">
           <p>Lesson not found.</p>
           <Link to="/educator" className="btn btn-primary" style={{ marginTop: "16px" }}>
@@ -305,13 +305,11 @@ export default function LessonEditor() {
 
   return (
     <div className="container">
-      <EducatorHeader
-        breadcrumbs={[
-          ...(assignmentSummary && assignmentSummary.totalAssigned > 0
-            ? [{ label: lesson.title, to: `/educator/assignment/${lessonId}` }]
-            : []),
-          { label: assignmentSummary && assignmentSummary.totalAssigned > 0 ? "Edit Lesson" : lesson.title },
-        ]}
+      <EducatorAppHeader
+        mode="focus"
+        title={assignmentSummary && assignmentSummary.totalAssigned > 0 ? "Edit Lesson" : lesson.title}
+        backLink={assignmentSummary && assignmentSummary.totalAssigned > 0 ? `/educator/assignment/${lessonId}` : "/educator"}
+        backLabel={assignmentSummary && assignmentSummary.totalAssigned > 0 ? lesson.title : "Home"}
       />
 
       {/* Success banner for newly created lessons */}

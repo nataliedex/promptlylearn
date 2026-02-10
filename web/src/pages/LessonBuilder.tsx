@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import EducatorHeader from "../components/EducatorHeader";
+import EducatorAppHeader from "../components/EducatorAppHeader";
 import {
   generateLesson,
   generateQuestion,
@@ -172,7 +172,12 @@ export default function LessonBuilder() {
 
   return (
     <div className="container">
-      <EducatorHeader breadcrumbs={[{ label: "Create New Lesson" }]} />
+      <EducatorAppHeader
+        mode="focus"
+        title="Create New Lesson"
+        backLink="/educator"
+        backLabel="Home"
+      />
 
       <div className="header">
         <h1>Create New Lesson</h1>
@@ -326,30 +331,6 @@ export default function LessonBuilder() {
               </span>
               <span style={{ color: "#666" }}>{lesson.gradeLevel}</span>
             </div>
-            {lesson.standards && lesson.standards.length > 0 && (
-              <div style={{ marginTop: "16px", padding: "12px", background: "#e3f2fd", borderRadius: "8px" }}>
-                <h4 style={{ margin: "0 0 8px 0", color: "#1565c0", fontSize: "0.9rem" }}>
-                  Ohio Learning Standards Covered
-                </h4>
-                <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
-                  {lesson.standards.map((code) => (
-                    <span
-                      key={code}
-                      style={{
-                        background: "#1565c0",
-                        color: "white",
-                        padding: "4px 8px",
-                        borderRadius: "4px",
-                        fontSize: "0.8rem",
-                        fontWeight: 500,
-                      }}
-                    >
-                      {code}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            )}
           </div>
 
           <div className="card">
@@ -453,30 +434,6 @@ export default function LessonBuilder() {
                 <p style={{ color: "#f57c00", fontSize: "0.8rem", margin: "8px 0 0 0" }}>
                   Click to edit hints
                 </p>
-              </div>
-            )}
-
-            {currentPrompt.standards && currentPrompt.standards.length > 0 && (
-              <div style={{ marginTop: "16px" }}>
-                <h4 style={{ marginBottom: "8px" }}>Standards Addressed</h4>
-                <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
-                  {currentPrompt.standards.map((code) => (
-                    <span
-                      key={code}
-                      style={{
-                        background: "#e8f5e9",
-                        color: "#2e7d32",
-                        padding: "4px 8px",
-                        borderRadius: "4px",
-                        fontSize: "0.8rem",
-                        fontWeight: 500,
-                        border: "1px solid #a5d6a7",
-                      }}
-                    >
-                      {code}
-                    </span>
-                  ))}
-                </div>
               </div>
             )}
 

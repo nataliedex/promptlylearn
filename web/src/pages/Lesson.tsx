@@ -7,17 +7,23 @@ import {
   getCoachFeedback,
   continueCoachConversation,
   markAssignmentCompleted,
+  uploadVideo,
   type Lesson as LessonType,
   type Session,
   type PromptResponse,
   type ConversationMessage,
   type CoachFeedbackResponse,
+  type VideoResponse,
 } from "../services/api";
 import { useVoice } from "../hooks/useVoice";
 import ModeToggle from "../components/ModeToggle";
+import VideoRecorder from "../components/VideoRecorder";
+import VideoConversationRecorder, { type ConversationTurn } from "../components/VideoConversationRecorder";
+import Header from "../components/Header";
 
-type LessonMode = "voice" | "type";
+type LessonMode = "voice" | "type" | "video";
 type VoiceState = "idle" | "speaking" | "listening" | "processing";
+type VideoState = "permission_prompt" | "ready" | "recording" | "preview" | "uploading";
 
 export default function Lesson() {
   const { studentId, lessonId } = useParams<{ studentId: string; lessonId: string }>();
@@ -41,6 +47,16 @@ export default function Lesson() {
   const [isConversing, setIsConversing] = useState(false);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
+
+  // Video recording state
+  const [showVideoRecorder, setShowVideoRecorder] = useState(false);
+  const [videoUploading, setVideoUploading] = useState(false);
+  const [videoError, setVideoError] = useState<string | null>(null);
+
+  // Video mode conversational flow state
+  const [videoModeStarted, setVideoModeStarted] = useState(false);
+  const [coachAskedQuestion, setCoachAskedQuestion] = useState(false);
+  const [coachIsSpeaking, setCoachIsSpeaking] = useState(false);
 
   // Voice mode state
   const [voiceState, setVoiceState] = useState<VoiceState>("idle");
@@ -113,6 +129,9 @@ export default function Lesson() {
   }, [lessonId, sessionId]);
 
   const currentPrompt = lesson?.prompts[currentIndex];
+
+  // Determine if this is the last question in the lesson (for completion UI)
+  const isLastQuestion = lesson ? currentIndex >= lesson.prompts.length - 1 : false;
 
   // Voice mode: Start the question flow when prompt loads (after user clicks Start)
   useEffect(() => {
@@ -386,6 +405,191 @@ export default function Lesson() {
     }
   };
 
+  // Video submission handler (for type mode's secondary video option)
+  const handleVideoSubmit = async (videoBlob: Blob, durationSec: number) => {
+    if (!currentPrompt || !session || !lessonId || !studentId) return;
+
+    setVideoUploading(true);
+    setVideoError(null);
+
+    try {
+      // Upload the video and get metadata
+      const videoMetadata: VideoResponse = await uploadVideo(
+        videoBlob,
+        studentId,
+        session.submission.assignmentId,
+        currentPrompt.id,
+        durationSec,
+        "answer"
+      );
+
+      // Get coach feedback (using a placeholder response since video can't be transcribed yet)
+      const coachResponse = await getCoachFeedback(
+        lessonId,
+        currentPrompt.id,
+        "[Video response submitted]",
+        lesson?.gradeLevel
+      );
+
+      setFeedback(coachResponse);
+      setConversationHistory([
+        { role: "coach", message: coachResponse.feedback },
+      ]);
+
+      // Update session with video response
+      const response: PromptResponse = {
+        promptId: currentPrompt.id,
+        response: "[Video response]",
+        hintUsed: showHint,
+        inputSource: "video",
+        video: videoMetadata,
+      };
+
+      const updatedResponses = [...session.submission.responses, response];
+
+      await updateSession(session.id, {
+        submission: {
+          ...session.submission,
+          responses: updatedResponses,
+        },
+        currentPromptIndex: currentIndex,
+      });
+
+      setSession((prev) =>
+        prev
+          ? { ...prev, submission: { ...prev.submission, responses: updatedResponses } }
+          : null
+      );
+
+      setShowVideoRecorder(false);
+    } catch (err) {
+      console.error("Failed to submit video:", err);
+      setVideoError(err instanceof Error ? err.message : "Failed to upload video. Please try again.");
+    } finally {
+      setVideoUploading(false);
+    }
+  };
+
+  // Video conversation submission handler (for video mode's conversation flow)
+  const handleVideoConversationSubmit = async (
+    videoBlob: Blob,
+    durationSec: number,
+    turns: ConversationTurn[]
+  ) => {
+    console.log("[Lesson] handleVideoConversationSubmit called", {
+      hasBLob: !!videoBlob,
+      blobSize: videoBlob?.size,
+      durationSec,
+      turnsCount: turns.length,
+      currentPrompt: !!currentPrompt,
+      session: !!session,
+      lessonId,
+      studentId,
+    });
+
+    // Set loading state BEFORE the guard clause so user sees feedback
+    setVideoUploading(true);
+    setVideoError(null);
+
+    if (!currentPrompt || !session || !lessonId || !studentId) {
+      console.error("[Lesson] Missing required data for video submission");
+      setVideoError("Missing required data. Please try again.");
+      setVideoUploading(false);
+      return;
+    }
+
+    try {
+      console.log("[Lesson] Uploading video conversation...", {
+        studentId,
+        assignmentId: session.submission.assignmentId,
+        promptId: currentPrompt.id,
+        durationSec,
+        kind: "coach_convo",
+      });
+      // Upload the video and get metadata (use "coach_convo" for conversation videos to get 120s limit)
+      const videoMetadata: VideoResponse = await uploadVideo(
+        videoBlob,
+        studentId,
+        session.submission.assignmentId,
+        currentPrompt.id,
+        durationSec,
+        "coach_convo"
+      );
+      console.log("[Lesson] Video uploaded successfully:", videoMetadata);
+
+      // Build a summary of the conversation for session storage
+      const coachTurns = turns.filter(t => t.role === "coach").length;
+      const conversationSummary = `[Video conversation: ${coachTurns} coach prompts, ${durationSec}s duration]`;
+
+      // Use deterministic closure message - no LLM call needed
+      // The real conversation already happened during the video recording
+      const closureResponse = {
+        feedback: "Your response has been submitted.",
+        score: 80, // Default positive score for completing the conversation
+        isCorrect: true,
+        encouragement: "Got it.",
+        shouldContinue: false, // No more coach interaction after submission
+      };
+
+      setFeedback(closureResponse);
+      setConversationHistory([]);
+
+      // Update session with video response (include conversation metadata)
+      const response: PromptResponse = {
+        promptId: currentPrompt.id,
+        response: conversationSummary,
+        hintUsed: showHint,
+        inputSource: "video",
+        video: videoMetadata,
+        // Store conversation turns in the response for teacher review
+        conversationTurns: turns.map(t => ({
+          role: t.role,
+          message: t.message,
+          timestampSec: t.timestamp,
+        })),
+      };
+
+      const updatedResponses = [...session.submission.responses, response];
+
+      await updateSession(session.id, {
+        submission: {
+          ...session.submission,
+          responses: updatedResponses,
+        },
+        currentPromptIndex: currentIndex,
+      });
+
+      setSession((prev) =>
+        prev
+          ? { ...prev, submission: { ...prev.submission, responses: updatedResponses } }
+          : null
+      );
+
+      // Reset video mode state
+      setVideoModeStarted(false);
+      setCoachAskedQuestion(false);
+    } catch (err) {
+      console.error("Failed to submit video conversation:", err);
+      setVideoError(err instanceof Error ? err.message : "Failed to upload video. Please try again.");
+    } finally {
+      setVideoUploading(false);
+    }
+  };
+
+  // Video mode: Start the conversational flow by having coach ask the question
+  const handleStartVideoQuestion = async () => {
+    if (!currentPrompt) return;
+
+    setVideoModeStarted(true);
+    setCoachIsSpeaking(true);
+
+    // Coach speaks the question aloud
+    await speak(currentPrompt.input);
+
+    setCoachIsSpeaking(false);
+    setCoachAskedQuestion(true);
+  };
+
   // Type mode handlers
   const handleShowHint = () => {
     if (!currentPrompt) return;
@@ -435,7 +639,8 @@ export default function Lesson() {
         console.log("Failed to mark assignment completed:", err);
       }
 
-      navigate(`/student/${studentId}`);
+      // Navigate with justCompleted param for completion animation
+      navigate(`/student/${studentId}?justCompleted=${lessonId}`);
     } else {
       await updateSession(session.id, {
         currentPromptIndex: currentIndex + 1,
@@ -449,6 +654,9 @@ export default function Lesson() {
       setFollowUpAnswer("");
       setVoiceStarted(false);
       isProcessingRef.current = false;
+      // Reset video mode state for next question
+      setCoachAskedQuestion(false);
+      setVideoError(null);
     }
   };
 
@@ -521,6 +729,12 @@ export default function Lesson() {
   if (!lesson || !currentPrompt) {
     return (
       <div className="container">
+        <Header
+          mode="context"
+          userType="student"
+          homeLink={`/student/${studentId}`}
+          breadcrumbs={[{ label: "Lesson not found" }]}
+        />
         <div className="card">
           <p>Lesson not found.</p>
           <Link to={`/student/${studentId}`} className="btn btn-primary">
@@ -538,18 +752,23 @@ export default function Lesson() {
   if (isVoiceMode) {
     return (
       <div className="container">
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
-          <Link to={`/student/${studentId}`} className="back-btn" style={{ margin: 0 }}>
-            ← Exit Lesson
-          </Link>
-          {voiceAvailable && (
-            <ModeToggle
-              mode={mode}
-              onToggle={handleModeToggle}
-              disabled={voiceState === "processing" || submitting}
-            />
-          )}
-        </div>
+        <Header
+          mode="session"
+          userType="student"
+          backLink={`/student/${studentId}`}
+          backLabel="Exit"
+          title={lesson.title}
+          progress={{ current: currentIndex + 1, total: lesson.prompts.length }}
+          primaryActions={
+            voiceAvailable ? (
+              <ModeToggle
+                mode={mode}
+                onToggle={handleModeToggle}
+                disabled={voiceState === "processing" || submitting}
+              />
+            ) : undefined
+          }
+        />
 
         <div className="header">
           <h1>{lesson.title}</h1>
@@ -735,8 +954,8 @@ export default function Lesson() {
           )}
         </div>
 
-        {/* Take a break button - always visible during voice lesson */}
-        {lessonStarted && (
+        {/* Take a break button - visible during active lesson, hidden on final question completion */}
+        {lessonStarted && !(isLastQuestion && feedback && !feedback.shouldContinue) && (
           <div style={{ marginTop: "16px", textAlign: "center" }}>
             <button
               onClick={handleTakeBreak}
@@ -783,21 +1002,223 @@ export default function Lesson() {
     );
   }
 
+  // Generate coach response for video conversation based on transcript
+  const generateVideoCoachResponse = async (
+    question: string,
+    transcript: Array<{ role: "coach" | "student"; message: string; timestamp: number }>,
+    videoGradeLevel?: string
+  ): Promise<{ response: string; shouldContinue: boolean }> => {
+    if (!lessonId || !currentPrompt) {
+      return { response: "Can you tell me more about your thinking?", shouldContinue: true };
+    }
+
+    try {
+      // Get the student's responses from transcript
+      const studentResponses = transcript.filter(t => t.role === "student");
+      const latestStudentResponse = studentResponses[studentResponses.length - 1]?.message || "";
+
+      // Convert transcript to ConversationMessage format for the API
+      const conversationHistory: ConversationMessage[] = transcript.map(t => ({
+        role: t.role === "coach" ? "coach" : "student",
+        message: t.message,
+      }));
+
+      // Call the coach API
+      const coachResponse = await continueCoachConversation(
+        lessonId,
+        currentPrompt.id,
+        studentResponses[0]?.message || "", // original answer
+        latestStudentResponse,
+        conversationHistory,
+        videoGradeLevel || lesson?.gradeLevel
+      );
+
+      // Combine feedback and follow-up question for the response
+      const response = coachResponse.followUpQuestion
+        ? `${coachResponse.feedback} ${coachResponse.followUpQuestion}`
+        : coachResponse.feedback;
+
+      return {
+        response,
+        shouldContinue: coachResponse.shouldContinue ?? false,
+      };
+    } catch (err) {
+      console.error("Failed to generate coach response:", err);
+      // Return a generic encouraging response on error
+      return {
+        response: "That's interesting! Can you tell me a bit more about why you think that?",
+        shouldContinue: true,
+      };
+    }
+  };
+
+  // Video mode UI - continuous conversation recording per question
+  if (mode === "video") {
+
+    return (
+      <div className="container">
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
+          <Link to={`/student/${studentId}`} className="back-btn" style={{ margin: 0 }}>
+            ← Exit Lesson
+          </Link>
+        </div>
+
+        <div className="header">
+          <h1>{lesson.title}</h1>
+          <p>
+            Question {currentIndex + 1} of {lesson.prompts.length}
+          </p>
+        </div>
+
+        {/* Progress bar */}
+        <div className="card" style={{ padding: "12px 24px" }}>
+          <div className="progress-bar">
+            <div className="progress-bar-fill" style={{ width: `${progress}%` }}></div>
+          </div>
+        </div>
+
+        {/* Video conversation card */}
+        <div className="card">
+          {!feedback ? (
+            <VideoConversationRecorder
+              maxDuration={120}
+              maxCoachTurns={3}
+              question={currentPrompt.input}
+              gradeLevel={lesson?.gradeLevel}
+              onStartRecording={() => {
+                setVideoModeStarted(true);
+              }}
+              onStopRecording={handleVideoConversationSubmit}
+              onError={(error) => {
+                setVideoError(error);
+              }}
+              onSwitchToTyping={() => {
+                setMode("type");
+                setVideoModeStarted(false);
+                setCoachAskedQuestion(false);
+              }}
+              speak={speak}
+              isSpeaking={isSpeaking}
+              generateCoachResponse={generateVideoCoachResponse}
+              isSubmitting={videoUploading}
+            />
+          ) : (
+            <>
+              {/* Closure screen after video conversation submission */}
+              <div style={{ textAlign: "center", padding: "24px 16px" }}>
+                {/* Success indicator */}
+                <div
+                  style={{
+                    width: "64px",
+                    height: "64px",
+                    borderRadius: "50%",
+                    background: "#e8f5e9",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    margin: "0 auto 16px",
+                  }}
+                >
+                  <span style={{ fontSize: "2rem" }}>🎉</span>
+                </div>
+
+                {/* Title */}
+                <h3 style={{ margin: "0 0 8px 0", color: "#2e7d32", fontSize: "1.3rem" }}>
+                  {isLastQuestion ? "Lesson complete!" : "Response submitted"}
+                </h3>
+
+                {/* Subtitle */}
+                <p style={{ margin: "0 0 16px 0", color: "#666", fontSize: "0.95rem" }}>
+                  Your teacher will review your video.
+                </p>
+
+                {/* Closure message */}
+                <div
+                  style={{
+                    padding: "12px 20px",
+                    background: "#f5f5f5",
+                    borderRadius: "12px",
+                    display: "inline-block",
+                    marginBottom: "24px",
+                  }}
+                >
+                  <p style={{ margin: 0, color: "#333", fontSize: "0.9rem" }}>
+                    {isLastQuestion
+                      ? "You've completed this lesson. Your teacher will review your responses."
+                      : "Your response has been submitted."}
+                  </p>
+                </div>
+              </div>
+
+              <div className="nav-buttons">
+                <button className="btn btn-primary" onClick={handleNext}>
+                  {currentIndex < lesson.prompts.length - 1 ? "Next Question →" : "Finish Lesson"}
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+
+        {/* Take a break button - only show when not in active recording and not on final question completion */}
+        {!videoModeStarted && !isLastQuestion && (
+          <div style={{ marginTop: "16px", textAlign: "center" }}>
+            <button
+              onClick={handleTakeBreak}
+              style={{
+                padding: "14px 28px",
+                fontSize: "1rem",
+                fontWeight: 600,
+                background: "#1a1a2e",
+                color: "#ffffff",
+                border: "none",
+                borderRadius: "10px",
+                cursor: "pointer",
+                display: "inline-flex",
+                alignItems: "center",
+                gap: "10px",
+                boxShadow: "0 2px 8px rgba(0,0,0,0.15)",
+                transition: "background 0.2s, transform 0.1s",
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background = "#2d2d44";
+                e.currentTarget.style.transform = "translateY(-1px)";
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = "#1a1a2e";
+                e.currentTarget.style.transform = "translateY(0)";
+              }}
+            >
+              Take a break
+            </button>
+            <p style={{ marginTop: "8px", fontSize: "0.85rem", color: "#888" }}>
+              Your progress is saved. Come back anytime!
+            </p>
+          </div>
+        )}
+      </div>
+    );
+  }
+
   // Type mode UI (original)
   return (
     <div className="container">
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
-        <Link to={`/student/${studentId}`} className="back-btn" style={{ margin: 0 }}>
-          ← Exit Lesson
-        </Link>
-        {voiceAvailable && (
-          <ModeToggle
-            mode={mode}
-            onToggle={handleModeToggle}
-            disabled={submitting || isConversing}
-          />
-        )}
-      </div>
+      <Header
+        mode="session"
+        userType="student"
+        backLink={`/student/${studentId}`}
+        backLabel="Exit"
+        title={lesson.title}
+        progress={{ current: currentIndex + 1, total: lesson.prompts.length }}
+        primaryActions={
+          voiceAvailable ? (
+            <ModeToggle
+              mode={mode}
+              onToggle={handleModeToggle}
+              disabled={submitting || isConversing}
+            />
+          ) : undefined
+        }
+      />
 
       <div className="header">
         <h1>{lesson.title}</h1>
@@ -819,43 +1240,100 @@ export default function Lesson() {
 
         {!feedback ? (
           <>
-            <div className="question-input">
-              <textarea
-                value={answer}
-                onChange={(e) => setAnswer(e.target.value)}
-                placeholder="Type your answer here..."
-                disabled={submitting}
-              />
-            </div>
-
-            {/* Hints */}
-            {showHint && currentPrompt.hints.length > 0 && (
-              <div className="hint-section">
-                <h4>Hint</h4>
-                {currentPrompt.hints.slice(0, hintIndex + 1).map((hint, i) => (
-                  <p key={i} style={{ marginBottom: "8px" }}>
-                    {hint}
-                  </p>
-                ))}
+            {/* Video Recorder - shown when recording video */}
+            {showVideoRecorder ? (
+              <div style={{ marginTop: "16px" }}>
+                <VideoRecorder
+                  maxDuration={60}
+                  onSubmit={handleVideoSubmit}
+                  onCancel={() => {
+                    setShowVideoRecorder(false);
+                    setVideoError(null);
+                  }}
+                  isSubmitting={videoUploading}
+                  error={videoError}
+                />
               </div>
-            )}
+            ) : (
+              <>
+                {/* Text input area */}
+                <div className="question-input">
+                  <textarea
+                    value={answer}
+                    onChange={(e) => setAnswer(e.target.value)}
+                    placeholder="Type your answer here..."
+                    disabled={submitting}
+                  />
+                </div>
 
-            <div className="nav-buttons">
-              <button
-                className="btn btn-secondary"
-                onClick={handleShowHint}
-                disabled={submitting || (showHint && hintIndex >= currentPrompt.hints.length - 1)}
-              >
-                {showHint ? "More Hints" : "Need a Hint?"}
-              </button>
-              <button
-                className="btn btn-primary"
-                onClick={handleSubmit}
-                disabled={!answer.trim() || submitting}
-              >
-                {submitting ? "Checking..." : "Submit Answer"}
-              </button>
-            </div>
+                {/* Video option */}
+                <div style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: "8px",
+                  margin: "12px 0",
+                  padding: "12px",
+                  background: "#f8f9fa",
+                  borderRadius: "8px",
+                }}>
+                  <span style={{ color: "#6b7280", fontSize: "0.9rem" }}>Or</span>
+                  <button
+                    onClick={() => setShowVideoRecorder(true)}
+                    disabled={submitting}
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: "8px",
+                      padding: "8px 16px",
+                      fontSize: "0.9rem",
+                      fontWeight: 500,
+                      background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
+                      color: "white",
+                      border: "none",
+                      borderRadius: "8px",
+                      cursor: submitting ? "not-allowed" : "pointer",
+                      opacity: submitting ? 0.5 : 1,
+                    }}
+                  >
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <path d="M23 7l-7 5 7 5V7z" />
+                      <rect x="1" y="5" width="15" height="14" rx="2" ry="2" />
+                    </svg>
+                    Record Video Response
+                  </button>
+                </div>
+
+                {/* Hints */}
+                {showHint && currentPrompt.hints.length > 0 && (
+                  <div className="hint-section">
+                    <h4>Hint</h4>
+                    {currentPrompt.hints.slice(0, hintIndex + 1).map((hint, i) => (
+                      <p key={i} style={{ marginBottom: "8px" }}>
+                        {hint}
+                      </p>
+                    ))}
+                  </div>
+                )}
+
+                <div className="nav-buttons">
+                  <button
+                    className="btn btn-secondary"
+                    onClick={handleShowHint}
+                    disabled={submitting || (showHint && hintIndex >= currentPrompt.hints.length - 1)}
+                  >
+                    {showHint ? "More Hints" : "Need a Hint?"}
+                  </button>
+                  <button
+                    className="btn btn-primary"
+                    onClick={handleSubmit}
+                    disabled={!answer.trim() || submitting}
+                  >
+                    {submitting ? "Checking..." : "Submit Answer"}
+                  </button>
+                </div>
+              </>
+            )}
           </>
         ) : (
           <>

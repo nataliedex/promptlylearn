@@ -19,7 +19,7 @@ import {
   type UpdateClassInput,
 } from "../services/api";
 import { useToast } from "../components/Toast";
-import EducatorHeader from "../components/EducatorHeader";
+import EducatorAppHeader from "../components/EducatorAppHeader";
 
 export default function ClassDetails() {
   const { classId } = useParams<{ classId: string }>();
@@ -56,6 +56,7 @@ export default function ClassDetails() {
         name: data.name,
         gradeLevel: data.gradeLevel,
         period: data.period,
+        sectionLabel: data.sectionLabel,
         description: data.description,
       });
     } catch (err) {
@@ -178,7 +179,7 @@ export default function ClassDetails() {
   if (error || !classData) {
     return (
       <div className="container">
-        <EducatorHeader />
+        <EducatorAppHeader mode="slim" title="Class not found" />
         <div className="card">
           <p style={{ color: "#d32f2f" }}>{error || "Class not found."}</p>
           <button className="btn btn-primary" onClick={loadClass} style={{ marginTop: "16px" }}>
@@ -194,7 +195,8 @@ export default function ClassDetails() {
 
   return (
     <div className="container">
-      <EducatorHeader
+      <EducatorAppHeader
+        mode="slim"
         breadcrumbs={[{ label: classData.name }]}
       />
 
@@ -257,6 +259,24 @@ export default function ClassDetails() {
                   }}
                 />
               </div>
+              <div style={{ flex: 1 }}>
+                <label style={{ display: "block", marginBottom: "4px", fontWeight: 600 }}>
+                  Section
+                </label>
+                <input
+                  type="text"
+                  value={editForm.sectionLabel || ""}
+                  onChange={(e) => setEditForm({ ...editForm, sectionLabel: e.target.value })}
+                  placeholder="e.g., A, B, AM, PM"
+                  style={{
+                    width: "100%",
+                    padding: "12px",
+                    fontSize: "1rem",
+                    borderRadius: "8px",
+                    border: "2px solid #e0e0e0",
+                  }}
+                />
+              </div>
             </div>
             <div style={{ display: "flex", gap: "12px", justifyContent: "flex-end" }}>
               <button className="btn btn-secondary" onClick={() => setIsEditing(false)}>
@@ -278,6 +298,9 @@ export default function ClassDetails() {
                   )}
                   {classData.period && (
                     <span style={{ color: "#666" }}>{classData.period}</span>
+                  )}
+                  {classData.sectionLabel && (
+                    <span style={{ color: "#666" }}>Section {classData.sectionLabel}</span>
                   )}
                 </div>
                 {classData.description && (

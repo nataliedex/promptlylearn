@@ -18,7 +18,6 @@ import {
   type StudentBadge,
   type StudentNote,
   type LessonSummary,
-  type Lesson,
   type Prompt,
   type CoachingInvite,
   type StudentAssignmentRecord,
@@ -29,8 +28,9 @@ import BadgeCelebrationOverlay from "../components/BadgeCelebrationOverlay";
 import AskCoachDrawer from "../components/AskCoachDrawer";
 import AskCoachTopicDrawer from "../components/AskCoachTopicDrawer";
 import StudentProfileView from "../components/StudentProfileView";
+import Header from "../components/Header";
 
-type SessionMode = "voice" | "type";
+type SessionMode = "video" | "type";
 
 /**
  * DESIGN RULE: No emojis in UI.
@@ -101,15 +101,37 @@ export default function StudentDashboard() {
 
   // Track which sessions are expanded to show "My Answers"
   const [expandedSessions, setExpandedSessions] = useState<Set<string>>(new Set());
+  // Track which video transcripts are expanded (key: `${sessionId}-${promptId}`)
+  const [expandedTranscripts, setExpandedTranscripts] = useState<Set<string>>(new Set());
 
   // Badge navigation highlighting
-  const [searchParams, setSearchParams] = useSearchParams();
+  const [searchParams] = useSearchParams();
   const [highlightedSessionId, setHighlightedSessionId] = useState<string | null>(null);
   const [highlightBadge, setHighlightBadge] = useState<StudentBadge | null>(null);
 
   // Badge celebration state
   const [celebrationBadge, setCelebrationBadge] = useState<StudentBadge | null>(null);
   const celebrationChecked = useRef(false); // Prevent multiple celebration checks per mount
+
+  // Just-completed lesson animation state
+  const [justCompletedLesson, setJustCompletedLesson] = useState<StudentLessonSummary | null>(null);
+  const [completionAnimationPhase, setCompletionAnimationPhase] = useState<"success" | "animating-out" | null>(null);
+  // Track which lesson ID to hide from the active list during/after animation
+  const [hiddenLessonId, setHiddenLessonId] = useState<string | null>(null);
+
+  // Single ref to track if completion animation has been triggered this session (prevents ALL retriggering)
+  const completionAnimationTriggered = useRef(false);
+
+  // Refs for completion animation timers (stored here so they survive effect re-runs)
+  const animationTimerRefs = useRef<{ animateOut: NodeJS.Timeout | null; remove: NodeJS.Timeout | null }>({
+    animateOut: null,
+    remove: null,
+  });
+
+  // Check for prefers-reduced-motion
+  const prefersReducedMotion = useRef(
+    typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches
+  );
 
   // Refs for scrolling
   const sessionRefs = useRef<Map<string, HTMLDivElement>>(new Map());
@@ -281,6 +303,90 @@ export default function StudentDashboard() {
     }
   }, [loading, badges, studentId]);
 
+  // Function to run the completion animation - called once and handles entire timer chain
+  const runCompletionAnimation = (justCompletedId: string, lessonInfo: LessonSummary) => {
+    // Clear the URL param IMMEDIATELY (replace, don't push to history)
+    const currentParams = new URLSearchParams(window.location.search);
+    currentParams.delete("justCompleted");
+    window.history.replaceState({}, "", `${window.location.pathname}${currentParams.toString() ? `?${currentParams.toString()}` : ""}`);
+
+    // IMMEDIATELY hide the lesson from the active list (prevents duplicate display)
+    setHiddenLessonId(justCompletedId);
+
+    // Create a synthetic StudentLessonSummary for display
+    const syntheticLesson: StudentLessonSummary = {
+      id: lessonInfo.id,
+      title: lessonInfo.title,
+      subject: lessonInfo.subject || undefined,
+      promptCount: lessonInfo.promptCount,
+      attempts: 1,
+      className: undefined,
+      assignedAt: undefined,
+      dueDate: undefined,
+    };
+
+    // If user prefers reduced motion, skip animation and just expand completed section
+    if (prefersReducedMotion.current) {
+      setLessons((prev) => prev.filter((l) => l.id !== justCompletedId));
+      setCompletedExpanded(true);
+      setHiddenLessonId(null);
+      return;
+    }
+
+    // Start the animation sequence
+    setJustCompletedLesson(syntheticLesson);
+    setCompletionAnimationPhase("success");
+
+    // Store timers in refs so they survive effect re-runs
+    animationTimerRefs.current.animateOut = setTimeout(() => {
+      setCompletionAnimationPhase("animating-out");
+      setCompletedExpanded(true);
+    }, 700);
+
+    animationTimerRefs.current.remove = setTimeout(() => {
+      setJustCompletedLesson(null);
+      setCompletionAnimationPhase(null);
+      setLessons((prev) => prev.filter((l) => l.id !== justCompletedId));
+      setHiddenLessonId(null);
+    }, 1200);
+  };
+
+  // Detect completion and trigger animation (effect only detects, doesn't manage timers)
+  useEffect(() => {
+    if (loading) return;
+
+    const justCompletedId = searchParams.get("justCompleted");
+    if (!justCompletedId) return;
+
+    // CRITICAL: Only trigger animation ONCE per page load
+    if (completionAnimationTriggered.current) return;
+    completionAnimationTriggered.current = true;
+
+    // Find the lesson in allLessons to get its info
+    const lessonInfo = allLessons.find((l) => l.id === justCompletedId);
+    if (!lessonInfo) {
+      completionAnimationTriggered.current = false;
+      return;
+    }
+
+    // Run the animation (this handles the entire timer chain independently)
+    runCompletionAnimation(justCompletedId, lessonInfo);
+
+    // NO cleanup here - timers are managed by refs and cleaned up only on unmount
+  }, [loading, allLessons, searchParams]);
+
+  // Cleanup timers only on component unmount
+  useEffect(() => {
+    return () => {
+      if (animationTimerRefs.current.animateOut) {
+        clearTimeout(animationTimerRefs.current.animateOut);
+      }
+      if (animationTimerRefs.current.remove) {
+        clearTimeout(animationTimerRefs.current.remove);
+      }
+    };
+  }, []);
+
   // Load lesson prompts for displaying question text
   const loadLessonPrompts = async (lessonId: string) => {
     if (lessonPrompts.has(lessonId) || loadingLessonPrompts.has(lessonId)) return;
@@ -315,7 +421,7 @@ export default function StudentDashboard() {
     });
   };
 
-  const handleStartLesson = async (lesson: StudentLessonSummary, mode: "voice" | "type") => {
+  const handleStartLesson = async (lesson: StudentLessonSummary, mode: "video" | "type") => {
     if (!student) return;
 
     try {
@@ -398,6 +504,20 @@ export default function StudentDashboard() {
         next.delete(subject);
       } else {
         next.add(subject);
+      }
+      return next;
+    });
+  };
+
+  // Toggle transcript expansion for video conversations
+  const toggleTranscriptExpanded = (sessionId: string, promptId: string) => {
+    const key = `${sessionId}-${promptId}`;
+    setExpandedTranscripts((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        next.add(key);
       }
       return next;
     });
@@ -558,7 +678,7 @@ export default function StudentDashboard() {
               transform: scale(1.2);
             }
           }
-          @keyframes pulse {
+          @keyframes badgePulse {
             0%, 100% {
               transform: scale(1);
               box-shadow: 0 2px 4px rgba(0,0,0,0.2);
@@ -568,67 +688,115 @@ export default function StudentDashboard() {
               box-shadow: 0 4px 8px rgba(46,125,50,0.4);
             }
           }
+          /* Slide-down animation for transitioning completed card to Completed Work section */
+          @keyframes slideDownFade {
+            0% {
+              opacity: 1;
+              transform: translateY(0) scale(1);
+            }
+            100% {
+              opacity: 0;
+              transform: translateY(80px) scale(0.95);
+            }
+          }
+          .lesson-card-completing {
+            animation: slideDownFade 0.5s ease-out forwards;
+          }
+          /* Success state is static - no animation, just styling */
+          .lesson-card-completed-success {
+            box-shadow: 0 4px 16px rgba(34, 197, 94, 0.3);
+          }
+          @media (prefers-reduced-motion: reduce) {
+            .lesson-card-completing {
+              animation: none;
+              opacity: 0;
+            }
+          }
         `}
       </style>
 
       <div className="container">
-        <Link to="/" className="back-btn">
-        ← Back
-      </Link>
+        <Header
+          mode="dashboard"
+          userType="student"
+          userName={student.preferredName || student.name}
+          homeLink="/"
+          title={`Welcome, ${student.preferredName || student.name}!`}
+        />
 
-      <div className="header">
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-          <div>
-            <h1
-              onClick={() => setShowProfileView(true)}
+      <div className="header" style={{ position: "relative" }}>
+        {/* Ask Coach button - positioned top-right as utility action */}
+        <button
+          className={`btn btn-coach${coachingInvites.length > 0 ? " btn-coach--has-invite" : ""}`}
+          onClick={() => setShowCoachTopicDrawer(true)}
+          style={{
+            position: "absolute",
+            top: 0,
+            right: 0,
+            display: "flex",
+            alignItems: "center",
+            gap: "10px",
+            padding: "14px 24px",
+            fontSize: "1rem",
+          }}
+        >
+          <span style={{ fontWeight: 600 }}>Ask Coach</span>
+          {/* Coaching invite badge */}
+          {coachingInvites.length > 0 && (
+            <span
               style={{
-                cursor: "pointer",
-                transition: "opacity 0.15s",
+                position: "absolute",
+                top: "-8px",
+                right: "-8px",
+                background: "linear-gradient(135deg, var(--status-success-text), var(--status-success))",
+                color: "white",
+                borderRadius: "12px",
+                padding: "3px 10px",
+                fontSize: "0.75rem",
+                fontWeight: 700,
+                minWidth: "20px",
+                textAlign: "center",
+                boxShadow: "0 2px 6px rgba(34, 197, 94, 0.3)",
+                animation: "badgePulse 2s ease-in-out infinite",
               }}
-              onMouseEnter={(e) => { e.currentTarget.style.opacity = "0.8"; }}
-              onMouseLeave={(e) => { e.currentTarget.style.opacity = "1"; }}
-              title="View your profile"
             >
-              Hi, {student.preferredName || student.name}!
-            </h1>
-            <p>{lessons.length > 0 ? "Ready to learn? Pick an assignment below!" : "Welcome back!"}</p>
-          </div>
-          <button
-            className={`btn btn-coach${coachingInvites.length > 0 ? " btn-coach--has-invite" : ""}`}
-            onClick={() => setShowCoachTopicDrawer(true)}
+              {coachingInvites.length}
+            </span>
+          )}
+        </button>
+
+        {/* Centered greeting hero */}
+        <div
+          style={{
+            textAlign: "center",
+            paddingTop: "8px",
+            paddingBottom: "8px",
+          }}
+        >
+          <h1
+            onClick={() => setShowProfileView(true)}
             style={{
-              display: "flex",
-              alignItems: "center",
-              gap: "10px",
-              padding: "14px 24px",
-              fontSize: "1rem",
-              position: "relative",
+              cursor: "pointer",
+              transition: "opacity 0.15s",
+              marginBottom: "6px",
+            }}
+            onMouseEnter={(e) => { e.currentTarget.style.opacity = "0.8"; }}
+            onMouseLeave={(e) => { e.currentTarget.style.opacity = "1"; }}
+            title="View your profile"
+          >
+            Hi, {student.preferredName || student.name}!
+          </h1>
+          <p
+            style={{
+              margin: 0,
+              color: "rgba(255, 255, 255, 0.9)",
+              fontSize: "1.05rem",
+              fontWeight: 400,
+              letterSpacing: "0.01em",
             }}
           >
-            <span style={{ fontWeight: 600 }}>Ask Coach</span>
-            {/* Coaching invite badge */}
-            {coachingInvites.length > 0 && (
-              <span
-                style={{
-                  position: "absolute",
-                  top: "-8px",
-                  right: "-8px",
-                  background: "linear-gradient(135deg, var(--status-success-text), var(--status-success))",
-                  color: "white",
-                  borderRadius: "12px",
-                  padding: "3px 10px",
-                  fontSize: "0.75rem",
-                  fontWeight: 700,
-                  minWidth: "20px",
-                  textAlign: "center",
-                  boxShadow: "0 2px 6px rgba(34, 197, 94, 0.3)",
-                  animation: "pulse 2s ease-in-out infinite",
-                }}
-              >
-                {coachingInvites.length}
-              </span>
-            )}
-          </button>
+            {lessons.length > 0 ? "Ready to learn? Pick an assignment below!" : "Welcome back!"}
+          </p>
         </div>
       </div>
 
@@ -676,7 +844,7 @@ export default function StudentDashboard() {
 
       {/* Lessons */}
       <h2 style={{ color: "white", marginBottom: "16px" }}>Your Assignments</h2>
-      {lessons.length === 0 ? (
+      {lessons.length === 0 && !justCompletedLesson ? (
         <div className="card" style={{ textAlign: "center", padding: "48px" }}>
           <h3 style={{ margin: 0, marginBottom: "8px" }}>No assignments yet</h3>
           <p style={{ color: "var(--text-secondary)", margin: 0 }}>
@@ -688,7 +856,84 @@ export default function StudentDashboard() {
         </div>
       ) : (
         <div className="lesson-grid">
-          {lessons.map((lesson) => {
+          {/* Just-completed lesson with success animation */}
+          {justCompletedLesson && (
+            <div
+              key={`completed-${justCompletedLesson.id}`}
+              className={`card lesson-card ${
+                completionAnimationPhase === "animating-out"
+                  ? "lesson-card-completing"
+                  : completionAnimationPhase === "success"
+                    ? "lesson-card-completed-success"
+                    : ""
+              }`}
+              style={{
+                cursor: "default",
+                border: "2px solid var(--status-success)",
+                background: "linear-gradient(135deg, var(--status-success-bg) 0%, var(--surface-card) 100%)",
+                position: "relative",
+                overflow: "hidden",
+              }}
+            >
+              {/* Success checkmark overlay */}
+              <div
+                style={{
+                  position: "absolute",
+                  top: "12px",
+                  right: "12px",
+                  width: "32px",
+                  height: "32px",
+                  borderRadius: "50%",
+                  background: "var(--status-success)",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  boxShadow: "0 2px 8px rgba(34, 197, 94, 0.4)",
+                }}
+              >
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="20 6 9 17 4 12" />
+                </svg>
+              </div>
+
+              {/* Title row */}
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "6px", paddingRight: "44px" }}>
+                <h3 style={{ margin: 0, color: "var(--text-primary)", fontSize: "1.15rem", fontWeight: 600, lineHeight: 1.3 }}>
+                  {justCompletedLesson.title}
+                </h3>
+              </div>
+
+              {/* Subject */}
+              {justCompletedLesson.subject && (
+                <div style={{ marginBottom: "12px" }}>
+                  <p style={{ margin: 0, color: "var(--accent-primary)", fontSize: "0.8rem", fontWeight: 500 }}>
+                    {justCompletedLesson.subject}
+                  </p>
+                </div>
+              )}
+
+              {/* Completed message */}
+              <div
+                style={{
+                  padding: "12px 16px",
+                  background: "var(--status-success-bg)",
+                  borderRadius: "8px",
+                  borderLeft: "3px solid var(--status-success)",
+                }}
+              >
+                <p style={{ margin: 0, color: "var(--status-success-text)", fontWeight: 600, fontSize: "0.95rem" }}>
+                  Completed!
+                </p>
+                <p style={{ margin: "4px 0 0 0", color: "var(--text-secondary)", fontSize: "0.85rem" }}>
+                  Your work has been saved.
+                </p>
+              </div>
+            </div>
+          )}
+
+          {lessons
+            .filter((lesson) => lesson.id !== hiddenLessonId) // Exclude lesson being animated out
+            .map((lesson) => {
             // Estimate time based on question count
             const questionCount = lesson.promptCount || 0;
             const estimatedTime =
@@ -696,68 +941,90 @@ export default function StudentDashboard() {
               questionCount <= 5 ? "About 10 minutes" :
               "About 15 minutes";
 
+            // Compute status banner content
+            const isPaused = hasPausedSession(lesson.id);
+            const pausedSession = isPaused ? getPausedSession(lesson.id) : null;
+            const progress = pausedSession?.currentPromptIndex || 0;
+
+            let dueDateInfo: { isPastDue: boolean; formattedDate: string } | null = null;
+            if (lesson.dueDate) {
+              const dueDate = new Date(lesson.dueDate + "T23:59:59");
+              const today = new Date();
+              today.setHours(0, 0, 0, 0);
+              dueDateInfo = {
+                isPastDue: dueDate < today,
+                formattedDate: new Date(lesson.dueDate).toLocaleDateString("en-US", {
+                  month: "short",
+                  day: "numeric",
+                }),
+              };
+            }
+
             return (
               <div key={lesson.id} className="card lesson-card" style={{ cursor: "default" }}>
-                {/* Title row with attempt/resume badge */}
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "6px" }}>
-                  <h3 style={{ margin: 0, color: "var(--text-primary)", fontSize: "1.15rem", fontWeight: 600, lineHeight: 1.3 }}>
-                    {lesson.title}
-                  </h3>
-                  <div style={{ display: "flex", gap: "6px", flexShrink: 0 }}>
-                    {hasPausedSession(lesson.id) && (
-                      <span
-                        style={{
-                          background: "var(--status-warning-bg)",
-                          color: "var(--status-warning-text)",
-                          padding: "3px 8px",
-                          borderRadius: "10px",
-                          fontSize: "0.7rem",
-                          fontWeight: 600,
-                          whiteSpace: "nowrap",
-                        }}
-                      >
-                        Resume
-                      </span>
+                {/* === HEADER SECTION === */}
+                <div>
+                  {/* Title row with attempt/resume badge */}
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "6px" }}>
+                    <h3 style={{ margin: 0, color: "var(--text-primary)", fontSize: "1.15rem", fontWeight: 600, lineHeight: 1.3 }}>
+                      {lesson.title}
+                    </h3>
+                    <div style={{ display: "flex", gap: "6px", flexShrink: 0 }}>
+                      {isPaused && (
+                        <span
+                          style={{
+                            background: "var(--status-warning-bg)",
+                            color: "var(--status-warning-text)",
+                            padding: "3px 8px",
+                            borderRadius: "10px",
+                            fontSize: "0.7rem",
+                            fontWeight: 600,
+                            whiteSpace: "nowrap",
+                          }}
+                        >
+                          Resume
+                        </span>
+                      )}
+                      {lesson.attempts > 1 && (
+                        <span
+                          style={{
+                            background: "var(--status-info-bg)",
+                            color: "var(--status-info-text)",
+                            padding: "3px 8px",
+                            borderRadius: "10px",
+                            fontSize: "0.7rem",
+                            fontWeight: 600,
+                            whiteSpace: "nowrap",
+                          }}
+                        >
+                          Try #{lesson.attempts}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Class name and subject - secondary text */}
+                  <div style={{ marginBottom: "12px", minHeight: "40px" }}>
+                    {lesson.className && (
+                      <p style={{ margin: "0 0 2px 0", color: "var(--text-secondary)", fontSize: "0.85rem" }}>
+                        {lesson.className}
+                      </p>
                     )}
-                    {lesson.attempts > 1 && (
-                      <span
-                        style={{
-                          background: "var(--status-info-bg)",
-                          color: "var(--status-info-text)",
-                          padding: "3px 8px",
-                          borderRadius: "10px",
-                          fontSize: "0.7rem",
-                          fontWeight: 600,
-                          whiteSpace: "nowrap",
-                        }}
-                      >
-                        Try #{lesson.attempts}
-                      </span>
+                    {lesson.subject && (
+                      <p style={{ margin: 0, color: "var(--accent-primary)", fontSize: "0.8rem", fontWeight: 500 }}>
+                        {lesson.subject}
+                      </p>
                     )}
                   </div>
                 </div>
 
-                {/* Class name and subject - secondary text */}
-                <div style={{ marginBottom: "12px" }}>
-                  {lesson.className && (
-                    <p style={{ margin: "0 0 2px 0", color: "var(--text-secondary)", fontSize: "0.85rem" }}>
-                      {lesson.className}
-                    </p>
-                  )}
-                  {lesson.subject && (
-                    <p style={{ margin: 0, color: "var(--accent-primary)", fontSize: "0.8rem", fontWeight: 500 }}>
-                      {lesson.subject}
-                    </p>
-                  )}
-                </div>
-
-                {/* Question count and time estimate - metadata row */}
+                {/* === META SECTION === */}
                 <div
                   style={{
                     display: "flex",
                     gap: "16px",
                     alignItems: "center",
-                    marginBottom: "16px",
+                    marginBottom: "12px",
                     color: "var(--text-muted)",
                     fontSize: "0.8rem",
                   }}
@@ -769,51 +1036,12 @@ export default function StudentDashboard() {
                   <span>{estimatedTime}</span>
                 </div>
 
-                {/* Due date indicator */}
-                {lesson.dueDate && (() => {
-                  const dueDate = new Date(lesson.dueDate + "T23:59:59"); // End of day
-                  const today = new Date();
-                  today.setHours(0, 0, 0, 0);
-                  const isPastDue = dueDate < today;
-                  const formattedDate = new Date(lesson.dueDate).toLocaleDateString("en-US", {
-                    month: "short",
-                    day: "numeric",
-                  });
-
-                  return (
+                {/* === STATUS SECTION (reserved space for due date OR resume banner) === */}
+                <div style={{ minHeight: "52px", marginBottom: "12px" }}>
+                  {/* Priority: Resume banner > Due date */}
+                  {isPaused ? (
                     <div
                       style={{
-                        marginBottom: "12px",
-                        padding: "8px 12px",
-                        background: isPastDue ? "var(--status-error-bg)" : "var(--surface-muted)",
-                        borderRadius: "8px",
-                        borderLeft: isPastDue ? "3px solid var(--status-error)" : "3px solid var(--border-muted)",
-                        display: "flex",
-                        alignItems: "center",
-                        gap: "8px",
-                      }}
-                    >
-                      <span
-                        style={{
-                          fontSize: "0.85rem",
-                          fontWeight: 500,
-                          color: isPastDue ? "var(--status-error-text)" : "var(--text-secondary)",
-                        }}
-                      >
-                        {isPastDue ? "Past due" : `Due ${formattedDate}`}
-                      </span>
-                    </div>
-                  );
-                })()}
-
-                {/* Progress indicator for paused lessons */}
-                {hasPausedSession(lesson.id) && (() => {
-                  const pausedSession = getPausedSession(lesson.id);
-                  const progress = pausedSession?.currentPromptIndex || 0;
-                  return (
-                    <div
-                      style={{
-                        marginBottom: "12px",
                         padding: "10px 12px",
                         background: "var(--status-warning-bg)",
                         borderRadius: "8px",
@@ -824,20 +1052,45 @@ export default function StudentDashboard() {
                         <strong>You're on question {progress + 1}</strong> — pick up where you left off!
                       </p>
                     </div>
-                  );
-                })()}
+                  ) : dueDateInfo ? (
+                    <div
+                      style={{
+                        padding: "10px 12px",
+                        background: dueDateInfo.isPastDue ? "var(--status-error-bg)" : "var(--surface-muted)",
+                        borderRadius: "8px",
+                        borderLeft: dueDateInfo.isPastDue ? "3px solid var(--status-error)" : "3px solid var(--border-muted)",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "8px",
+                      }}
+                    >
+                      <span
+                        style={{
+                          fontSize: "0.85rem",
+                          fontWeight: 500,
+                          color: dueDateInfo.isPastDue ? "var(--status-error-text)" : "var(--text-secondary)",
+                        }}
+                      >
+                        {dueDateInfo.isPastDue ? "Past due" : `Due ${dueDateInfo.formattedDate}`}
+                      </span>
+                    </div>
+                  ) : null}
+                </div>
 
-                {/* Action buttons */}
-                <div style={{ display: "flex", gap: "12px" }}>
+                {/* === SPACER (pushes actions to bottom) === */}
+                <div style={{ flex: 1 }} />
+
+                {/* === ACTION SECTION === */}
+                <div style={{ display: "flex", gap: "12px", marginTop: "auto" }}>
                   <button
                     className="btn btn-primary"
-                    onClick={() => handleStartLesson(lesson, "voice")}
+                    onClick={() => handleStartLesson(lesson, "video")}
                     style={{
                       flex: 1,
                       padding: "12px 16px",
                     }}
                   >
-                    {hasPausedSession(lesson.id) ? "Resume talking" : "Start talking"}
+                    {isPaused ? "Resume video" : "Start video"}
                   </button>
                   <button
                     className="btn btn-secondary"
@@ -847,7 +1100,7 @@ export default function StudentDashboard() {
                       padding: "12px 16px",
                     }}
                   >
-                    {hasPausedSession(lesson.id) ? "Resume typing" : "Start typing"}
+                    {isPaused ? "Resume typing" : "Start typing"}
                   </button>
                 </div>
               </div>
@@ -1103,7 +1356,6 @@ export default function StudentDashboard() {
                                   <div style={{ padding: "0 16px 12px 16px", display: "flex", flexDirection: "column", gap: "8px" }}>
                                     {lessonSessions.map((session, index) => {
                                       const attemptNumber = totalAttempts - index;
-                                      const hasNotes = !!session.educatorNotes;
                                       const sessionFeedback = getFeedbackStatus(session);
                                       const isHighlighted = session.id === highlightedSessionId;
                                       const isSessionExpanded = expandedSessions.has(session.id);
@@ -1344,32 +1596,162 @@ export default function StudentDashboard() {
                                                           {questionText}
                                                         </p>
 
-                                                        {/* Response */}
-                                                        <div
-                                                          style={{
-                                                            background: "var(--status-info-bg)",
-                                                            borderRadius: "4px",
-                                                            padding: "8px",
-                                                            borderLeft: "3px solid var(--accent-primary)",
-                                                          }}
-                                                        >
-                                                          {response.inputSource === "voice" ? (
-                                                            response.response ? (
-                                                              <p style={{ margin: 0, color: "var(--text-primary)", fontSize: "0.85rem" }}>
-                                                                <span style={{ color: "var(--text-muted)", fontSize: "0.75rem" }}>(Voice)</span>{" "}
-                                                                {response.response}
+                                                        {/* Response - Video conversation with transcript OR text/voice */}
+                                                        {response.conversationTurns && response.conversationTurns.length > 0 ? (
+                                                          // Video conversation with transcript
+                                                          (() => {
+                                                            const transcriptKey = `${session.id}-${response.promptId}`;
+                                                            const isTranscriptExpanded = expandedTranscripts.has(transcriptKey);
+                                                            const turns = response.conversationTurns!;
+                                                            const coachPromptCount = turns.filter((t) => t.role === "coach").length;
+                                                            const previewTurns = turns.slice(0, 2);
+                                                            const hasMoreTurns = turns.length > 2;
+                                                            const turnsToShow = isTranscriptExpanded ? turns : previewTurns;
+
+                                                            return (
+                                                              <div
+                                                                style={{
+                                                                  background: "var(--surface-muted)",
+                                                                  borderRadius: "6px",
+                                                                  padding: "10px",
+                                                                  border: "1px solid var(--border-subtle)",
+                                                                }}
+                                                              >
+                                                                {/* Video conversation label */}
+                                                                <div
+                                                                  style={{
+                                                                    display: "flex",
+                                                                    alignItems: "center",
+                                                                    gap: "8px",
+                                                                    marginBottom: "10px",
+                                                                  }}
+                                                                >
+                                                                  <span
+                                                                    style={{
+                                                                      background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
+                                                                      color: "white",
+                                                                      padding: "3px 8px",
+                                                                      borderRadius: "10px",
+                                                                      fontSize: "0.7rem",
+                                                                      fontWeight: 500,
+                                                                    }}
+                                                                  >
+                                                                    Video conversation
+                                                                  </span>
+                                                                  <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
+                                                                    {coachPromptCount} coach prompt{coachPromptCount !== 1 ? "s" : ""}
+                                                                  </span>
+                                                                </div>
+
+                                                                {/* Transcript turns */}
+                                                                <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                                                                  {turnsToShow.map((turn, turnIdx) => (
+                                                                    <div
+                                                                      key={turnIdx}
+                                                                      style={{
+                                                                        display: "flex",
+                                                                        gap: "8px",
+                                                                        alignItems: "flex-start",
+                                                                      }}
+                                                                    >
+                                                                      <span
+                                                                        style={{
+                                                                          fontSize: "0.7rem",
+                                                                          fontWeight: 600,
+                                                                          color: turn.role === "coach" ? "#667eea" : "var(--status-success-text)",
+                                                                          minWidth: "40px",
+                                                                          flexShrink: 0,
+                                                                        }}
+                                                                      >
+                                                                        {turn.role === "coach" ? "Coach" : "You"}
+                                                                      </span>
+                                                                      <p
+                                                                        style={{
+                                                                          margin: 0,
+                                                                          fontSize: "0.8rem",
+                                                                          lineHeight: 1.4,
+                                                                          color: "var(--text-primary)",
+                                                                          flex: 1,
+                                                                        }}
+                                                                      >
+                                                                        {turn.message}
+                                                                      </p>
+                                                                    </div>
+                                                                  ))}
+                                                                </div>
+
+                                                                {/* Show more/less toggle */}
+                                                                {hasMoreTurns && (
+                                                                  <button
+                                                                    onClick={(e) => {
+                                                                      e.stopPropagation();
+                                                                      toggleTranscriptExpanded(session.id, response.promptId);
+                                                                    }}
+                                                                    style={{
+                                                                      background: "transparent",
+                                                                      border: "none",
+                                                                      color: "var(--accent-primary)",
+                                                                      fontSize: "0.75rem",
+                                                                      fontWeight: 500,
+                                                                      cursor: "pointer",
+                                                                      padding: "6px 0 0 0",
+                                                                      display: "flex",
+                                                                      alignItems: "center",
+                                                                      gap: "4px",
+                                                                    }}
+                                                                  >
+                                                                    <span
+                                                                      style={{
+                                                                        display: "inline-block",
+                                                                        transition: "transform 0.2s",
+                                                                        transform: isTranscriptExpanded ? "rotate(90deg)" : "rotate(0deg)",
+                                                                        fontSize: "0.6rem",
+                                                                      }}
+                                                                    >
+                                                                      ▶
+                                                                    </span>
+                                                                    {isTranscriptExpanded
+                                                                      ? "Show less"
+                                                                      : `Show full transcript (${turns.length - 2} more)`}
+                                                                  </button>
+                                                                )}
+                                                              </div>
+                                                            );
+                                                          })()
+                                                        ) : (
+                                                          // Standard text/voice response
+                                                          <div
+                                                            style={{
+                                                              background: "var(--status-info-bg)",
+                                                              borderRadius: "4px",
+                                                              padding: "8px",
+                                                              borderLeft: "3px solid var(--accent-primary)",
+                                                            }}
+                                                          >
+                                                            {response.inputSource === "voice" ? (
+                                                              response.response ? (
+                                                                <p style={{ margin: 0, color: "var(--text-primary)", fontSize: "0.85rem" }}>
+                                                                  <span style={{ color: "var(--text-muted)", fontSize: "0.75rem" }}>(Voice)</span>{" "}
+                                                                  {response.response}
+                                                                </p>
+                                                              ) : (
+                                                                <p style={{ margin: 0, color: "var(--text-muted)", fontSize: "0.85rem", fontStyle: "italic" }}>
+                                                                  Voice response recorded
+                                                                </p>
+                                                              )
+                                                            ) : response.inputSource === "video" ? (
+                                                              // Video without transcript (older format)
+                                                              <p style={{ margin: 0, color: "var(--text-muted)", fontSize: "0.85rem", fontStyle: "italic" }}>
+                                                                Video conversation recorded
+                                                                {response.video?.durationSec && ` (${Math.round(response.video.durationSec)}s)`}
                                                               </p>
                                                             ) : (
-                                                              <p style={{ margin: 0, color: "var(--text-muted)", fontSize: "0.85rem", fontStyle: "italic" }}>
-                                                                Voice response recorded
+                                                              <p style={{ margin: 0, color: "var(--text-primary)", fontSize: "0.85rem" }}>
+                                                                {response.response || <em style={{ color: "var(--text-muted)" }}>No response recorded</em>}
                                                               </p>
-                                                            )
-                                                          ) : (
-                                                            <p style={{ margin: 0, color: "var(--text-primary)", fontSize: "0.85rem" }}>
-                                                              {response.response || <em style={{ color: "var(--text-muted)" }}>No response recorded</em>}
-                                                            </p>
-                                                          )}
-                                                        </div>
+                                                            )}
+                                                          </div>
+                                                        )}
 
                                                         {/* Hint indicator */}
                                                         {response.hintUsed && (

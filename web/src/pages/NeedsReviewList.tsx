@@ -11,8 +11,8 @@
  */
 
 import { useState, useEffect } from "react";
-import { useParams, Link, useNavigate } from "react-router-dom";
-import EducatorHeader from "../components/EducatorHeader";
+import { useParams, useNavigate } from "react-router-dom";
+import EducatorAppHeader from "../components/EducatorAppHeader";
 import {
   getLesson,
   getSessions,
@@ -99,7 +99,8 @@ export default function NeedsReviewList() {
 
   return (
     <div className="container">
-      <EducatorHeader
+      <EducatorAppHeader
+        mode="context"
         breadcrumbs={[
           { label: assignmentTitle || "Assignment", to: `/educator/assignment/${lessonId}` },
           { label: "Needs Review" },

@@ -7,7 +7,7 @@
  */
 
 import { useState, useEffect } from "react";
-import EducatorHeader from "../components/EducatorHeader";
+import EducatorAppHeader from "../components/EducatorAppHeader";
 import {
   getArchivedAssignments,
   restoreAssignment,
@@ -62,7 +62,7 @@ export default function ArchivedLessons() {
 
   return (
     <div className="container">
-      <EducatorHeader breadcrumbs={[{ label: "Archived Assignments" }]} />
+      <EducatorAppHeader mode="slim" breadcrumbs={[{ label: "Archived Assignments" }]} />
 
       <div className="header">
         <h1>Archived Assignments</h1>

@@ -9,7 +9,7 @@
 
 import { useState, useEffect, useMemo } from "react";
 import { useParams, Link, useNavigate, useLocation } from "react-router-dom";
-import EducatorHeader from "../components/EducatorHeader";
+import EducatorAppHeader from "../components/EducatorAppHeader";
 import StudentProfileDrawer from "../components/StudentProfileDrawer";
 import {
   getStudent,
@@ -28,7 +28,6 @@ import {
   completeTeacherTodo,
   CHECKLIST_ACTIONS,
   type Student,
-  type LessonSummary,
   type CoachingInsight,
   type Recommendation,
   type BadgeTypeInfo,
@@ -107,11 +106,6 @@ export default function StudentDetails() {
         setRecommendations(recsResponse.recommendations);
         setBadgeTypes(badgesResponse.badgeTypes);
         setStudentTodos(todosResponse.todos);
-
-        // Build a map of assignment records by lessonId for quick lookup
-        const assignmentRecordMap = new Map(
-          assignmentsResponse.assignments.map(a => [a.lessonId, a])
-        );
 
         // Build a map of lessons by id for quick lookup
         const lessonMap = new Map(lessons.map(l => [l.id, l]));
@@ -335,7 +329,8 @@ export default function StudentDetails() {
   if (!student) {
     return (
       <div className="container">
-        <EducatorHeader
+        <EducatorAppHeader
+          mode="slim"
           breadcrumbs={[
             ...(fromAssignmentTitle ? [{ label: fromAssignmentTitle, to: `/educator/assignment/${fromAssignmentId}` }] : []),
             { label: "Student not found" },
@@ -373,12 +368,13 @@ export default function StudentDetails() {
 
   return (
     <div className="container">
-      <EducatorHeader
+      <EducatorAppHeader
+        mode="slim"
         breadcrumbs={[
           ...(fromAssignmentTitle ? [{ label: fromAssignmentTitle, to: `/educator/assignment/${fromAssignmentId}` }] : []),
           { label: student.name },
         ]}
-        actions={
+        primaryActions={
           <button
             onClick={() => setShowProfileDrawer(true)}
             style={{
@@ -856,7 +852,7 @@ function computeStudentSnapshot(assignments: StudentAssignment[]): StudentSnapsh
     const strongAssigns = assigns.filter((a) => a.understanding === "strong");
     const lowCoachGoodOutcome = assigns.filter(
       (a) => (a.understanding === "strong" || a.understanding === "developing") &&
-             (a.coachSupport === "minimal" || a.coachSupport === "light")
+             a.coachSupport === "minimal"
     );
 
     if (strongAssigns.length >= 1 && strongAssigns.length === assigns.length) {
@@ -914,7 +910,7 @@ function computeStudentSnapshot(assignments: StudentAssignment[]): StudentSnapsh
     const needsSupport = assigns.filter((a) => a.understanding === "needs-support");
     const developingHighCoach = assigns.filter(
       (a) => a.understanding === "developing" &&
-             (a.coachSupport === "moderate" || a.coachSupport === "heavy")
+             (a.coachSupport === "some" || a.coachSupport === "significant")
     );
 
     if (needsSupport.length >= 1) {
@@ -1456,10 +1452,10 @@ interface StudentRecommendationCardProps {
 
 function StudentRecommendationCard({
   recommendation,
-  studentName,
+  studentName: _studentName,
   badgeTypes,
   onDismiss,
-  onFeedback,
+  onFeedback: _onFeedback,
   onActionComplete,
 }: StudentRecommendationCardProps) {
   const [showAudit, setShowAudit] = useState(false);

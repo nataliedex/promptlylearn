@@ -23,6 +23,7 @@ import {
 import { useVoice } from "../hooks/useVoice";
 import ModeToggle from "../components/ModeToggle";
 import { buildCoachIntro, getCoachName } from "../utils/coachIntro";
+import Header from "../components/Header";
 
 type SessionMode = "voice" | "type";
 type VoiceState = "idle" | "speaking" | "listening" | "processing";
@@ -270,9 +271,9 @@ export default function CoachSession() {
 
       // Track coach response with timestamp
       setMessagesWithTimestamps((prev) => {
-        const newMessages = [
+        const newMessages: CoachMessage[] = [
           ...prev,
-          { role: "coach", message: response.response, timestamp: coachTimestamp },
+          { role: "coach" as const, message: response.response, timestamp: coachTimestamp },
         ];
 
         // Update coaching invite activity with message count
@@ -535,18 +536,22 @@ export default function CoachSession() {
 
   return (
     <div className="container">
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
-        <Link to={`/student/${studentId}`} className="back-btn" style={{ margin: 0 }}>
-          ← Back to Dashboard
-        </Link>
-        {voiceAvailable && (
-          <ModeToggle
-            mode={mode}
-            onToggle={handleModeToggle}
-            disabled={voiceState === "processing" || isProcessing}
-          />
-        )}
-      </div>
+      <Header
+        mode="session"
+        userType="student"
+        backLink={`/student/${studentId}`}
+        backLabel="Dashboard"
+        title={coachingInvite ? "Enrichment Session" : "Ask Coach"}
+        primaryActions={
+          voiceAvailable ? (
+            <ModeToggle
+              mode={mode}
+              onToggle={handleModeToggle}
+              disabled={voiceState === "processing" || isProcessing}
+            />
+          ) : undefined
+        }
+      />
 
       <div className="header">
         <h1>{coachingInvite ? "Enrichment Session" : "Ask Coach"}</h1>

@@ -7,7 +7,7 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { getStudents, type Student } from "../services/api";
-import EducatorHeader from "../components/EducatorHeader";
+import EducatorAppHeader from "../components/EducatorAppHeader";
 
 export default function AllStudents() {
   const navigate = useNavigate();
@@ -40,7 +40,7 @@ export default function AllStudents() {
 
   return (
     <div className="container">
-      <EducatorHeader breadcrumbs={[{ label: "All Students" }]} />
+      <EducatorAppHeader mode="slim" breadcrumbs={[{ label: "All Students" }]} />
 
       <div className="header">
         <h1>All Students</h1>

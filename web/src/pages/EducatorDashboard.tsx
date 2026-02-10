@@ -13,8 +13,8 @@
  * - Archived: Auto-archived after resolution period (separate view)
  */
 
-import { useState, useEffect, useRef } from "react";
-import { Link, useNavigate, useSearchParams, useLocation } from "react-router-dom";
+import { useState, useEffect, useRef, useMemo, useCallback } from "react";
+import { useNavigate, useSearchParams, useLocation } from "react-router-dom";
 import {
   getAssignmentDashboard,
   triggerAutoArchive,
@@ -66,18 +66,18 @@ import {
   type StudentAttentionStatus,
   type DashboardAttentionState,
   type Lesson,
-  type LessonParams,
-  type CreationMode,
-  type CreateClassInput,
   type CoachingInvite,
   type TeacherProfile,
   type LessonDraft,
+  getDevStatus,
+  seedDemoData,
+  resetDemoData,
+  resetAllData,
 } from "../services/api";
 import RecommendationPanel from "../components/RecommendationPanel";
 import TeacherTodosPanel from "../components/TeacherTodosPanel";
-import ArchivedRecommendationsPanel from "../components/ArchivedRecommendationsPanel";
 import Drawer from "../components/Drawer";
-import EducatorHeader from "../components/EducatorHeader";
+import EducatorAppHeader from "../components/EducatorAppHeader";
 import TeacherProfileDrawer from "../components/TeacherProfileDrawer";
 import {
   getLastUsedSettings,
@@ -89,7 +89,7 @@ import {
 import { useToast } from "../components/Toast";
 
 // Drawer type enum
-type DrawerType = "todos" | "coach" | "unassigned" | "classes" | "create-lesson" | "assign-lesson" | null;
+type DrawerType = "todos" | "coach" | "assignments" | "unassigned" | "classes" | "create-lesson" | "assign-lesson" | null;
 
 // Type for assignments grouped by class
 interface ClassAssignmentGroup {
@@ -119,7 +119,7 @@ export default function EducatorDashboard() {
   const [assignmentClassMap, setAssignmentClassMap] = useState<Map<string, string[]>>(new Map());
   const [coachingActivity, setCoachingActivity] = useState<StudentCoachingActivity[]>([]);
   const [recommendations, setRecommendations] = useState<Recommendation[]>([]);
-  const [dismissedRecommendations, setDismissedRecommendations] = useState<Recommendation[]>([]);
+  const [_dismissedRecommendations, setDismissedRecommendations] = useState<Recommendation[]>([]);
   const [recommendationsLoading, setRecommendationsLoading] = useState(false);
   const [teacherTodos, setTeacherTodos] = useState<TeacherTodo[]>([]);
   const [todoCounts, setTodoCounts] = useState<TeacherTodoCounts>({ total: 0, open: 0, done: 0 });
@@ -129,10 +129,18 @@ export default function EducatorDashboard() {
   const [editingDraft, setEditingDraft] = useState<LessonDraft | null>(null);
   const [assigningLesson, setAssigningLesson] = useState<LessonSummary | null>(null);
   const [coachingInvites, setCoachingInvites] = useState<CoachingInvite[]>([]);
-  const [lessonSubjects, setLessonSubjects] = useState<Map<string, string | undefined>>(new Map());
+  const [lessonMetadata, setLessonMetadata] = useState<Map<string, { subject?: string; gradeLevel?: string; difficulty?: string }>>(new Map());
   const [teacherProfile, setTeacherProfile] = useState<TeacherProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // Global search state
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchFocused, setSearchFocused] = useState(false);
+  const [selectedResultIndex, setSelectedResultIndex] = useState(-1);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const searchResultsRef = useRef<HTMLDivElement>(null);
+  const searchDebounceRef = useRef<NodeJS.Timeout | null>(null);
 
   // Add Student Modal state
   const [addStudentModal, setAddStudentModal] = useState<{
@@ -148,33 +156,269 @@ export default function EducatorDashboard() {
   // Profile drawer state (separate from main drawer)
   const [profileDrawerOpen, setProfileDrawerOpen] = useState(false);
 
-  // Ref for scrolling to assignments section
-  const assignmentsSectionRef = useRef<HTMLDivElement>(null);
+  // Dev mode state (seed/reset data)
+  const [devModeAvailable, setDevModeAvailable] = useState(false);
+  const [showDevPanel, setShowDevPanel] = useState(false);
+  const [devAction, setDevAction] = useState<"seed" | "reset-demo" | "reset-all" | null>(null);
+  const [devLoading, setDevLoading] = useState(false);
+
+  // Assignment drawer filters - initialize from URL params
+  const [assignmentFilters, setAssignmentFilters] = useState<{
+    subject?: string;
+    gradeLevel?: string;
+    difficulty?: string;
+  }>({
+    subject: searchParams.get("subject") || undefined,
+    gradeLevel: searchParams.get("grade") || undefined,
+    difficulty: searchParams.get("difficulty") || undefined,
+  });
 
   // Store initial section param to scroll to after loading
   const initialSection = useRef(searchParams.get("section"));
+
+  // ============================================
+  // Global Search Logic
+  // ============================================
+
+  // Normalize string for matching: lowercase, trim, collapse whitespace
+  const normalizeForSearch = useCallback((str: string): string => {
+    return str.toLowerCase().trim().replace(/\s+/g, " ");
+  }, []);
+
+  // Check if a string matches the search query
+  const matchesSearch = useCallback((text: string, query: string): boolean => {
+    if (!query) return false;
+    const normalizedText = normalizeForSearch(text);
+    const normalizedQuery = normalizeForSearch(query);
+    return normalizedText.includes(normalizedQuery);
+  }, [normalizeForSearch]);
+
+  // Search result types
+  interface SearchResult {
+    type: "student" | "assignment" | "class" | "lesson";
+    id: string;
+    primary: string; // Main label (name/title)
+    secondary?: string; // Secondary info (class, subject, etc.)
+    route: string; // Navigation route
+  }
+
+  // Compute search results based on query
+  const searchResults = useMemo((): SearchResult[] => {
+    if (!searchQuery.trim() || searchQuery.length < 2) return [];
+
+    const results: SearchResult[] = [];
+    const query = searchQuery.trim();
+
+    // Search students (up to 5)
+    const studentMatches = allStudents
+      .filter((s) => {
+        const nameMatch = matchesSearch(s.name, query);
+        const preferredMatch = s.preferredName ? matchesSearch(s.preferredName, query) : false;
+        return nameMatch || preferredMatch;
+      })
+      .slice(0, 5)
+      .map((s): SearchResult => {
+        // Find which class(es) this student belongs to
+        const studentClasses = classes.filter((c) =>
+          dashboardData?.active.some((a) =>
+            a.studentStatuses.some((ss) => ss.studentId === s.id)
+          ) || dashboardData?.resolved.some((a) =>
+            a.studentStatuses.some((ss) => ss.studentId === s.id)
+          )
+        );
+        const className = studentClasses.length > 0 ? studentClasses[0].name : undefined;
+        return {
+          type: "student",
+          id: s.id,
+          primary: s.preferredName || s.name,
+          secondary: className,
+          route: `/educator/student/${s.id}`,
+        };
+      });
+    results.push(...studentMatches);
+
+    // Search assignments (up to 5)
+    const allAssignments = [...(dashboardData?.active || []), ...(dashboardData?.resolved || [])];
+    const assignmentMatches = allAssignments
+      .filter((a) => matchesSearch(a.title, query))
+      .slice(0, 5)
+      .map((a): SearchResult => {
+        const metadata = lessonMetadata.get(a.assignmentId);
+        const classIds = assignmentClassMap.get(a.assignmentId) || [];
+        const assignedClass = classes.find((c) => classIds.includes(c.id));
+        return {
+          type: "assignment",
+          id: a.assignmentId,
+          primary: a.title,
+          secondary: [assignedClass?.name, metadata?.subject].filter(Boolean).join(" · ") || undefined,
+          route: `/educator/assignment/${a.assignmentId}`,
+        };
+      });
+    results.push(...assignmentMatches);
+
+    // Search classes (up to 5)
+    const classMatches = classes
+      .filter((c) => !c.archivedAt && matchesSearch(c.name, query))
+      .slice(0, 5)
+      .map((c): SearchResult => ({
+        type: "class",
+        id: c.id,
+        primary: c.name,
+        secondary: [c.gradeLevel, c.subject, `${c.studentCount} students`].filter(Boolean).join(" · "),
+        route: `/educator/class/${c.id}`,
+      }));
+    results.push(...classMatches);
+
+    // Search lessons (unassigned + get titles from assignments)
+    const lessonMatches = unassignedLessons
+      .filter((l) => {
+        const titleMatch = matchesSearch(l.title, query);
+        const subjectMatch = l.subject ? matchesSearch(l.subject, query) : false;
+        return titleMatch || subjectMatch;
+      })
+      .slice(0, 5)
+      .map((l): SearchResult => ({
+        type: "lesson",
+        id: l.id,
+        primary: l.title,
+        secondary: [l.subject, l.gradeLevel, l.difficulty].filter(Boolean).join(" · "),
+        route: `/educator/lesson/${l.id}/edit`,
+      }));
+    results.push(...lessonMatches);
+
+    return results;
+  }, [searchQuery, allStudents, dashboardData, classes, unassignedLessons, assignmentClassMap, lessonMetadata, matchesSearch]);
+
+  // Group results by type for display
+  const groupedResults = useMemo(() => {
+    const groups: { type: string; label: string; items: SearchResult[] }[] = [];
+
+    const students = searchResults.filter((r) => r.type === "student");
+    const assignments = searchResults.filter((r) => r.type === "assignment");
+    const classResults = searchResults.filter((r) => r.type === "class");
+    const lessons = searchResults.filter((r) => r.type === "lesson");
+
+    if (students.length > 0) groups.push({ type: "student", label: "Students", items: students });
+    if (assignments.length > 0) groups.push({ type: "assignment", label: "Assignments", items: assignments });
+    if (classResults.length > 0) groups.push({ type: "class", label: "Classes", items: classResults });
+    if (lessons.length > 0) groups.push({ type: "lesson", label: "Lessons", items: lessons });
+
+    return groups;
+  }, [searchResults]);
+
+  // Flat list of all results for keyboard navigation
+  const flatResults = useMemo(() => {
+    return groupedResults.flatMap((g) => g.items);
+  }, [groupedResults]);
+
+  // Handle search result selection
+  const handleSelectResult = useCallback((result: SearchResult) => {
+    setSearchQuery("");
+    setSearchFocused(false);
+    setSelectedResultIndex(-1);
+    navigate(result.route);
+  }, [navigate]);
+
+  // Handle keyboard navigation in search
+  const handleSearchKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (!searchFocused || flatResults.length === 0) {
+      if (e.key === "Escape") {
+        setSearchFocused(false);
+        searchInputRef.current?.blur();
+      }
+      return;
+    }
+
+    switch (e.key) {
+      case "ArrowDown":
+        e.preventDefault();
+        setSelectedResultIndex((prev) =>
+          prev < flatResults.length - 1 ? prev + 1 : 0
+        );
+        break;
+      case "ArrowUp":
+        e.preventDefault();
+        setSelectedResultIndex((prev) =>
+          prev > 0 ? prev - 1 : flatResults.length - 1
+        );
+        break;
+      case "Enter":
+        e.preventDefault();
+        if (selectedResultIndex >= 0 && selectedResultIndex < flatResults.length) {
+          handleSelectResult(flatResults[selectedResultIndex]);
+        }
+        break;
+      case "Escape":
+        e.preventDefault();
+        setSearchFocused(false);
+        setSearchQuery("");
+        setSelectedResultIndex(-1);
+        searchInputRef.current?.blur();
+        break;
+    }
+  }, [searchFocused, flatResults, selectedResultIndex, handleSelectResult]);
+
+  // Handle search input change with debounce
+  const handleSearchChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const value = e.target.value;
+    setSearchQuery(value);
+    setSelectedResultIndex(-1);
+
+    // Clear previous debounce
+    if (searchDebounceRef.current) {
+      clearTimeout(searchDebounceRef.current);
+    }
+
+    // Debounce the search (though results are computed via useMemo, this helps with rapid typing)
+    searchDebounceRef.current = setTimeout(() => {
+      // Results are already computed via useMemo based on searchQuery
+    }, 250);
+  }, []);
+
+  // Close search results when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (
+        searchInputRef.current &&
+        !searchInputRef.current.contains(e.target as Node) &&
+        searchResultsRef.current &&
+        !searchResultsRef.current.contains(e.target as Node)
+      ) {
+        setSearchFocused(false);
+      }
+    };
+
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
 
   // Clear URL params after reading them
   useEffect(() => {
     const hasDrawer = searchParams.get("drawer");
     const hasSection = searchParams.get("section");
+    const hasSubject = searchParams.get("subject");
+    const hasGrade = searchParams.get("grade");
+    const hasDifficulty = searchParams.get("difficulty");
 
-    if (hasDrawer || hasSection) {
+    if (hasDrawer || hasSection || hasSubject || hasGrade || hasDifficulty) {
       const newParams = new URLSearchParams(searchParams);
       newParams.delete("drawer");
       newParams.delete("section");
+      newParams.delete("subject");
+      newParams.delete("grade");
+      newParams.delete("difficulty");
       setSearchParams(newParams, { replace: true });
     }
   }, []);
 
-  // Scroll to assignments section after loading completes
+  // Open assignments drawer when navigating with section=assignments
   useEffect(() => {
     if (!loading && initialSection.current === "assignments") {
       // Small delay to ensure content is rendered
       setTimeout(() => {
-        assignmentsSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+        setOpenDrawer("assignments");
       }, 150);
-      // Clear the ref so we don't scroll again on subsequent re-renders
+      // Clear the ref so we don't open again on subsequent re-renders
       initialSection.current = null;
     }
   }, [loading]);
@@ -197,6 +441,10 @@ export default function EducatorDashboard() {
     try {
       setError(null);
 
+      // Check if dev mode is available
+      const devStatus = await getDevStatus();
+      setDevModeAvailable(devStatus.devMode);
+
       // Trigger auto-archive check on dashboard load
       await triggerAutoArchive().catch(() => {
         // Silently fail - not critical
@@ -218,12 +466,16 @@ export default function EducatorDashboard() {
       setUnassignedLessons(unassignedData);
       setLessonDrafts(draftsData.drafts);
 
-      // Build lesson subjects map
-      const subjectsMap = new Map<string, string | undefined>();
+      // Build lesson metadata map (subject, gradeLevel, difficulty)
+      const metadataMap = new Map<string, { subject?: string; gradeLevel?: string; difficulty?: string }>();
       allLessonsData.forEach(lesson => {
-        subjectsMap.set(lesson.id, lesson.subject);
+        metadataMap.set(lesson.id, {
+          subject: lesson.subject,
+          gradeLevel: lesson.gradeLevel,
+          difficulty: lesson.difficulty,
+        });
       });
-      setLessonSubjects(subjectsMap);
+      setLessonMetadata(metadataMap);
 
       // Load class associations for each assignment
       const allAssignments = [...dashData.active, ...dashData.resolved];
@@ -356,7 +608,7 @@ export default function EducatorDashboard() {
     return () => clearInterval(intervalId);
   }, [recommendationsLoading]);
 
-  const handleArchiveAssignment = async (assignmentId: string, title: string) => {
+  const _handleArchiveAssignment = async (assignmentId: string, title: string) => {
     if (!confirm(`Archive "${title}"? A summary will be generated and you can restore it later.`)) {
       return;
     }
@@ -402,7 +654,7 @@ export default function EducatorDashboard() {
     }
   };
 
-  const handleArchiveClass = async (classId: string, className: string) => {
+  const _handleArchiveClass = async (classId: string, className: string) => {
     try {
       await archiveClass(classId);
       await reloadClasses();
@@ -413,7 +665,7 @@ export default function EducatorDashboard() {
     }
   };
 
-  const handleDeleteClass = async (classId: string, className: string) => {
+  const _handleDeleteClass = async (classId: string, className: string) => {
     try {
       await deleteClass(classId);
       await reloadClasses();
@@ -496,17 +748,82 @@ export default function EducatorDashboard() {
     }
   };
 
-  const handleAssignmentSubjectChange = async (lessonId: string, subject: string | null) => {
+  const _handleAssignmentSubjectChange = async (lessonId: string, subject: string | null) => {
     try {
       await updateLessonSubject(lessonId, subject);
-      setLessonSubjects(prev => {
+      setLessonMetadata(prev => {
         const next = new Map(prev);
-        next.set(lessonId, subject || undefined);
+        const existing = prev.get(lessonId) || {};
+        next.set(lessonId, { ...existing, subject: subject || undefined });
         return next;
       });
     } catch (err) {
       console.error("Failed to update lesson subject:", err);
       showError("Failed to update subject. Please try again.");
+    }
+  };
+
+  // Dev-only: Seed demo data
+  const handleSeedData = async () => {
+    setDevLoading(true);
+    try {
+      const result = await seedDemoData();
+      if (result.success) {
+        showSuccess(result.message);
+        // Reload the page to show new data
+        setTimeout(() => window.location.reload(), 500);
+      } else {
+        showError(result.error || "Seed failed");
+      }
+    } catch (err) {
+      console.error("Seed failed:", err);
+      showError("Failed to seed data");
+    } finally {
+      setDevLoading(false);
+      setDevAction(null);
+      setShowDevPanel(false);
+    }
+  };
+
+  // Dev-only: Remove demo data (preserves user data)
+  const handleResetDemoData = async () => {
+    setDevLoading(true);
+    try {
+      const result = await resetDemoData();
+      if (result.success) {
+        showSuccess(result.message);
+        setTimeout(() => window.location.reload(), 500);
+      } else {
+        showError(result.error || "Reset failed");
+      }
+    } catch (err) {
+      console.error("Reset demo failed:", err);
+      showError("Failed to remove demo data");
+    } finally {
+      setDevLoading(false);
+      setDevAction(null);
+      setShowDevPanel(false);
+    }
+  };
+
+  // Dev-only: Reset ALL data (destructive)
+  const handleResetAllData = async () => {
+    setDevLoading(true);
+    try {
+      const result = await resetAllData();
+      if (result.success) {
+        showSuccess(result.message);
+        setTimeout(() => window.location.reload(), 500);
+      } else {
+        showError(result.error || "Reset failed");
+      }
+    } catch (err) {
+      console.error("Reset all failed:", err);
+      showError("Failed to reset all data");
+    } finally {
+      setDevLoading(false);
+      setDevAction(null);
+      setShowDevPanel(false);
     }
   };
 
@@ -622,6 +939,9 @@ export default function EducatorDashboard() {
         // Calculate unreviewed count
         const unreviewed = completedStudents.filter(s => !s.hasTeacherNote).length;
 
+        // Get lesson metadata for filtering
+        const metadata = lessonMetadata.get(assignment.assignmentId);
+
         const prioritizedItem: PrioritizedAssignment = {
           assignment,
           className: group.className,
@@ -630,6 +950,9 @@ export default function EducatorDashboard() {
           attentionCount,
           openTodoCount: openTodosForAssignment,
           unreviewed,
+          subject: metadata?.subject,
+          gradeLevel: metadata?.gradeLevel,
+          difficulty: metadata?.difficulty,
         };
 
         // Determine priority bucket
@@ -658,6 +981,9 @@ export default function EducatorDashboard() {
     // Process resolved assignments
     for (const group of resolvedByClass) {
       for (const assignment of group.assignments) {
+        // Get lesson metadata for filtering
+        const metadata = lessonMetadata.get(assignment.assignmentId);
+
         const prioritizedItem: PrioritizedAssignment = {
           assignment,
           className: group.className,
@@ -666,6 +992,9 @@ export default function EducatorDashboard() {
           attentionCount: 0,
           openTodoCount: 0,
           unreviewed: 0,
+          subject: metadata?.subject,
+          gradeLevel: metadata?.gradeLevel,
+          difficulty: metadata?.difficulty,
         };
         reviewed.push(prioritizedItem);
       }
@@ -697,12 +1026,490 @@ export default function EducatorDashboard() {
 
   return (
     <div className="container">
-      <EducatorHeader
-        teacherDisplayName={teacherProfile?.studentFacingName}
+      <EducatorAppHeader
+        mode="full"
+        teacherName={teacherProfile?.studentFacingName}
         onOpenProfile={() => setProfileDrawerOpen(true)}
         onOpenClasses={() => setOpenDrawer("classes")}
         onOpenCreateLesson={() => setOpenDrawer("create-lesson")}
+        searchSlot={
+          <div style={{ position: "relative", width: "220px", minWidth: "160px" }}>
+            <div style={{ position: "relative" }}>
+              <input
+                ref={searchInputRef}
+                type="text"
+                value={searchQuery}
+                onChange={handleSearchChange}
+                onFocus={() => setSearchFocused(true)}
+                onKeyDown={handleSearchKeyDown}
+                placeholder="Search..."
+                style={{
+                  width: "100%",
+                  padding: "5px 28px 5px 26px",
+                  fontSize: "0.78rem",
+                  border: "1px solid rgba(255,255,255,0.18)",
+                  borderRadius: "6px",
+                  background: "rgba(255,255,255,0.08)",
+                  color: "rgba(255,255,255,0.9)",
+                  outline: "none",
+                  transition: "border-color 0.2s, box-shadow 0.2s, background 0.2s",
+                  boxShadow: searchFocused ? "0 0 0 2px rgba(255,255,255,0.1)" : "none",
+                  borderColor: searchFocused ? "rgba(255,255,255,0.3)" : "rgba(255,255,255,0.18)",
+                }}
+                onMouseEnter={(e) => {
+                  if (!searchFocused) {
+                    e.currentTarget.style.background = "rgba(255,255,255,0.12)";
+                    e.currentTarget.style.borderColor = "rgba(255,255,255,0.22)";
+                  }
+                }}
+                onMouseLeave={(e) => {
+                  if (!searchFocused) {
+                    e.currentTarget.style.background = "rgba(255,255,255,0.08)";
+                    e.currentTarget.style.borderColor = "rgba(255,255,255,0.18)";
+                  }
+                }}
+              />
+              {/* Search icon */}
+              <svg
+                style={{
+                  position: "absolute",
+                  left: "8px",
+                  top: "50%",
+                  transform: "translateY(-50%)",
+                  width: "12px",
+                  height: "12px",
+                  color: "rgba(255,255,255,0.5)",
+                  pointerEvents: "none",
+                }}
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <circle cx="11" cy="11" r="8" strokeWidth="2" />
+                <path d="M21 21l-4.35-4.35" strokeWidth="2" strokeLinecap="round" />
+              </svg>
+              {/* Clear button */}
+              {searchQuery && (
+                <button
+                  onClick={() => {
+                    setSearchQuery("");
+                    setSelectedResultIndex(-1);
+                    searchInputRef.current?.focus();
+                  }}
+                  style={{
+                    position: "absolute",
+                    right: "4px",
+                    top: "50%",
+                    transform: "translateY(-50%)",
+                    padding: "2px",
+                    background: "transparent",
+                    border: "none",
+                    cursor: "pointer",
+                    color: "rgba(255,255,255,0.5)",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    borderRadius: "4px",
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.background = "rgba(255,255,255,0.15)";
+                    e.currentTarget.style.color = "rgba(255,255,255,0.8)";
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.background = "transparent";
+                    e.currentTarget.style.color = "rgba(255,255,255,0.5)";
+                  }}
+                >
+                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                    <line x1="18" y1="6" x2="6" y2="18" />
+                    <line x1="6" y1="6" x2="18" y2="18" />
+                  </svg>
+                </button>
+              )}
+            </div>
+
+            {/* Search Results Dropdown */}
+            {searchFocused && searchQuery.length >= 2 && (
+              <div
+                ref={searchResultsRef}
+                style={{
+                  position: "absolute",
+                  top: "100%",
+                  left: 0,
+                  right: 0,
+                  marginTop: "4px",
+                  background: "var(--surface-card)",
+                  border: "1px solid var(--border-subtle)",
+                  borderRadius: "8px",
+                  boxShadow: "0 8px 24px rgba(0,0,0,0.2)",
+                  maxHeight: "360px",
+                  overflowY: "auto",
+                  zIndex: 1000,
+                  minWidth: "320px",
+                }}
+              >
+                {groupedResults.length === 0 ? (
+                  <div
+                    style={{
+                      padding: "20px 16px",
+                      textAlign: "center",
+                      color: "var(--text-muted)",
+                      fontSize: "0.85rem",
+                    }}
+                  >
+                    No results found
+                  </div>
+                ) : (
+                  groupedResults.map((group) => (
+                    <div key={group.type}>
+                      {/* Group header */}
+                      <div
+                        style={{
+                          padding: "6px 12px",
+                          fontSize: "0.65rem",
+                          fontWeight: 600,
+                          color: "var(--text-muted)",
+                          textTransform: "uppercase",
+                          letterSpacing: "0.05em",
+                          background: "var(--surface-muted)",
+                          borderBottom: "1px solid var(--border-subtle)",
+                        }}
+                      >
+                        {group.label}
+                      </div>
+                      {/* Group items */}
+                      {group.items.map((result) => {
+                        const flatIndex = flatResults.indexOf(result);
+                        const isSelected = flatIndex === selectedResultIndex;
+                        return (
+                          <button
+                            key={`${result.type}-${result.id}`}
+                            onClick={() => handleSelectResult(result)}
+                            onMouseEnter={() => setSelectedResultIndex(flatIndex)}
+                            style={{
+                              width: "100%",
+                              padding: "8px 12px",
+                              border: "none",
+                              background: isSelected ? "var(--surface-accent)" : "transparent",
+                              cursor: "pointer",
+                              textAlign: "left",
+                              display: "flex",
+                              alignItems: "center",
+                              gap: "10px",
+                              transition: "background 0.1s",
+                            }}
+                          >
+                            {/* Type icon */}
+                            <span
+                              style={{
+                                width: "24px",
+                                height: "24px",
+                                borderRadius: "5px",
+                                display: "flex",
+                                alignItems: "center",
+                                justifyContent: "center",
+                                fontSize: "0.7rem",
+                                fontWeight: 600,
+                                flexShrink: 0,
+                                background:
+                                  result.type === "student" ? "var(--status-info-bg)" :
+                                  result.type === "assignment" ? "var(--status-success-bg)" :
+                                  result.type === "class" ? "var(--status-warning-bg)" :
+                                  "var(--status-violet-bg)",
+                                color:
+                                  result.type === "student" ? "var(--status-info-text)" :
+                                  result.type === "assignment" ? "var(--status-success-text)" :
+                                  result.type === "class" ? "var(--status-warning-text)" :
+                                  "var(--status-violet-text)",
+                              }}
+                            >
+                              {result.type === "student" && (
+                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                  <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+                                  <circle cx="12" cy="7" r="4" />
+                                </svg>
+                              )}
+                              {result.type === "assignment" && (
+                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                                  <polyline points="14 2 14 8 20 8" />
+                                  <line x1="16" y1="13" x2="8" y2="13" />
+                                  <line x1="16" y1="17" x2="8" y2="17" />
+                                </svg>
+                              )}
+                              {result.type === "class" && (
+                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                  <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+                                  <circle cx="9" cy="7" r="4" />
+                                  <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
+                                  <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+                                </svg>
+                              )}
+                              {result.type === "lesson" && (
+                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                  <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
+                                  <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" />
+                                </svg>
+                              )}
+                            </span>
+                            {/* Result text */}
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <div
+                                style={{
+                                  fontSize: "0.85rem",
+                                  fontWeight: 500,
+                                  color: "var(--text-primary)",
+                                  whiteSpace: "nowrap",
+                                  overflow: "hidden",
+                                  textOverflow: "ellipsis",
+                                }}
+                              >
+                                {result.primary}
+                              </div>
+                              {result.secondary && (
+                                <div
+                                  style={{
+                                    fontSize: "0.7rem",
+                                    color: "var(--text-muted)",
+                                    whiteSpace: "nowrap",
+                                    overflow: "hidden",
+                                    textOverflow: "ellipsis",
+                                  }}
+                                >
+                                  {result.secondary}
+                                </div>
+                              )}
+                            </div>
+                            {/* Arrow icon */}
+                            <svg
+                              width="12"
+                              height="12"
+                              viewBox="0 0 24 24"
+                              fill="none"
+                              stroke="var(--text-muted)"
+                              strokeWidth="2"
+                              style={{ flexShrink: 0, opacity: isSelected ? 1 : 0.5 }}
+                            >
+                              <polyline points="9 18 15 12 9 6" />
+                            </svg>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ))
+                )}
+              </div>
+            )}
+          </div>
+        }
       />
+
+      {/* Dev-only controls */}
+      {devModeAvailable && (
+        <div style={{ position: "relative", marginBottom: "12px" }}>
+          <button
+            onClick={() => setShowDevPanel(!showDevPanel)}
+            style={{
+              padding: "4px 10px",
+              background: "#4a5568",
+              color: "#e2e8f0",
+              border: "1px solid #718096",
+              borderRadius: "4px",
+              fontSize: "0.72rem",
+              fontWeight: 500,
+              cursor: "pointer",
+              fontFamily: "monospace",
+            }}
+          >
+            [DEV]
+          </button>
+
+          {/* Dev panel dropdown */}
+          {showDevPanel && !devAction && (
+            <div
+              style={{
+                position: "absolute",
+                top: "100%",
+                left: 0,
+                marginTop: "4px",
+                background: "#2d3748",
+                border: "1px solid #4a5568",
+                borderRadius: "6px",
+                padding: "8px",
+                zIndex: 1000,
+                minWidth: "180px",
+                boxShadow: "0 4px 12px rgba(0,0,0,0.3)",
+              }}
+            >
+              <div style={{ fontSize: "0.72rem", color: "#a0aec0", marginBottom: "8px", fontFamily: "monospace" }}>
+                Development Tools
+              </div>
+              <button
+                onClick={() => setDevAction("seed")}
+                style={{
+                  width: "100%",
+                  padding: "6px 10px",
+                  background: "#3182ce",
+                  color: "white",
+                  border: "none",
+                  borderRadius: "4px",
+                  fontSize: "0.78rem",
+                  fontWeight: 500,
+                  cursor: "pointer",
+                  marginBottom: "6px",
+                  textAlign: "left",
+                }}
+              >
+                Seed demo data
+              </button>
+              <button
+                onClick={() => setDevAction("reset-demo")}
+                style={{
+                  width: "100%",
+                  padding: "6px 10px",
+                  background: "#dd6b20",
+                  color: "white",
+                  border: "none",
+                  borderRadius: "4px",
+                  fontSize: "0.78rem",
+                  fontWeight: 500,
+                  cursor: "pointer",
+                  marginBottom: "6px",
+                  textAlign: "left",
+                }}
+              >
+                Remove demo data
+              </button>
+              <button
+                onClick={() => setDevAction("reset-all")}
+                style={{
+                  width: "100%",
+                  padding: "6px 10px",
+                  background: "#e53e3e",
+                  color: "white",
+                  border: "none",
+                  borderRadius: "4px",
+                  fontSize: "0.78rem",
+                  fontWeight: 500,
+                  cursor: "pointer",
+                  textAlign: "left",
+                }}
+              >
+                ⚠️ Reset ALL data
+              </button>
+              <button
+                onClick={() => setShowDevPanel(false)}
+                style={{
+                  width: "100%",
+                  padding: "4px 10px",
+                  background: "transparent",
+                  color: "#a0aec0",
+                  border: "none",
+                  fontSize: "0.72rem",
+                  cursor: "pointer",
+                  marginTop: "4px",
+                  textAlign: "center",
+                }}
+              >
+                Close
+              </button>
+            </div>
+          )}
+
+          {/* Confirmation panel */}
+          {devAction && (
+            <div
+              style={{
+                position: "absolute",
+                top: "100%",
+                left: 0,
+                marginTop: "4px",
+                background:
+                  devAction === "reset-all"
+                    ? "#742a2a"
+                    : devAction === "reset-demo"
+                      ? "#7b341e"
+                      : "#2a4365",
+                border: `1px solid ${devAction === "reset-all" ? "#e53e3e" : devAction === "reset-demo" ? "#dd6b20" : "#3182ce"}`,
+                borderRadius: "6px",
+                padding: "12px",
+                zIndex: 1000,
+                minWidth: "280px",
+                boxShadow: "0 4px 12px rgba(0,0,0,0.3)",
+              }}
+            >
+              <div style={{ fontWeight: 600, fontSize: "0.85rem", color: "white", marginBottom: "6px" }}>
+                {devAction === "seed"
+                  ? "Seed demo data?"
+                  : devAction === "reset-demo"
+                    ? "Remove demo data?"
+                    : "⚠️ Reset ALL data?"}
+              </div>
+              <div style={{ fontSize: "0.78rem", color: "#e2e8f0", marginBottom: "12px", lineHeight: 1.4 }}>
+                {devAction === "seed"
+                  ? "This will generate realistic test data including students, classes, lessons, assignments, and recommendations."
+                  : devAction === "reset-demo"
+                    ? "This will remove only seeded demo data (students, classes, lessons with 'demo-' prefix). Your own data will be preserved."
+                    : "This will permanently delete ALL data including your own work. This action cannot be undone!"}
+              </div>
+              <div style={{ display: "flex", gap: "8px" }}>
+                <button
+                  onClick={
+                    devAction === "seed"
+                      ? handleSeedData
+                      : devAction === "reset-demo"
+                        ? handleResetDemoData
+                        : handleResetAllData
+                  }
+                  disabled={devLoading}
+                  style={{
+                    padding: "6px 12px",
+                    background:
+                      devAction === "reset-all"
+                        ? "#e53e3e"
+                        : devAction === "reset-demo"
+                          ? "#dd6b20"
+                          : "#3182ce",
+                    color: "white",
+                    border: "none",
+                    borderRadius: "4px",
+                    fontSize: "0.78rem",
+                    fontWeight: 600,
+                    cursor: devLoading ? "not-allowed" : "pointer",
+                    opacity: devLoading ? 0.7 : 1,
+                  }}
+                >
+                  {devLoading
+                    ? "Working..."
+                    : devAction === "seed"
+                      ? "Seed data"
+                      : devAction === "reset-demo"
+                        ? "Remove demo data"
+                        : "Delete everything"}
+                </button>
+                <button
+                  onClick={() => {
+                    setDevAction(null);
+                    setShowDevPanel(false);
+                  }}
+                  disabled={devLoading}
+                  style={{
+                    padding: "6px 12px",
+                    background: "transparent",
+                    color: "#e2e8f0",
+                    border: "1px solid #4a5568",
+                    borderRadius: "4px",
+                    fontSize: "0.78rem",
+                    cursor: devLoading ? "not-allowed" : "pointer",
+                  }}
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="header">
         {/* Row 1: Primary Header - Title + Actions */}
@@ -789,6 +1596,46 @@ export default function EducatorDashboard() {
             </span>
           </button>
 
+          {/* Assignments Pill */}
+          {(active.length > 0 || resolved.length > 0) && (
+            <button
+              onClick={() => setOpenDrawer("assignments")}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "6px",
+                padding: "6px 12px",
+                background: prioritizedGroups.needsAttention.length > 0 ? "rgba(239,68,68,0.15)" : "rgba(255,255,255,0.08)",
+                border: "1px solid rgba(255,255,255,0.15)",
+                borderRadius: "20px",
+                color: "rgba(255,255,255,0.9)",
+                fontSize: "0.8rem",
+                cursor: "pointer",
+                transition: "all 0.2s",
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background = "rgba(255,255,255,0.15)";
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = prioritizedGroups.needsAttention.length > 0 ? "rgba(239,68,68,0.15)" : "rgba(255,255,255,0.08)";
+              }}
+            >
+              <span>Assignments</span>
+              <span
+                style={{
+                  background: prioritizedGroups.needsAttention.length > 0 ? "var(--status-danger)" : "rgba(255,255,255,0.25)",
+                  color: prioritizedGroups.needsAttention.length > 0 ? "white" : "rgba(255,255,255,0.7)",
+                  padding: "2px 7px",
+                  borderRadius: "10px",
+                  fontSize: "0.7rem",
+                  fontWeight: 600,
+                }}
+              >
+                {active.length + resolved.length}
+              </span>
+            </button>
+          )}
+
           {/* Unassigned Lessons Pill */}
           {unassignedLessons.length > 0 && (
             <button
@@ -867,116 +1714,6 @@ export default function EducatorDashboard() {
       )}
 
 
-      {/* Priority-Based Assignment List */}
-      <div ref={assignmentsSectionRef}>
-        {(active.length > 0 || resolved.length > 0) && (
-          <>
-            <h2 style={{ color: "white", marginTop: "32px", marginBottom: "20px" }}>
-              Your Assignments
-            </h2>
-
-            {/* Needs Attention - Most urgent, always expanded */}
-            <AssignmentListSection
-              title="Needs Attention"
-              items={prioritizedGroups.needsAttention}
-              onNavigate={(assignmentId, classId, className) =>
-                navigate(`/educator/assignment/${assignmentId}`, {
-                  state: { fromClass: classId, className }
-                })
-              }
-            />
-
-            {/* In Progress */}
-            <AssignmentListSection
-              title="In Progress"
-              items={prioritizedGroups.inProgress}
-              onNavigate={(assignmentId, classId, className) =>
-                navigate(`/educator/assignment/${assignmentId}`, {
-                  state: { fromClass: classId, className }
-                })
-              }
-            />
-
-            {/* Awaiting Submissions */}
-            <AssignmentListSection
-              title="Awaiting Submissions"
-              items={prioritizedGroups.awaitingSubmissions}
-              onNavigate={(assignmentId, classId, className) =>
-                navigate(`/educator/assignment/${assignmentId}`, {
-                  state: { fromClass: classId, className }
-                })
-              }
-              isCollapsible={prioritizedGroups.needsAttention.length > 0 || prioritizedGroups.inProgress.length > 0}
-              defaultExpanded={prioritizedGroups.needsAttention.length === 0 && prioritizedGroups.inProgress.length === 0}
-            />
-
-            {/* Reviewed / Resolved - Collapsible, de-emphasized */}
-            <AssignmentListSection
-              title="Reviewed"
-              items={prioritizedGroups.reviewed}
-              onNavigate={(assignmentId, classId, className) =>
-                navigate(`/educator/assignment/${assignmentId}`, {
-                  state: { fromClass: classId, className }
-                })
-              }
-              isCollapsible
-              defaultExpanded={false}
-            />
-          </>
-        )}
-      </div>
-
-      {/* No Assignments State */}
-      {active.length === 0 && resolved.length === 0 && (
-        <div className="card" style={{ marginTop: "32px" }}>
-          <p style={{ color: "#666", textAlign: "center", padding: "24px" }}>
-            No assignments yet.{" "}
-            <button
-              onClick={() => navigate("/educator/create-lesson")}
-              style={{
-                background: "none",
-                border: "none",
-                color: "var(--accent-primary)",
-                cursor: "pointer",
-                textDecoration: "underline",
-              }}
-            >
-              Create your first lesson
-            </button>
-          </p>
-        </div>
-      )}
-
-      {/* Footer: Quick Access */}
-      <div
-        style={{
-          marginTop: "48px",
-          paddingTop: "24px",
-          borderTop: "1px solid rgba(255,255,255,0.1)",
-          display: "flex",
-          gap: "16px",
-          flexWrap: "wrap",
-        }}
-      >
-        <button
-          className="btn"
-          onClick={() => navigate("/educator/archived")}
-          style={{
-            marginLeft: "auto",
-            background: "rgba(255, 255, 255, 0.18)",
-            color: "white",
-            border: "1px solid rgba(255, 255, 255, 0.45)",
-          }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.background = "rgba(255, 255, 255, 0.28)";
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.background = "rgba(255, 255, 255, 0.18)";
-          }}
-        >
-          Archived ({archivedCount})
-        </button>
-      </div>
 
       {/* Add Student Modal */}
       {addStudentModal && (
@@ -1054,6 +1791,32 @@ export default function EducatorDashboard() {
               showError("Failed to remove session. Please try again.");
             }
           }}
+        />
+      </Drawer>
+
+      {/* Assignments Drawer */}
+      <Drawer
+        isOpen={openDrawer === "assignments"}
+        onClose={() => setOpenDrawer(null)}
+        title="Assignments"
+        width="560px"
+      >
+        <AssignmentsDrawerContent
+          prioritizedGroups={prioritizedGroups}
+          onNavigate={(assignmentId, classId, className) => {
+            setOpenDrawer(null);
+            navigate(`/educator/assignment/${assignmentId}`, {
+              state: { fromClass: classId, className }
+            });
+          }}
+          archivedCount={archivedCount}
+          onViewArchived={() => {
+            setOpenDrawer(null);
+            navigate("/educator/archived");
+          }}
+          filters={assignmentFilters}
+          onClearFilters={() => setAssignmentFilters({})}
+          onUpdateFilters={setAssignmentFilters}
         />
       </Drawer>
 
@@ -1343,6 +2106,10 @@ interface PrioritizedAssignment {
   attentionCount: number;
   openTodoCount: number;
   unreviewed: number;
+  // Lesson metadata for filtering
+  subject?: string;
+  gradeLevel?: string;
+  difficulty?: string;
 }
 
 interface AssignmentListRowProps {
@@ -1504,7 +2271,7 @@ interface AssignmentListSectionProps {
   defaultExpanded?: boolean;
 }
 
-function AssignmentListSection({
+function _AssignmentListSection({
   title,
   items,
   onNavigate,
@@ -1591,7 +2358,7 @@ interface CoachingActivitySectionProps {
   onNavigate: (studentId: string) => void;
 }
 
-function CoachingActivitySection({ activities, onNavigate }: CoachingActivitySectionProps) {
+function _CoachingActivitySection({ activities, onNavigate }: CoachingActivitySectionProps) {
   const [isExpanded, setIsExpanded] = useState(false);
 
   // Show support-seeking students prominently
@@ -1942,7 +2709,7 @@ interface UnassignedLessonsSectionProps {
   onSubjectChange: (lessonId: string, subject: string | null) => Promise<void>;
 }
 
-function UnassignedLessonsSection({ lessons, availableSubjects, onAssign, onArchive, onSubjectChange }: UnassignedLessonsSectionProps) {
+function _UnassignedLessonsSection({ lessons, availableSubjects, onAssign, onArchive, onSubjectChange }: UnassignedLessonsSectionProps) {
   const [editingSubject, setEditingSubject] = useState<string | null>(null);
   const [subjectValue, setSubjectValue] = useState("");
   const [originalValue, setOriginalValue] = useState("");
@@ -2551,6 +3318,904 @@ function UnassignedLessonsDrawerContent({
         ))}
       </div>
         </>
+      )}
+    </div>
+  );
+}
+
+// ============================================
+// Assignments Drawer Content
+// ============================================
+
+// Canonical values for grade/subject/difficulty normalization
+const CANONICAL_GRADES = [
+  "Kindergarten",
+  "1st grade",
+  "2nd grade",
+  "3rd grade",
+  "4th grade",
+  "5th grade",
+  "6th grade",
+  "7th grade",
+  "8th grade",
+];
+
+const CANONICAL_SUBJECTS = ["Math", "Science", "Language Arts", "Social Studies"];
+
+const CANONICAL_DIFFICULTIES = ["beginner", "intermediate", "advanced"];
+
+// Normalize grade to canonical format
+// Handles: "Grade 1", "1", "1st Grade", "1st grade", "First Grade" → "1st grade"
+function normalizeGrade(input: string | undefined): string | undefined {
+  if (!input) return undefined;
+  const lower = input.toLowerCase().trim();
+
+  // Handle kindergarten
+  if (lower === "k" || lower === "kindergarten" || lower === "kinder") {
+    return "Kindergarten";
+  }
+
+  // Extract numeric part
+  const match = lower.match(/(\d+)/);
+  if (!match) return input; // Return as-is if no number found
+
+  const num = parseInt(match[1], 10);
+  if (num < 1 || num > 8) return input; // Out of range
+
+  const suffix = num === 1 ? "st" : num === 2 ? "nd" : num === 3 ? "rd" : "th";
+  return `${num}${suffix} grade`;
+}
+
+// Normalize subject to canonical format
+// Handles: "Math 1", "math", "MATH", "Mathematics" → "Math"
+// Handles: "ELA", "English", "Reading" → "Language Arts"
+function normalizeSubject(input: string | undefined): string | undefined {
+  if (!input) return undefined;
+  const lower = input.toLowerCase().trim();
+
+  // Math variations
+  if (lower.startsWith("math") || lower === "mathematics") {
+    return "Math";
+  }
+
+  // Science variations
+  if (lower.startsWith("science")) {
+    return "Science";
+  }
+
+  // Language Arts variations
+  if (
+    lower.startsWith("language") ||
+    lower === "ela" ||
+    lower === "english" ||
+    lower === "reading" ||
+    lower === "writing"
+  ) {
+    return "Language Arts";
+  }
+
+  // Social Studies variations
+  if (lower.startsWith("social") || lower === "history" || lower === "geography") {
+    return "Social Studies";
+  }
+
+  // Return original if no match (capitalize first letter)
+  return input.charAt(0).toUpperCase() + input.slice(1);
+}
+
+// Normalize difficulty to canonical format
+function normalizeDifficulty(input: string | undefined): string | undefined {
+  if (!input) return undefined;
+  const lower = input.toLowerCase().trim();
+  if (CANONICAL_DIFFICULTIES.includes(lower)) {
+    return lower;
+  }
+  return input;
+}
+
+interface AssignmentFilters {
+  classId?: string;
+  subject?: string;
+  gradeLevel?: string;
+  difficulty?: string;
+}
+
+interface AssignmentsDrawerContentProps {
+  prioritizedGroups: {
+    needsAttention: PrioritizedAssignment[];
+    inProgress: PrioritizedAssignment[];
+    awaitingSubmissions: PrioritizedAssignment[];
+    reviewed: PrioritizedAssignment[];
+  };
+  onNavigate: (assignmentId: string, classId: string, className: string) => void;
+  archivedCount: number;
+  onViewArchived: () => void;
+  filters: AssignmentFilters;
+  onClearFilters: () => void;
+  onUpdateFilters: (filters: AssignmentFilters) => void;
+}
+
+function AssignmentsDrawerContent({ prioritizedGroups, onNavigate, archivedCount, onViewArchived, filters, onClearFilters, onUpdateFilters }: AssignmentsDrawerContentProps) {
+  const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({
+    needsAttention: true,
+    inProgress: true,
+    awaitingSubmissions: true,
+    reviewed: false,
+    archived: false,
+  });
+
+  const toggleSection = (section: string) => {
+    setExpandedSections(prev => ({ ...prev, [section]: !prev[section] }));
+  };
+
+  const formatDate = (isoDate?: string): string => {
+    if (!isoDate) return "";
+    const date = new Date(isoDate);
+    return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  };
+
+  // Check if any filters are active
+  const hasActiveFilters = filters.classId || filters.subject || filters.gradeLevel || filters.difficulty;
+
+  // Collect all assignments for extracting filter options (memoized for stable reference)
+  const allAssignments = useMemo(() => [
+    ...prioritizedGroups.needsAttention,
+    ...prioritizedGroups.inProgress,
+    ...prioritizedGroups.awaitingSubmissions,
+    ...prioritizedGroups.reviewed,
+  ], [
+    prioritizedGroups.needsAttention,
+    prioritizedGroups.inProgress,
+    prioritizedGroups.awaitingSubmissions,
+    prioritizedGroups.reviewed,
+  ]);
+
+  // Build a list of unique classes from assignments
+  const allClasses = useMemo(() => {
+    const classMap = new Map<string, string>(); // classId -> className
+    allAssignments.forEach(item => {
+      if (item.classId && item.className) {
+        classMap.set(item.classId, item.className);
+      }
+    });
+    // Return sorted by class name
+    return Array.from(classMap.entries())
+      .map(([id, name]) => ({ id, name }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [allAssignments]);
+
+  // Build a set of normalized grades that exist in the data (optionally filtered by class)
+  const gradesInData = useMemo(() => {
+    const normalized = new Set<string>();
+    allAssignments.forEach(item => {
+      // If class filter is set, only include grades for that class
+      if (filters.classId && item.classId !== filters.classId) return;
+      const norm = normalizeGrade(item.gradeLevel);
+      if (norm) normalized.add(norm);
+    });
+    return normalized;
+  }, [allAssignments, filters.classId]);
+
+  // Build a set of normalized subjects that exist in the data (optionally filtered by class)
+  const _subjectsInData = useMemo(() => {
+    const normalized = new Set<string>();
+    allAssignments.forEach(item => {
+      // If class filter is set, only include subjects for that class
+      if (filters.classId && item.classId !== filters.classId) return;
+      const norm = normalizeSubject(item.subject);
+      if (norm) normalized.add(norm);
+    });
+    return normalized;
+  }, [allAssignments, filters.classId]);
+
+  // Filter canonical grades to only those present in data
+  const allGrades = useMemo(() => {
+    return CANONICAL_GRADES.filter(grade => gradesInData.has(grade));
+  }, [gradesInData]);
+
+  // Filter canonical subjects to only those present in data for the selected class+grade
+  const availableSubjects = useMemo(() => {
+    const normalizedFilterGrade = normalizeGrade(filters.gradeLevel);
+    const subjectsForSelection = new Set<string>();
+
+    allAssignments.forEach(item => {
+      // If class filter is set, only include subjects for that class
+      if (filters.classId && item.classId !== filters.classId) return;
+      const normGrade = normalizeGrade(item.gradeLevel);
+      const normSubject = normalizeSubject(item.subject);
+      if (normSubject) {
+        // If grade filter is set, only include subjects for that grade
+        if (!normalizedFilterGrade || normGrade === normalizedFilterGrade) {
+          subjectsForSelection.add(normSubject);
+        }
+      }
+    });
+
+    // Return canonical subjects that are present in filtered data
+    return CANONICAL_SUBJECTS.filter(subject => subjectsForSelection.has(subject));
+  }, [allAssignments, filters.classId, filters.gradeLevel]);
+
+  // Filter difficulties to only those present in data for the selected class+grade+subject
+  const availableDifficulties = useMemo(() => {
+    const normalizedFilterGrade = normalizeGrade(filters.gradeLevel);
+    const normalizedFilterSubject = normalizeSubject(filters.subject);
+    const difficultiesForSelection = new Set<string>();
+
+    allAssignments.forEach(item => {
+      // If class filter is set, only include difficulties for that class
+      if (filters.classId && item.classId !== filters.classId) return;
+      const normGrade = normalizeGrade(item.gradeLevel);
+      const normSubject = normalizeSubject(item.subject);
+      const normDifficulty = normalizeDifficulty(item.difficulty);
+
+      if (normDifficulty) {
+        const matchesGrade = !normalizedFilterGrade || normGrade === normalizedFilterGrade;
+        const matchesSubject = !normalizedFilterSubject || normSubject === normalizedFilterSubject;
+        if (matchesGrade && matchesSubject) {
+          difficultiesForSelection.add(normDifficulty);
+        }
+      }
+    });
+
+    // Return canonical difficulties that are present in filtered data
+    return CANONICAL_DIFFICULTIES.filter(diff => difficultiesForSelection.has(diff));
+  }, [allAssignments, filters.classId, filters.gradeLevel, filters.subject]);
+
+  // Handle filter changes with cascading logic (using normalized values)
+  // Hierarchy: Class → Grade → Subject → Skill
+
+  const handleClassChange = (classId: string) => {
+    if (!classId) {
+      // Clear all filters when class is cleared
+      onUpdateFilters({});
+    } else {
+      // Changing class clears all downstream filters (grade, subject, difficulty)
+      onUpdateFilters({ classId });
+    }
+  };
+
+  const handleGradeChange = (gradeLevel: string) => {
+    if (!gradeLevel) {
+      // Clear grade and downstream filters, keep class
+      onUpdateFilters({ classId: filters.classId });
+    } else {
+      const normalizedGrade = normalizeGrade(gradeLevel);
+
+      // Check if current subject is still valid for new grade (within selected class)
+      const subjectsForGrade = new Set<string>();
+      allAssignments.forEach(item => {
+        if (filters.classId && item.classId !== filters.classId) return;
+        if (normalizeGrade(item.gradeLevel) === normalizedGrade) {
+          const normSubject = normalizeSubject(item.subject);
+          if (normSubject) subjectsForGrade.add(normSubject);
+        }
+      });
+
+      const normalizedCurrentSubject = normalizeSubject(filters.subject);
+      const newSubject = normalizedCurrentSubject && subjectsForGrade.has(normalizedCurrentSubject)
+        ? normalizedCurrentSubject
+        : undefined;
+
+      // Check if current difficulty is still valid
+      let newDifficulty = filters.difficulty;
+      if (newSubject) {
+        const difficultiesForGradeSubject = new Set<string>();
+        allAssignments.forEach(item => {
+          if (filters.classId && item.classId !== filters.classId) return;
+          if (
+            normalizeGrade(item.gradeLevel) === normalizedGrade &&
+            normalizeSubject(item.subject) === newSubject
+          ) {
+            const normDiff = normalizeDifficulty(item.difficulty);
+            if (normDiff) difficultiesForGradeSubject.add(normDiff);
+          }
+        });
+        if (newDifficulty && !difficultiesForGradeSubject.has(newDifficulty)) {
+          newDifficulty = undefined;
+        }
+      } else {
+        newDifficulty = undefined;
+      }
+
+      onUpdateFilters({ classId: filters.classId, gradeLevel: normalizedGrade, subject: newSubject, difficulty: newDifficulty });
+    }
+  };
+
+  const handleSubjectChange = (subject: string) => {
+    if (!subject) {
+      // Clear subject and difficulty, keep class and grade
+      onUpdateFilters({ classId: filters.classId, gradeLevel: filters.gradeLevel });
+    } else {
+      const normalizedSubject = normalizeSubject(subject);
+
+      // Check if current difficulty is still valid for new subject (within selected class)
+      const normalizedFilterGrade = normalizeGrade(filters.gradeLevel);
+      const difficultiesForSubject = new Set<string>();
+      allAssignments.forEach(item => {
+        if (filters.classId && item.classId !== filters.classId) return;
+        const normGrade = normalizeGrade(item.gradeLevel);
+        const normSubject = normalizeSubject(item.subject);
+        const matchesGrade = !normalizedFilterGrade || normGrade === normalizedFilterGrade;
+        if (matchesGrade && normSubject === normalizedSubject && item.difficulty) {
+          const normDiff = normalizeDifficulty(item.difficulty);
+          if (normDiff) difficultiesForSubject.add(normDiff);
+        }
+      });
+      const newDifficulty = filters.difficulty && difficultiesForSubject.has(filters.difficulty)
+        ? filters.difficulty
+        : undefined;
+
+      onUpdateFilters({ classId: filters.classId, gradeLevel: filters.gradeLevel, subject: normalizedSubject, difficulty: newDifficulty });
+    }
+  };
+
+  const handleDifficultyChange = (difficulty: string) => {
+    const normalizedDifficulty = normalizeDifficulty(difficulty);
+    onUpdateFilters({
+      classId: filters.classId,
+      gradeLevel: filters.gradeLevel,
+      subject: filters.subject,
+      difficulty: normalizedDifficulty || undefined,
+    });
+  };
+
+  // Filter function for assignments (using normalized comparisons)
+  const filterAssignment = (item: PrioritizedAssignment): boolean => {
+    // Class filter
+    if (filters.classId && item.classId !== filters.classId) return false;
+
+    const normalizedFilterGrade = normalizeGrade(filters.gradeLevel);
+    const normalizedFilterSubject = normalizeSubject(filters.subject);
+    const normalizedFilterDifficulty = normalizeDifficulty(filters.difficulty);
+
+    const normalizedItemGrade = normalizeGrade(item.gradeLevel);
+    const normalizedItemSubject = normalizeSubject(item.subject);
+    const normalizedItemDifficulty = normalizeDifficulty(item.difficulty);
+
+    if (normalizedFilterSubject && normalizedItemSubject !== normalizedFilterSubject) return false;
+    if (normalizedFilterGrade && normalizedItemGrade !== normalizedFilterGrade) return false;
+    if (normalizedFilterDifficulty && normalizedItemDifficulty !== normalizedFilterDifficulty) return false;
+    return true;
+  };
+
+  // Apply filters to each group
+  const filteredGroups = {
+    needsAttention: prioritizedGroups.needsAttention.filter(filterAssignment),
+    inProgress: prioritizedGroups.inProgress.filter(filterAssignment),
+    awaitingSubmissions: prioritizedGroups.awaitingSubmissions.filter(filterAssignment),
+    reviewed: prioritizedGroups.reviewed.filter(filterAssignment),
+  };
+
+  const totalCount =
+    prioritizedGroups.needsAttention.length +
+    prioritizedGroups.inProgress.length +
+    prioritizedGroups.awaitingSubmissions.length +
+    prioritizedGroups.reviewed.length;
+
+  const filteredCount =
+    filteredGroups.needsAttention.length +
+    filteredGroups.inProgress.length +
+    filteredGroups.awaitingSubmissions.length +
+    filteredGroups.reviewed.length;
+
+  if (totalCount === 0) {
+    return (
+      <div style={{ textAlign: "center", padding: "32px 16px", color: "#666" }}>
+        <p style={{ margin: 0, fontWeight: 500 }}>No assignments yet</p>
+        <p style={{ margin: "8px 0 0 0", fontSize: "0.9rem" }}>
+          Create and assign a lesson to get started.
+        </p>
+      </div>
+    );
+  }
+
+  // Format grade level for display (uses normalization)
+  const formatGradeLabel = (gradeLevel: string): string => {
+    return normalizeGrade(gradeLevel) || gradeLevel;
+  };
+
+  // Build filter chips with hierarchical removal behavior
+  // Order: Class → Grade → Subject → Skill
+  // Removing a chip also removes downstream filters
+  interface FilterChip {
+    key: "classId" | "gradeLevel" | "subject" | "difficulty";
+    label: string;
+    onRemove: () => void;
+  }
+
+  // Get class name for display in filter chip
+  const getClassNameById = (classId: string): string => {
+    const foundClass = allClasses.find(c => c.id === classId);
+    return foundClass?.name || classId;
+  };
+
+  const buildFilterChips = (): FilterChip[] => {
+    const chips: FilterChip[] = [];
+
+    // 1. Class (removing clears all downstream: grade, subject, skill)
+    if (filters.classId) {
+      chips.push({
+        key: "classId",
+        label: getClassNameById(filters.classId),
+        onRemove: () => onUpdateFilters({}), // Clear all filters
+      });
+    }
+
+    // 2. Grade (removing clears subject and skill too, keeps class)
+    if (filters.gradeLevel) {
+      chips.push({
+        key: "gradeLevel",
+        label: formatGradeLabel(filters.gradeLevel),
+        onRemove: () => onUpdateFilters({ classId: filters.classId }), // Keep class, clear downstream
+      });
+    }
+
+    // 3. Subject (removing clears skill too, keeps class and grade)
+    if (filters.subject) {
+      chips.push({
+        key: "subject",
+        label: filters.subject,
+        onRemove: () => onUpdateFilters({ classId: filters.classId, gradeLevel: filters.gradeLevel }), // Keep class and grade
+      });
+    }
+
+    // 4. Skill (removing only clears skill, keeps class, grade, and subject)
+    if (filters.difficulty) {
+      chips.push({
+        key: "difficulty",
+        label: filters.difficulty.charAt(0).toUpperCase() + filters.difficulty.slice(1),
+        onRemove: () => onUpdateFilters({ classId: filters.classId, gradeLevel: filters.gradeLevel, subject: filters.subject }),
+      });
+    }
+
+    return chips;
+  };
+
+  const filterChips = buildFilterChips();
+
+  // Determine if we should show subject on cards (when no subject filter is applied)
+  const showSubjectOnCards = !filters.subject;
+
+  const renderSection = (
+    title: string,
+    sectionKey: string,
+    items: PrioritizedAssignment[],
+    actionLabel: string,
+    accentColor: string,
+    accentBg: string
+  ) => {
+    if (items.length === 0) return null;
+
+    const isExpanded = expandedSections[sectionKey];
+
+    return (
+      <div style={{ marginBottom: "16px" }}>
+        {/* Section Header */}
+        <button
+          onClick={() => toggleSection(sectionKey)}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            width: "100%",
+            padding: "10px 12px",
+            background: accentBg,
+            border: "none",
+            borderRadius: "8px",
+            cursor: "pointer",
+            marginBottom: isExpanded ? "10px" : 0,
+          }}
+        >
+          <span style={{ fontWeight: 600, fontSize: "0.85rem", color: accentColor }}>
+            {title}
+          </span>
+          <span style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+            <span style={{
+              background: accentColor,
+              color: "white",
+              padding: "2px 8px",
+              borderRadius: "10px",
+              fontSize: "0.7rem",
+              fontWeight: 600,
+            }}>
+              {items.length}
+            </span>
+            <span style={{ color: "#666", fontSize: "0.8rem" }}>
+              {isExpanded ? "▼" : "▶"}
+            </span>
+          </span>
+        </button>
+
+        {/* Section Items */}
+        {isExpanded && (
+          <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+            {items.map((item) => (
+              <div
+                key={`${item.assignment.assignmentId}-${item.classId}`}
+                style={{
+                  padding: "12px 14px",
+                  background: "var(--surface-muted)",
+                  borderRadius: "8px",
+                  border: "1px solid var(--border-muted)",
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "12px" }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontWeight: 600, color: "#374151", fontSize: "0.9rem" }}>
+                      {item.assignment.title}
+                    </div>
+                    <div style={{ fontSize: "0.8rem", color: "#64748b", marginTop: "4px" }}>
+                      {item.className}
+                      {showSubjectOnCards && item.subject && (
+                        <span style={{ color: "#94a3b8" }}> · {item.subject}</span>
+                      )}
+                    </div>
+                    {item.assignment.assignedAt && (
+                      <div style={{ fontSize: "0.75rem", color: "#94a3b8", marginTop: "4px" }}>
+                        Assigned {formatDate(item.assignment.assignedAt)}
+                      </div>
+                    )}
+                    {/* Status indicators */}
+                    {(item.attentionCount > 0 || item.unreviewed > 0) && (
+                      <div style={{ display: "flex", gap: "8px", marginTop: "6px", flexWrap: "wrap" }}>
+                        {item.attentionCount > 0 && (
+                          <span style={{
+                            fontSize: "0.7rem",
+                            padding: "2px 6px",
+                            background: "var(--status-danger-bg)",
+                            color: "var(--status-danger)",
+                            borderRadius: "4px",
+                          }}>
+                            {item.attentionCount} need{item.attentionCount === 1 ? "s" : ""} attention
+                          </span>
+                        )}
+                        {item.unreviewed > 0 && (
+                          <span style={{
+                            fontSize: "0.7rem",
+                            padding: "2px 6px",
+                            background: "var(--status-pending-bg)",
+                            color: "var(--status-pending-text)",
+                            borderRadius: "4px",
+                          }}>
+                            {item.unreviewed} to review
+                          </span>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                  <button
+                    onClick={() => onNavigate(item.assignment.assignmentId, item.classId, item.className)}
+                    style={{
+                      padding: "6px 14px",
+                      fontSize: "0.8rem",
+                      background: actionLabel === "Review" ? "var(--accent-primary)" : "var(--surface-elevated)",
+                      color: actionLabel === "Review" ? "white" : "#374151",
+                      border: actionLabel === "Review" ? "none" : "1px solid var(--border-muted)",
+                      borderRadius: "6px",
+                      cursor: "pointer",
+                      fontWeight: 500,
+                      flexShrink: 0,
+                    }}
+                  >
+                    {actionLabel}
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  return (
+    <div>
+      {/* Filter chip row */}
+      {hasActiveFilters && (
+        <div style={{
+          display: "flex",
+          alignItems: "center",
+          gap: "8px",
+          flexWrap: "wrap",
+          padding: "12px 0",
+          marginBottom: "8px",
+          borderBottom: "1px solid var(--border-muted)",
+        }}>
+          <span style={{ fontSize: "0.8rem", color: "#6b7280" }}>Filtered by:</span>
+          {filterChips.map((chip) => (
+            <span
+              key={chip.key}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: "6px",
+                fontSize: "0.75rem",
+                padding: "4px 8px 4px 10px",
+                background: "var(--accent-primary)",
+                color: "white",
+                borderRadius: "12px",
+                fontWeight: 500,
+              }}
+            >
+              {chip.label}
+              <button
+                onClick={chip.onRemove}
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  width: "16px",
+                  height: "16px",
+                  padding: 0,
+                  background: "rgba(255,255,255,0.25)",
+                  border: "none",
+                  borderRadius: "50%",
+                  color: "white",
+                  fontSize: "0.7rem",
+                  cursor: "pointer",
+                  lineHeight: 1,
+                }}
+                title={`Remove ${chip.label} filter`}
+              >
+                ×
+              </button>
+            </span>
+          ))}
+          {filterChips.length > 1 && (
+            <button
+              onClick={onClearFilters}
+              style={{
+                fontSize: "0.75rem",
+                padding: "4px 10px",
+                background: "transparent",
+                color: "var(--accent-primary)",
+                border: "1px solid var(--accent-primary)",
+                borderRadius: "12px",
+                cursor: "pointer",
+                fontWeight: 500,
+              }}
+            >
+              Clear all
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* Filter dropdowns */}
+      <div style={{
+        display: "flex",
+        flexDirection: "column",
+        gap: "8px",
+        padding: "12px 0",
+        marginBottom: "12px",
+        borderBottom: "1px solid var(--border-muted)",
+      }}>
+        {/* Row 1: Class dropdown - full width, only show if multiple classes exist */}
+        {allClasses.length > 1 && (
+          <select
+            value={filters.classId || ""}
+            onChange={(e) => handleClassChange(e.target.value)}
+            style={{
+              width: "100%",
+              padding: "8px 12px",
+              fontSize: "0.8rem",
+              border: "1px solid var(--border-muted)",
+              borderRadius: "6px",
+              background: "var(--surface-elevated)",
+              color: filters.classId ? "#374151" : "#9ca3af",
+              cursor: "pointer",
+            }}
+          >
+            <option value="">All classes</option>
+            {allClasses.map((cls) => (
+              <option key={cls.id} value={cls.id}>
+                {cls.name}
+              </option>
+            ))}
+          </select>
+        )}
+
+        {/* Row 2: Grade, Subject, Level dropdowns - equal width, wraps on narrow screens */}
+        <div style={{
+          display: "flex",
+          gap: "8px",
+          flexWrap: "wrap",
+        }}>
+          {/* Grade dropdown */}
+          <select
+            value={filters.gradeLevel || ""}
+            onChange={(e) => handleGradeChange(e.target.value)}
+            style={{
+              flex: "1 1 0",
+              minWidth: "100px",
+              padding: "8px 12px",
+              fontSize: "0.8rem",
+              border: "1px solid var(--border-muted)",
+              borderRadius: "6px",
+              background: "var(--surface-elevated)",
+              color: filters.gradeLevel ? "#374151" : "#9ca3af",
+              cursor: "pointer",
+            }}
+          >
+            <option value="">All grades</option>
+            {allGrades.map((grade) => (
+              <option key={grade} value={grade}>
+                {formatGradeLabel(grade)}
+              </option>
+            ))}
+          </select>
+
+          {/* Subject dropdown */}
+          <select
+            value={filters.subject || ""}
+            onChange={(e) => handleSubjectChange(e.target.value)}
+            style={{
+              flex: "1 1 0",
+              minWidth: "100px",
+              padding: "8px 12px",
+              fontSize: "0.8rem",
+              border: "1px solid var(--border-muted)",
+              borderRadius: "6px",
+              background: "var(--surface-elevated)",
+              color: filters.subject ? "#374151" : "#9ca3af",
+              cursor: "pointer",
+            }}
+            disabled={availableSubjects.length === 0}
+          >
+            <option value="">All subjects</option>
+            {availableSubjects.map((subject) => (
+              <option key={subject} value={subject}>
+                {subject}
+              </option>
+            ))}
+          </select>
+
+          {/* Skill level dropdown */}
+          <select
+            value={filters.difficulty || ""}
+            onChange={(e) => handleDifficultyChange(e.target.value)}
+            style={{
+              flex: "1 1 0",
+              minWidth: "100px",
+              padding: "8px 12px",
+              fontSize: "0.8rem",
+              border: "1px solid var(--border-muted)",
+              borderRadius: "6px",
+              background: "var(--surface-elevated)",
+              color: filters.difficulty ? "#374151" : "#9ca3af",
+              cursor: "pointer",
+            }}
+            disabled={availableDifficulties.length === 0}
+          >
+            <option value="">All levels</option>
+            {availableDifficulties.map((difficulty) => (
+              <option key={difficulty} value={difficulty}>
+                {difficulty.charAt(0).toUpperCase() + difficulty.slice(1)}
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      {/* Empty state when filters have no matches */}
+      {hasActiveFilters && filteredCount === 0 && (
+        <div style={{ textAlign: "center", padding: "32px 16px", color: "#666" }}>
+          <p style={{ margin: 0, fontWeight: 500 }}>No matching assignments</p>
+          <p style={{ margin: "8px 0 0 0", fontSize: "0.9rem" }}>
+            Try adjusting your filters or{" "}
+            <button
+              onClick={onClearFilters}
+              style={{
+                background: "none",
+                border: "none",
+                color: "var(--accent-primary)",
+                cursor: "pointer",
+                textDecoration: "underline",
+                padding: 0,
+                fontSize: "inherit",
+              }}
+            >
+              clear all filters
+            </button>
+            .
+          </p>
+        </div>
+      )}
+
+      {renderSection(
+        "Needs Attention",
+        "needsAttention",
+        filteredGroups.needsAttention,
+        "Review",
+        "var(--status-danger)",
+        "var(--status-danger-bg)"
+      )}
+      {renderSection(
+        "In Progress",
+        "inProgress",
+        filteredGroups.inProgress,
+        "Review",
+        "var(--status-info-text)",
+        "var(--status-info-bg)"
+      )}
+      {renderSection(
+        "Awaiting Submissions",
+        "awaitingSubmissions",
+        filteredGroups.awaitingSubmissions,
+        "View",
+        "var(--status-pending-text)",
+        "var(--status-pending-bg)"
+      )}
+      {renderSection(
+        "Reviewed",
+        "reviewed",
+        filteredGroups.reviewed,
+        "View",
+        "var(--status-success-text)",
+        "var(--status-success-bg)"
+      )}
+
+      {/* Archived Section */}
+      {archivedCount > 0 && (
+        <div style={{ marginTop: "16px", borderTop: "1px solid var(--border-muted)", paddingTop: "16px" }}>
+          <button
+            onClick={() => toggleSection("archived")}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              width: "100%",
+              padding: "10px 12px",
+              background: "var(--surface-muted)",
+              border: "none",
+              borderRadius: "8px",
+              cursor: "pointer",
+              marginBottom: expandedSections.archived ? "10px" : 0,
+            }}
+          >
+            <span style={{ fontWeight: 600, fontSize: "0.85rem", color: "#6b7280" }}>
+              Archived
+            </span>
+            <span style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+              <span style={{
+                background: "#9ca3af",
+                color: "white",
+                padding: "2px 8px",
+                borderRadius: "10px",
+                fontSize: "0.7rem",
+                fontWeight: 600,
+              }}>
+                {archivedCount}
+              </span>
+              <span style={{ color: "#666", fontSize: "0.8rem" }}>
+                {expandedSections.archived ? "▼" : "▶"}
+              </span>
+            </span>
+          </button>
+          {expandedSections.archived && (
+            <div style={{ padding: "8px 0" }}>
+              <button
+                onClick={onViewArchived}
+                style={{
+                  width: "100%",
+                  padding: "12px 14px",
+                  background: "var(--surface-elevated)",
+                  border: "1px solid var(--border-muted)",
+                  borderRadius: "8px",
+                  cursor: "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  color: "#374151",
+                  fontSize: "0.9rem",
+                }}
+              >
+                <span>View archived assignments</span>
+                <span style={{ color: "#9ca3af" }}>→</span>
+              </button>
+            </div>
+          )}
+        </div>
       )}
     </div>
   );
@@ -3301,6 +4966,7 @@ function CreateClassView({ onBack, onClassCreated }: CreateClassViewProps) {
   const [name, setName] = useState("");
   const [gradeLevel, setGradeLevel] = useState("");
   const [period, setPeriod] = useState("");
+  const [sectionLabel, setSectionLabel] = useState("");
   const [isCreating, setIsCreating] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -3313,6 +4979,7 @@ function CreateClassView({ onBack, onClassCreated }: CreateClassViewProps) {
         name: name.trim(),
         gradeLevel: gradeLevel.trim() || undefined,
         period: period.trim() || undefined,
+        sectionLabel: sectionLabel.trim() || undefined,
       });
       onClassCreated(newClass.id);
     } catch (err) {
@@ -3407,13 +5074,33 @@ function CreateClassView({ onBack, onClassCreated }: CreateClassViewProps) {
 
         <div style={{ marginBottom: "16px" }}>
           <label style={{ display: "block", fontSize: "0.8rem", fontWeight: 600, color: "#374151", marginBottom: "6px" }}>
-            Period / Section <span style={{ fontWeight: 400, color: "#94a3b8" }}>(optional)</span>
+            Period <span style={{ fontWeight: 400, color: "#94a3b8" }}>(optional)</span>
           </label>
           <input
             type="text"
             value={period}
             onChange={(e) => setPeriod(e.target.value)}
-            placeholder="e.g., Period 3, Morning, Section A"
+            placeholder="e.g., Period 3, Morning, Block A"
+            style={{
+              width: "100%",
+              padding: "10px 12px",
+              fontSize: "0.9rem",
+              border: "1px solid #e2e8f0",
+              borderRadius: "6px",
+              boxSizing: "border-box",
+            }}
+          />
+        </div>
+
+        <div style={{ marginBottom: "16px" }}>
+          <label style={{ display: "block", fontSize: "0.8rem", fontWeight: 600, color: "#374151", marginBottom: "6px" }}>
+            Section <span style={{ fontWeight: 400, color: "#94a3b8" }}>(optional)</span>
+          </label>
+          <input
+            type="text"
+            value={sectionLabel}
+            onChange={(e) => setSectionLabel(e.target.value)}
+            placeholder="e.g., A, B, AM, PM, 1, 2"
             style={{
               width: "100%",
               padding: "10px 12px",
@@ -3858,6 +5545,7 @@ function CreateLessonDrawerContent({
   const [title, setTitle] = useState(editingDraft?.title || "");
   const [subject, setSubject] = useState(editingDraft?.subject || lastSettings.subject || "");
   const [gradeLevel, setGradeLevel] = useState(editingDraft?.gradeLevel || lastSettings.gradeLevel || "");
+  const [difficulty, setDifficulty] = useState<"beginner" | "intermediate" | "advanced">("intermediate");
   const [questionCount, setQuestionCount] = useState(editingDraft?.questionCount || suggestedQuestionCount);
   const [description, setDescription] = useState(editingDraft?.description || "");
   const [assignToClassId, setAssignToClassId] = useState(editingDraft?.assignToClassId || "");
@@ -3871,7 +5559,7 @@ function CreateLessonDrawerContent({
   // Handle create lesson with AI generation
   const handleCreateLesson = async () => {
     if (!title.trim()) {
-      showError("Please enter a lesson title.");
+      showError("Please enter a lesson topic.");
       return;
     }
     if (!subject) {
@@ -3893,12 +5581,6 @@ function CreateLessonDrawerContent({
         contentParts.push(`Teacher style notes: ${teacherContext}`);
       }
 
-      // Infer difficulty from grade level (default to intermediate if no grade)
-      const gradeNum = gradeLevel ? (gradeLevel === "K" ? 0 : parseInt(gradeLevel, 10)) : 3;
-      const difficulty: "beginner" | "intermediate" | "advanced" =
-        gradeNum <= 2 ? "beginner" :
-        gradeNum <= 5 ? "intermediate" : "advanced";
-
       // Generate lesson with AI
       const generatedLesson = await generateLesson({
         mode: "topic",
@@ -3909,10 +5591,11 @@ function CreateLessonDrawerContent({
       });
 
       // Update the generated lesson with our metadata
+      // Use the AI-generated title (based on topic + learning objectives)
       const lessonToSave: Lesson = {
         ...generatedLesson,
         id: `lesson-${Date.now()}`,
-        title: title.trim(),
+        // Keep the AI-generated title - it's more specific and student-friendly
         description: description.trim() || generatedLesson.description,
         subject: subject,
         gradeLevel: gradeLevel || undefined,
@@ -4073,7 +5756,7 @@ function CreateLessonDrawerContent({
     <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
       {/* Form Content */}
       <div style={{ flex: 1, overflow: "auto" }}>
-        {/* Title */}
+        {/* Topic */}
         <div style={{ marginBottom: "20px" }}>
           <label
             style={{
@@ -4084,13 +5767,13 @@ function CreateLessonDrawerContent({
               marginBottom: "6px",
             }}
           >
-            Lesson Title <span style={{ color: "#dc2626" }}>*</span>
+            Lesson Topic <span style={{ color: "#dc2626" }}>*</span>
           </label>
           <input
             type="text"
             value={title}
             onChange={(e) => setTitle(e.target.value)}
-            placeholder="e.g., Ocean Ecosystems"
+            placeholder="e.g., Subtraction, Ancient Egypt, Ocean Animals"
             autoFocus
             style={{
               width: "100%",
@@ -4169,6 +5852,36 @@ function CreateLessonDrawerContent({
               {gradeLevels.map((g) => (
                 <option key={g.value} value={g.value}>{g.label}</option>
               ))}
+            </select>
+          </div>
+          <div style={{ flex: 1 }}>
+            <label
+              style={{
+                display: "block",
+                fontSize: "0.8rem",
+                fontWeight: 600,
+                color: "#374151",
+                marginBottom: "6px",
+              }}
+            >
+              Difficulty
+            </label>
+            <select
+              value={difficulty}
+              onChange={(e) => setDifficulty(e.target.value as "beginner" | "intermediate" | "advanced")}
+              style={{
+                width: "100%",
+                padding: "12px 14px",
+                fontSize: "0.9rem",
+                border: "1px solid #e2e8f0",
+                borderRadius: "8px",
+                background: "white",
+                cursor: "pointer",
+              }}
+            >
+              <option value="beginner">Beginner</option>
+              <option value="intermediate">Intermediate</option>
+              <option value="advanced">Advanced</option>
             </select>
           </div>
         </div>

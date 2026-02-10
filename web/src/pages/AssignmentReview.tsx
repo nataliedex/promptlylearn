@@ -11,7 +11,7 @@
 
 import { useState, useEffect, useRef, useMemo } from "react";
 import { useParams, Link, useNavigate, useLocation } from "react-router-dom";
-import EducatorHeader from "../components/EducatorHeader";
+import EducatorAppHeader from "../components/EducatorAppHeader";
 import { useToast } from "../components/Toast";
 import {
   getLesson,
@@ -125,6 +125,15 @@ export default function AssignmentReview() {
     return `Assigned ${month} ${day}`;
   };
 
+  // Format date as "Due Jan 15"
+  const formatDueDate = (isoDate: string | undefined): string | null => {
+    if (!isoDate) return null;
+    const date = new Date(isoDate + "T00:00:00"); // Parse as local date
+    const month = date.toLocaleDateString("en-US", { month: "short" });
+    const day = date.getDate();
+    return `Due ${month} ${day}`;
+  };
+
   const [reviewData, setReviewData] = useState<AssignmentReviewData | null>(null);
   const [reviewStatus, setReviewStatus] = useState<AssignmentReviewStatus | null>(null);
   const [lesson, setLesson] = useState<Lesson | null>(null);
@@ -228,9 +237,12 @@ export default function AssignmentReview() {
         assignedData.assignments
       );
 
-      // Add earliest assigned date
+      // Add earliest assigned date and due date
       if (assignedData.earliestAssignedAt) {
         data.assignedAt = assignedData.earliestAssignedAt;
+      }
+      if (assignedData.dueDate) {
+        data.dueDate = assignedData.dueDate;
       }
 
       // Capture class context from API (overrides navigation state if available)
@@ -468,17 +480,71 @@ export default function AssignmentReview() {
     );
   }
 
-  // Breadcrumbs: Home / {Assignment Title}
-  // Class context is shown elsewhere on the page, not in the breadcrumb trail.
-  const breadcrumbs = [
-    { label: reviewData?.title || "Assignment" },
-  ];
+  // Breadcrumbs: Home / Grade / Subject / Skill / Assignment
+  // Build hierarchical breadcrumbs from lesson metadata
+  // Each breadcrumb (except the last) links to /educator with filters applied
+
+  // Normalize grade level to display format: "1st grade", "2nd grade", etc.
+  const formatGradeLabel = (gradeLevel: string): string => {
+    // Extract the numeric part from various formats: "Grade 1", "1st Grade", "1", "1st grade"
+    const match = gradeLevel.match(/(\d+)/);
+    if (!match) return gradeLevel; // Return as-is if no number found
+
+    const num = parseInt(match[1], 10);
+    const suffix = num === 1 ? "st" : num === 2 ? "nd" : num === 3 ? "rd" : "th";
+    return `${num}${suffix} grade`;
+  };
+
+  const breadcrumbs: Array<{ label: string; to?: string }> = [];
+
+  // 1. Grade Level (first after Home)
+  if (lesson?.gradeLevel) {
+    const gradeParams = new URLSearchParams({
+      drawer: "assignments",
+      grade: lesson.gradeLevel,
+    });
+    breadcrumbs.push({
+      label: formatGradeLabel(lesson.gradeLevel),
+      to: `/educator?${gradeParams.toString()}`,
+    });
+  }
+
+  // 2. Subject
+  if (lesson?.subject) {
+    const subjectParams = new URLSearchParams({
+      drawer: "assignments",
+      ...(lesson?.gradeLevel && { grade: lesson.gradeLevel }),
+      subject: lesson.subject,
+    });
+    breadcrumbs.push({
+      label: lesson.subject,
+      to: `/educator?${subjectParams.toString()}`,
+    });
+  }
+
+  // 3. Skill Level (Beginner, Intermediate, Advanced)
+  if (lesson?.difficulty) {
+    const difficultyLabel = lesson.difficulty.charAt(0).toUpperCase() + lesson.difficulty.slice(1);
+    const difficultyParams = new URLSearchParams({
+      drawer: "assignments",
+      ...(lesson?.gradeLevel && { grade: lesson.gradeLevel }),
+      ...(lesson?.subject && { subject: lesson.subject }),
+      difficulty: lesson.difficulty,
+    });
+    breadcrumbs.push({
+      label: difficultyLabel,
+      to: `/educator?${difficultyParams.toString()}`,
+    });
+  }
+
+  // 4. Assignment title (current page - no link)
+  breadcrumbs.push({ label: reviewData?.title || "Assignment" });
 
   // Error state
   if (error) {
     return (
       <div className="container">
-        <EducatorHeader breadcrumbs={breadcrumbs} />
+        <EducatorAppHeader mode="slim" breadcrumbs={breadcrumbs} />
         <div className="card" style={{ background: "#ffebee", borderLeft: "4px solid #d32f2f" }}>
           <h3 style={{ color: "#d32f2f", margin: "0 0 8px 0" }}>Error Loading Assignment</h3>
           <p style={{ color: "#666", margin: 0 }}>{error}</p>
@@ -502,7 +568,7 @@ export default function AssignmentReview() {
   if (!reviewData) {
     return (
       <div className="container">
-        <EducatorHeader breadcrumbs={breadcrumbs} />
+        <EducatorAppHeader mode="slim" breadcrumbs={breadcrumbs} />
         <div className="card">
           <p>Assignment not found.</p>
           <Link to="/educator" className="btn btn-primary" style={{ marginTop: "16px" }}>
@@ -517,14 +583,14 @@ export default function AssignmentReview() {
   if (reviewData.students.length === 0) {
     return (
       <div className="container">
-        <EducatorHeader breadcrumbs={breadcrumbs} />
+        <EducatorAppHeader mode="slim" breadcrumbs={breadcrumbs} />
 
         <div className="header">
           <div>
             <h1>{reviewData.title}</h1>
-            {reviewData.assignedAt && (
+            {(reviewData.assignedAt || reviewData.dueDate) && (
               <p style={{ color: "rgba(255,255,255,0.7)", margin: "4px 0 0 0", fontSize: "0.9rem" }}>
-                {formatAssignedDate(reviewData.assignedAt)}
+                {[formatAssignedDate(reviewData.assignedAt), formatDueDate(reviewData.dueDate)].filter(Boolean).join(" · ")}
               </p>
             )}
           </div>
@@ -590,15 +656,25 @@ export default function AssignmentReview() {
 
   return (
     <div className="container">
-      <EducatorHeader breadcrumbs={breadcrumbs} />
+      <EducatorAppHeader mode="slim" breadcrumbs={breadcrumbs} />
 
       {/* Header */}
       <div className="header">
         <div>
           <h1>{reviewData.title}</h1>
-          {reviewData.assignedAt && (
-            <p style={{ color: "rgba(255,255,255,0.7)", margin: "4px 0 0 0", fontSize: "0.9rem" }}>
-              {formatAssignedDate(reviewData.assignedAt)}
+          {/* Lesson metadata line: "Math 1.3 · Grade 1 · Beginner" */}
+          {lesson && (lesson.systemIndex || lesson.gradeLevel || lesson.difficulty) && (
+            <p style={{ color: "rgba(255,255,255,0.8)", margin: "4px 0 0 0", fontSize: "0.9rem" }}>
+              {[
+                lesson.systemIndex,
+                lesson.gradeLevel ? `Grade ${lesson.gradeLevel}` : null,
+                lesson.difficulty ? lesson.difficulty.charAt(0).toUpperCase() + lesson.difficulty.slice(1) : null,
+              ].filter(Boolean).join(" · ")}
+            </p>
+          )}
+          {(reviewData.assignedAt || reviewData.dueDate) && (
+            <p style={{ color: "rgba(255,255,255,0.7)", margin: "4px 0 0 0", fontSize: "0.85rem" }}>
+              {[formatAssignedDate(reviewData.assignedAt), formatDueDate(reviewData.dueDate)].filter(Boolean).join(" · ")}
             </p>
           )}
         </div>
@@ -2617,12 +2693,13 @@ interface TeacherStatusStyle {
   icon: string;
 }
 
+// Unified workflow status labels and colors (consistent across all educator surfaces)
 const TEACHER_STATUS_CONFIG: Record<TeacherStatusValue, TeacherStatusStyle> = {
-  "not-started": { bg: "#f1f5f9", color: "#94a3b8", label: "Not started", icon: "" },
-  "pending-review": { bg: "#fff7ed", color: "#ea580c", label: "Needs review", icon: "" },
-  "reviewed": { bg: "#e8f5e9", color: "#166534", label: "Reviewed", icon: "" },
-  "followup-scheduled": { bg: "#fef3c7", color: "#b45309", label: "Follow-up scheduled", icon: "" },
-  "resolved": { bg: "#e8f5e9", color: "#166534", label: "Reviewed", icon: "" },
+  "not-started": { bg: "#f8fafc", color: "#94a3b8", label: "\u2014", icon: "" }, // em-dash for NO_ACTION
+  "pending-review": { bg: "#fffbeb", color: "#d97706", label: "Needs review", icon: "" },
+  "reviewed": { bg: "#ecfdf5", color: "#059669", label: "Resolved", icon: "" },
+  "followup-scheduled": { bg: "#f5f3ff", color: "#7c3aed", label: "Follow-up scheduled", icon: "" },
+  "resolved": { bg: "#ecfdf5", color: "#059669", label: "Resolved", icon: "" },
 };
 
 /** Type-safe label lookup — never returns undefined or "—" */

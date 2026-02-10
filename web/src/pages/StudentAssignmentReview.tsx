@@ -9,7 +9,7 @@
  */
 
 import { useState, useEffect, useRef, useCallback } from "react";
-import { useParams, Link, useNavigate, useLocation, useSearchParams } from "react-router-dom";
+import { useParams, Link, useLocation } from "react-router-dom";
 import {
   getLesson,
   getSessions,
@@ -40,12 +40,20 @@ import {
   type ReviewState,
   type Recommendation,
   type TeacherTodo,
+  type DerivedInsight,
+  type TeacherWorkflowStatus,
   CHECKLIST_ACTIONS,
   REVIEW_STATE_LABELS,
+  WORKFLOW_STATUS_LABELS,
+  WORKFLOW_STATUS_COLORS,
   isAttentionNowRecommendation,
+  getStudentAssignmentDerivedInsights,
+  computeTeacherWorkflowStatus,
+  resolveAllInsightsForStudent,
+  reactivateInsightsForStudent,
 } from "../services/api";
 import Drawer from "../components/Drawer";
-import EducatorHeader from "../components/EducatorHeader";
+import EducatorAppHeader from "../components/EducatorAppHeader";
 import { useToast } from "../components/Toast";
 import {
   buildStudentDrilldown,
@@ -59,6 +67,13 @@ import {
 import { getCategoryConfig } from "../utils/recommendationConfig";
 import type { StudentDrilldownData, QuestionOutcome } from "../types/teacherDashboard";
 
+// Type for a conversation turn in video transcript
+interface ConversationTurn {
+  role: "coach" | "student";
+  message: string;
+  timestampSec: number;
+}
+
 // Type for a single attempt at a question
 interface QuestionAttempt {
   sessionId: string;
@@ -70,8 +85,21 @@ interface QuestionAttempt {
   hasVoiceRecording: boolean;
   audioBase64?: string;
   audioFormat?: string;
+  hasVideoRecording: boolean;
+  videoUrl?: string;
+  videoDurationSec?: number;
+  videoCreatedAt?: string;
+  conversationTurns?: ConversationTurn[];
   score?: number;
   educatorNote?: string;
+  // Stagnation deferral tracking (informational for teachers)
+  deferredByCoach?: boolean;
+  deferralMetadata?: {
+    reason: "stagnation";
+    pattern?: string; // "repeated-error" | "persistent-uncertainty" | "no-progress"
+    attemptCount?: number;
+    deferredAt?: string;
+  };
 }
 
 // Type for a question with all attempts across sessions
@@ -111,24 +139,6 @@ const RECOMMENDATION_TYPE_LABELS: Record<string, string> = {
   "notable-improvement": "Celebrate progress",
   "persistence": "Celebrate progress",
   "watch-progress": "Monitor",
-};
-
-// Map API action types to UI action types (all lowercase for matching)
-const ACTION_TYPE_MAP: Record<string, string> = {
-  // Standard forms
-  "award_badge": "badge",
-  "add_to_todos": "todo",
-  "add_todo": "todo",
-  "invite_coaching": "coaching",
-  // Shorthand forms
-  "badge": "badge",
-  "todo": "todo",
-  "coaching": "coaching",
-  // Hyphenated variations
-  "award-badge": "badge",
-  "add-to-todos": "todo",
-  "add-todo": "todo",
-  "invite-coaching": "coaching",
 };
 
 /**
@@ -183,7 +193,7 @@ function getSuggestedActions(recommendation: Recommendation): string[] {
   const actions: string[] = [];
 
   // Get the category from insight type or rule name
-  const category =
+  const category: string =
     recommendation.insightType ||
     recommendation.triggerData?.ruleName ||
     (recommendation as any).type ||
@@ -344,7 +354,6 @@ function getSuggestedSessionFocus(questions: QuestionWithAttempts[]): SuggestedS
   const weak = analyzed.filter((a) => a.rank <= 1); // developing or not-attempted
   const supported = analyzed.filter((a) => a.outcome === "with-support");
   const hintHeavy = analyzed.filter((a) => a.usedHint && a.rank < 3);
-  const strong = analyzed.filter((a) => a.rank === 3);
 
   // Pick the top 1–2 focus questions (weakest first, then supported-with-hints)
   const focusQuestions: AnalyzedQuestion[] = [];
@@ -476,13 +485,8 @@ function extractTopicPhrase(questionText: string): string {
 
 export default function StudentAssignmentReview() {
   const { lessonId, studentId } = useParams<{ lessonId: string; studentId: string }>();
-  const navigate = useNavigate();
   const location = useLocation();
-  const [searchParams] = useSearchParams();
   const { showSuccess, showError } = useToast();
-
-  // Check if we should show insights expanded by default
-  const showInsightsParam = searchParams.get("showInsights") === "true";
 
   // Navigation state for context (breadcrumbs, recommendation deep links)
   const navigationState = location.state as {
@@ -496,9 +500,12 @@ export default function StudentAssignmentReview() {
     recommendationId?: string;
     recommendationType?: string;
     categoryLabel?: string;
+    // DerivedInsight fields for consistent display
+    insightTitle?: string;
+    insightWhy?: string;
+    highlightQuestionId?: string;
   } | null;
 
-  const recommendationType = navigationState?.recommendationType;
   const cameFromRecommendedActions = navigationState?.from === "recommended-actions";
 
   const [drilldown, setDrilldown] = useState<StudentDrilldownData | null>(null);
@@ -520,6 +527,7 @@ export default function StudentAssignmentReview() {
   const [isMarkingReviewed, setIsMarkingReviewed] = useState(false);
   const [isUnmarkingReviewed, setIsUnmarkingReviewed] = useState(false);
   const [showReviewConfirmation, setShowReviewConfirmation] = useState(false);
+  const [actionsHighlighted, setActionsHighlighted] = useState(false);
 
   // Actions section state
   const [awardBadgeChecked, setAwardBadgeChecked] = useState(false);
@@ -543,6 +551,10 @@ export default function StudentAssignmentReview() {
   const [activeRecommendation, setActiveRecommendation] = useState<Recommendation | null>(null);
   const [recommendationLoading, setRecommendationLoading] = useState(true);
 
+  // Derived insights from coach analytics
+  const [derivedInsights, setDerivedInsights] = useState<DerivedInsight[]>([]);
+  const [insightsLoading, setInsightsLoading] = useState(true);
+
   // Expanded questions
   const [expandedQuestions, setExpandedQuestions] = useState<Set<string>>(new Set());
 
@@ -563,6 +575,31 @@ export default function StudentAssignmentReview() {
   // Audio playback
   const [playingQuestionId, setPlayingQuestionId] = useState<string | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+
+  // Video playback modal
+  const [videoModalOpen, setVideoModalOpen] = useState(false);
+  const [videoUrl, setVideoUrl] = useState<string | null>(null);
+  const [videoDuration, setVideoDuration] = useState(0);
+  const [videoQuestionNum, setVideoQuestionNum] = useState(0);
+  const [videoTranscript, setVideoTranscript] = useState<ConversationTurn[] | null>(null);
+  const [transcriptExpanded, setTranscriptExpanded] = useState(false);
+
+  // Handle video view
+  const handleViewVideo = (
+    url: string,
+    durationSec: number,
+    questionNum: number,
+    transcript?: ConversationTurn[]
+  ) => {
+    // Construct full URL (backend serves at /uploads/videos/*)
+    const fullUrl = url.startsWith("http") ? url : `http://localhost:3001${url}`;
+    setVideoUrl(fullUrl);
+    setVideoDuration(durationSec);
+    setVideoQuestionNum(questionNum);
+    setVideoTranscript(transcript || null);
+    setTranscriptExpanded(false); // Reset expansion state
+    setVideoModalOpen(true);
+  };
 
   useEffect(() => {
     if (!lessonId || !studentId) return;
@@ -647,6 +684,11 @@ export default function StudentAssignmentReview() {
                   hasVoiceRecording: !!response.audioBase64,
                   audioBase64: response.audioBase64,
                   audioFormat: response.audioFormat,
+                  hasVideoRecording: !!response.video,
+                  videoUrl: response.video?.url,
+                  videoDurationSec: response.video?.durationSec,
+                  videoCreatedAt: response.video?.createdAt,
+                  conversationTurns: response.conversationTurns,
                   score: criteriaScore?.score,
                   educatorNote: response.educatorNote,
                 });
@@ -717,6 +759,27 @@ export default function StudentAssignmentReview() {
       })
       .finally(() => {
         setRecommendationLoading(false);
+      });
+  }, [lessonId, studentId]);
+
+  // Load derived insights from coach analytics
+  useEffect(() => {
+    if (!lessonId || !studentId) {
+      setInsightsLoading(false);
+      return;
+    }
+
+    setInsightsLoading(true);
+    getStudentAssignmentDerivedInsights(lessonId, studentId)
+      .then((data) => {
+        setDerivedInsights(data.insights || []);
+      })
+      .catch((err) => {
+        console.log("Derived insights not available:", err);
+        setDerivedInsights([]);
+      })
+      .finally(() => {
+        setInsightsLoading(false);
       });
   }, [lessonId, studentId]);
 
@@ -917,7 +980,7 @@ export default function StudentAssignmentReview() {
       }, 8000);
 
       // Show undo toast
-      showSuccess("Assignment marked as reviewed.", {
+      showSuccess("Marked reviewed.", {
         duration: 8000,
         action: {
           label: "Undo",
@@ -958,14 +1021,43 @@ export default function StudentAssignmentReview() {
     }
   };
 
-  const handleConfirmNoFollowUp = () => {
+  const handleConfirmNoFollowUp = async () => {
+    if (!lessonId || !studentId) return;
+
     setShowReviewConfirmation(false);
+
+    // Resolve the active recommendation so it no longer drives ACTION_REQUIRED
+    if (activeRecommendation) {
+      try {
+        await markRecommendationReviewed(activeRecommendation.id);
+        setActiveRecommendation(null);
+      } catch (err) {
+        console.log("Failed to resolve recommendation:", err);
+        // Non-blocking - continue even if this fails
+      }
+    }
+
+    // Resolve all derived insights
+    if (derivedInsights.length > 0) {
+      try {
+        await resolveAllInsightsForStudent(lessonId, studentId, "no_followup_needed");
+        setDerivedInsights([]);
+      } catch (err) {
+        console.log("Failed to resolve insights:", err);
+        // Non-blocking - continue even if this fails
+      }
+    }
+
+    // Now mark as reviewed
     handleMarkReviewed();
   };
 
   const handleScrollToActions = () => {
     setShowReviewConfirmation(false);
     actionsSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    // Add highlight animation to Actions section
+    setActionsHighlighted(true);
+    setTimeout(() => setActionsHighlighted(false), 1500);
   };
 
   const handleReopenForReview = async () => {
@@ -1007,6 +1099,16 @@ export default function StudentAssignmentReview() {
         }
       } catch (e) {
         console.error("Failed to fetch resolved recommendations:", e);
+      }
+
+      // 3b. Reactivate any resolved derived insights
+      try {
+        await reactivateInsightsForStudent(lessonId, studentId);
+        // Reload derived insights
+        const { insights } = await getStudentAssignmentDerivedInsights(lessonId, studentId);
+        setDerivedInsights(insights || []);
+      } catch (e) {
+        console.log("Failed to reactivate insights:", e);
       }
 
       // 4. Reload active recommendations so Actions section reappears
@@ -1167,6 +1269,20 @@ export default function StudentAssignmentReview() {
         }
         // Clear active recommendation to hide callout and actions
         setActiveRecommendation(null);
+      }
+
+      // Resolve all derived insights for this student-assignment
+      // This prevents the insights from showing again after actions are taken
+      if (derivedInsights.length > 0) {
+        try {
+          const reason = hasTodoToCreate ? "todo_created" : "mark_reviewed";
+          await resolveAllInsightsForStudent(lessonId, studentId, reason);
+          // Clear insights from local state
+          setDerivedInsights([]);
+        } catch (err) {
+          console.log("Failed to resolve insights:", err);
+          // Non-blocking - continue even if this fails
+        }
       }
 
       // Append system-generated notes for actions taken
@@ -1357,10 +1473,14 @@ export default function StudentAssignmentReview() {
   // This is the single source of truth for showing Actions/callout
   const hasActionableRecommendation = isRecommendationActionable(activeRecommendation);
 
-  const isActionRequired =
-    hasActionableRecommendation &&
-    activeRecommendation !== null &&
-    isAttentionNowRecommendation(activeRecommendation);
+  // Compute unified workflow status to determine if ACTION_REQUIRED
+  const workflowStatus = computeTeacherWorkflowStatus({
+    reviewState: assignment?.reviewState || "not_started",
+    hasSubmission: !!session,
+    derivedInsights: derivedInsights,
+    openTodosCount: assignment?.todoIds?.length || 0,
+  });
+  const isActionRequired = workflowStatus === "ACTION_REQUIRED";
 
   // Get the suggested actions from the recommendation (mapped to UI action types)
   const suggestedActions = activeRecommendation ? getSuggestedActions(activeRecommendation) : [];
@@ -1375,6 +1495,13 @@ export default function StudentAssignmentReview() {
     }
   }, [loading, recommendationLoading, hasActionableRecommendation, cameFromRecommendedActions]);
 
+  // Auto-close the review confirmation panel if ACTION_REQUIRED status is resolved
+  useEffect(() => {
+    if (showReviewConfirmation && !isActionRequired) {
+      setShowReviewConfirmation(false);
+    }
+  }, [showReviewConfirmation, isActionRequired]);
+
   if (loading) {
     return (
       <div className="loading">
@@ -1387,7 +1514,7 @@ export default function StudentAssignmentReview() {
   if (!lesson || !student) {
     return (
       <div className="container">
-        <EducatorHeader breadcrumbs={[{ label: "Not found" }]} />
+        <EducatorAppHeader mode="slim" breadcrumbs={[{ label: "Not found" }]} />
         <div className="card">
           <p>Student or assignment not found.</p>
           <Link to="/educator" className="btn btn-primary" style={{ marginTop: "16px" }}>
@@ -1415,7 +1542,7 @@ export default function StudentAssignmentReview() {
   if (!session || !drilldown) {
     return (
       <div className="container">
-        <EducatorHeader breadcrumbs={breadcrumbs} />
+        <EducatorAppHeader mode="slim" breadcrumbs={breadcrumbs} />
 
         {/* Assignment Context Banner */}
         <div
@@ -1482,7 +1609,7 @@ export default function StudentAssignmentReview() {
 
   return (
     <div className="container">
-      <EducatorHeader breadcrumbs={breadcrumbs} />
+      <EducatorAppHeader mode="slim" breadcrumbs={breadcrumbs} />
 
       {/* Unified Header Card */}
       <div
@@ -1568,6 +1695,9 @@ export default function StudentAssignmentReview() {
               <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
                 <ReviewStateBadge
                   reviewState={assignment.reviewState}
+                  hasSubmission={!!drilldown.completedAt}
+                  derivedInsights={derivedInsights}
+                  openTodosCount={assignment.todoIds?.length || 0}
                   onUnmark={assignment.reviewState && assignment.reviewState !== "not_started" && assignment.reviewState !== "pending_review" ? handleReopenForReview : undefined}
                   isUnmarking={isUnmarkingReviewed}
                   onFollowupClick={assignment.todoIds?.length ? handleFollowupClick : undefined}
@@ -1595,22 +1725,22 @@ export default function StudentAssignmentReview() {
               </div>
             )}
 
-            {/* Inline confirmation panel for attention-required students */}
-            {showReviewConfirmation && assignment?.reviewState === "pending_review" && activeRecommendation && (
+            {/* Inline confirmation panel for ACTION_REQUIRED status */}
+            {showReviewConfirmation && assignment?.reviewState === "pending_review" && isActionRequired && (
               <div style={{
                 background: "#fffbeb",
                 border: "1px solid #f59e0b",
                 borderRadius: "8px",
                 padding: "12px 14px",
-                maxWidth: "320px",
+                maxWidth: "360px",
               }}>
                 <div style={{ fontWeight: 600, fontSize: "0.85rem", color: "#92400e", marginBottom: "6px" }}>
-                  This student was flagged for attention
+                  Action recommended before reviewing
                 </div>
                 <div style={{ fontSize: "0.82rem", color: "#78350f", marginBottom: "10px", lineHeight: 1.4 }}>
-                  {activeRecommendation.reason}
+                  This submission was flagged by the system. Choose an action, or confirm that no follow-up is needed.
                 </div>
-                <div style={{ display: "flex", gap: "8px" }}>
+                <div style={{ display: "flex", gap: "8px", alignItems: "center", flexWrap: "wrap" }}>
                   <button
                     onClick={handleScrollToActions}
                     style={{
@@ -1641,12 +1771,141 @@ export default function StudentAssignmentReview() {
                   >
                     No follow-up needed
                   </button>
+                  <button
+                    onClick={() => setShowReviewConfirmation(false)}
+                    style={{
+                      padding: "6px 8px",
+                      background: "transparent",
+                      color: "#92400e",
+                      border: "none",
+                      cursor: "pointer",
+                      fontSize: "0.82rem",
+                      textDecoration: "underline",
+                    }}
+                  >
+                    Cancel
+                  </button>
                 </div>
               </div>
             )}
           </div>
         </div>
       </div>
+
+      {/* Derived Insights from Coach Analytics */}
+      {derivedInsights.length > 0 && (
+        <div
+          style={{
+            marginBottom: "12px",
+          }}
+        >
+          {derivedInsights.map((insight) => {
+            const insightConfig = {
+              NEEDS_SUPPORT: { color: "#dc2626", bgColor: "#fef2f2", label: "NEEDS SUPPORT" },
+              CHECK_IN: { color: "#d97706", bgColor: "#fffbeb", label: "CHECK IN" },
+              EXTEND_LEARNING: { color: "#059669", bgColor: "#ecfdf5", label: "EXTEND LEARNING" },
+              CHALLENGE_OPPORTUNITY: { color: "#7c3aed", bgColor: "#f5f3ff", label: "CHALLENGE OPPORTUNITY" },
+              CELEBRATE_PROGRESS: { color: "#0891b2", bgColor: "#ecfeff", label: "CELEBRATE PROGRESS" },
+              GROUP_SUPPORT_CANDIDATE: { color: "#dc2626", bgColor: "#fef2f2", label: "GROUP REVIEW" },
+              MOVE_ON_EVENT: { color: "#dc2626", bgColor: "#fef2f2", label: "MOVED ON" },
+              MISCONCEPTION_FLAG: { color: "#ea580c", bgColor: "#fff7ed", label: "MISCONCEPTION" },
+            }[insight.type] || { color: "#64748b", bgColor: "#f1f5f9", label: insight.type };
+
+            const isHighlightedQuestion =
+              navigationState?.highlightQuestionId === insight.questionId ||
+              (navigationState?.insightTitle === insight.title);
+
+            return (
+              <div
+                key={insight.id}
+                className="card"
+                style={{
+                  background: "white",
+                  borderLeft: `3px solid ${insightConfig.color}`,
+                  padding: "14px 18px",
+                  marginBottom: "8px",
+                  boxShadow: isHighlightedQuestion ? `0 0 0 2px ${insightConfig.color}40` : undefined,
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "flex-start", gap: "12px" }}>
+                  <div style={{ flex: 1 }}>
+                    {/* Category badge */}
+                    <span
+                      style={{
+                        display: "inline-block",
+                        fontSize: "0.65rem",
+                        fontWeight: 600,
+                        color: insightConfig.color,
+                        background: insightConfig.bgColor,
+                        padding: "3px 10px",
+                        borderRadius: "3px",
+                        letterSpacing: "0.05em",
+                        marginBottom: "8px",
+                      }}
+                    >
+                      {insightConfig.label}
+                    </span>
+
+                    {/* Title */}
+                    <h4
+                      style={{
+                        margin: "0 0 6px 0",
+                        fontSize: "0.95rem",
+                        fontWeight: 600,
+                        color: "#1e293b",
+                      }}
+                    >
+                      {insight.title}
+                    </h4>
+
+                    {/* Why text */}
+                    <p
+                      style={{
+                        margin: 0,
+                        fontSize: "0.85rem",
+                        color: "#64748b",
+                        lineHeight: 1.5,
+                      }}
+                    >
+                      {insight.why}
+                    </p>
+
+                    {/* Question reference if scope is question */}
+                    {insight.scope === "question" && insight.evidence.questionIndex !== undefined && (
+                      <button
+                        onClick={() => {
+                          const questionId = insight.questionId;
+                          if (questionId) {
+                            setExpandedQuestions((prev) => new Set([...prev, questionId]));
+                            setTimeout(() => {
+                              document.getElementById(`question-${questionId}`)?.scrollIntoView({
+                                behavior: "smooth",
+                                block: "start",
+                              });
+                            }, 100);
+                          }
+                        }}
+                        style={{
+                          marginTop: "8px",
+                          padding: "4px 10px",
+                          fontSize: "0.8rem",
+                          color: insightConfig.color,
+                          background: "transparent",
+                          border: `1px solid ${insightConfig.color}`,
+                          borderRadius: "4px",
+                          cursor: "pointer",
+                        }}
+                      >
+                        View Question {(insight.evidence.questionIndex || 0) + 1}
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
 
       {/* Teacher Notes */}
       <div className="card" style={{ background: "white", border: "1px solid #e2e8f0", marginBottom: "12px" }}>
@@ -1713,7 +1972,9 @@ export default function StudentAssignmentReview() {
           className="card"
           style={{
             background: "white",
-            border: "1px solid #e2e8f0",
+            border: actionsHighlighted ? "2px solid #667eea" : "1px solid #e2e8f0",
+            boxShadow: actionsHighlighted ? "0 0 0 3px rgba(102, 126, 234, 0.2)" : undefined,
+            transition: "border-color 0.3s ease, box-shadow 0.3s ease",
           }}
         >
           <h3 style={{ margin: "0 0 12px 0", color: "#1e293b", fontSize: "1rem" }}>Actions</h3>
@@ -2411,6 +2672,7 @@ export default function StudentAssignmentReview() {
           }}
           playingAttemptKey={playingQuestionId}
           onPlayAudio={playAudio}
+          onViewVideo={handleViewVideo}
         />
       ))}
 
@@ -2562,6 +2824,201 @@ export default function StudentAssignmentReview() {
           </div>
         )}
       </Drawer>
+
+      {/* Video Playback Drawer */}
+      <Drawer
+        isOpen={videoModalOpen}
+        onClose={() => {
+          setVideoModalOpen(false);
+          setVideoUrl(null);
+        }}
+        title={`Video Response - Question ${videoQuestionNum}`}
+        width="600px"
+      >
+        <div style={{ padding: "0 0 16px 0" }}>
+          {videoUrl && (
+            <>
+              {/* Video player */}
+              <div style={{
+                width: "100%",
+                aspectRatio: "16/9",
+                background: "#1f2937",
+                borderRadius: "8px",
+                overflow: "hidden",
+                marginBottom: "16px",
+              }}>
+                <video
+                  src={videoUrl}
+                  controls
+                  autoPlay
+                  style={{
+                    width: "100%",
+                    height: "100%",
+                    objectFit: "contain",
+                  }}
+                />
+              </div>
+
+              {/* Video info */}
+              <div style={{
+                display: "flex",
+                gap: "16px",
+                padding: "12px",
+                background: "#f8fafc",
+                borderRadius: "8px",
+                fontSize: "0.85rem",
+                color: "#64748b",
+              }}>
+                <div>
+                  <span style={{ fontWeight: 600 }}>Duration:</span>{" "}
+                  {Math.floor(videoDuration / 60)}:{(videoDuration % 60).toString().padStart(2, "0")}
+                </div>
+              </div>
+
+              {/* Transcript section */}
+              <div style={{ marginTop: "16px" }}>
+                {videoTranscript && videoTranscript.length > 0 ? (
+                  <>
+                    {/* Toggle button */}
+                    <button
+                      onClick={() => setTranscriptExpanded(!transcriptExpanded)}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "8px",
+                        padding: "10px 14px",
+                        background: "transparent",
+                        border: "1px solid #e2e8f0",
+                        borderRadius: "8px",
+                        cursor: "pointer",
+                        fontSize: "0.85rem",
+                        fontWeight: 500,
+                        color: "#475569",
+                        width: "100%",
+                        justifyContent: "space-between",
+                      }}
+                    >
+                      <span style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                          <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
+                          <polyline points="14,2 14,8 20,8" />
+                          <line x1="16" y1="13" x2="8" y2="13" />
+                          <line x1="16" y1="17" x2="8" y2="17" />
+                          <polyline points="10,9 9,9 8,9" />
+                        </svg>
+                        {transcriptExpanded ? "Hide transcript" : "Show transcript"}
+                      </span>
+                      <svg
+                        width="16"
+                        height="16"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        style={{
+                          transform: transcriptExpanded ? "rotate(180deg)" : "rotate(0deg)",
+                          transition: "transform 0.2s",
+                        }}
+                      >
+                        <polyline points="6,9 12,15 18,9" />
+                      </svg>
+                    </button>
+
+                    {/* Transcript content */}
+                    {transcriptExpanded && (
+                      <div
+                        style={{
+                          marginTop: "12px",
+                          maxHeight: "300px",
+                          overflowY: "auto",
+                          border: "1px solid #e2e8f0",
+                          borderRadius: "8px",
+                          padding: "12px",
+                          background: "#fafafa",
+                        }}
+                      >
+                        {videoTranscript.map((turn, i) => {
+                          const mins = Math.floor(turn.timestampSec / 60);
+                          const secs = turn.timestampSec % 60;
+                          const timestamp = `${mins}:${secs.toString().padStart(2, "0")}`;
+                          const isCoach = turn.role === "coach";
+
+                          return (
+                            <div
+                              key={i}
+                              style={{
+                                marginBottom: i < videoTranscript.length - 1 ? "12px" : 0,
+                                padding: "10px 12px",
+                                background: isCoach ? "#ede9fe" : "#ecfdf5",
+                                borderRadius: "8px",
+                                borderLeft: `3px solid ${isCoach ? "#7c3aed" : "#10b981"}`,
+                              }}
+                            >
+                              <div
+                                style={{
+                                  display: "flex",
+                                  justifyContent: "space-between",
+                                  alignItems: "center",
+                                  marginBottom: "4px",
+                                }}
+                              >
+                                <span
+                                  style={{
+                                    fontWeight: 600,
+                                    fontSize: "0.75rem",
+                                    color: isCoach ? "#5b21b6" : "#047857",
+                                    textTransform: "uppercase",
+                                  }}
+                                >
+                                  {isCoach ? "Coach" : "Student"}
+                                </span>
+                                <span
+                                  style={{
+                                    fontSize: "0.7rem",
+                                    color: "#94a3b8",
+                                    fontFamily: "monospace",
+                                  }}
+                                >
+                                  {timestamp}
+                                </span>
+                              </div>
+                              <p
+                                style={{
+                                  margin: 0,
+                                  fontSize: "0.85rem",
+                                  color: "#334155",
+                                  lineHeight: 1.5,
+                                }}
+                              >
+                                {turn.message}
+                              </p>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  /* Fallback when no transcript available */
+                  <div
+                    style={{
+                      padding: "12px",
+                      background: "#f8fafc",
+                      borderRadius: "8px",
+                      fontSize: "0.85rem",
+                      color: "#94a3b8",
+                      textAlign: "center",
+                      fontStyle: "italic",
+                    }}
+                  >
+                    Transcript unavailable for this video.
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+        </div>
+      </Drawer>
     </div>
   );
 }
@@ -2651,39 +3108,47 @@ function RecommendationContext({
   );
 }
 
-// Review State Badge Component
-// Shows the current review state with appropriate styling and unmark option
+// Teacher Workflow Status Badge Component
+// Uses unified workflow status for consistent display across all educator surfaces
 // ============================================
 
 function ReviewStateBadge({
   reviewState,
+  hasSubmission = true,
+  derivedInsights = [],
+  openTodosCount = 0,
   onUnmark,
   isUnmarking,
   onFollowupClick,
 }: {
   reviewState?: ReviewState;
+  hasSubmission?: boolean;
+  derivedInsights?: DerivedInsight[];
+  openTodosCount?: number;
   onUnmark?: () => void;
   isUnmarking?: boolean;
   onFollowupClick?: () => void;
 }) {
-  const config: Record<ReviewState, { bg: string; color: string; icon: string }> = {
-    not_started: { bg: "#f1f5f9", color: "#64748b", icon: "" },
-    pending_review: { bg: "#fff7ed", color: "#ea580c", icon: "" },
-    reviewed: { bg: "#e8f5e9", color: "#166534", icon: "" },
-    followup_scheduled: { bg: "#fef3c7", color: "#b45309", icon: "" },
-    resolved: { bg: "#e8f5e9", color: "#166534", icon: "" },
-  };
+  // Compute unified workflow status
+  const workflowStatus = computeTeacherWorkflowStatus({
+    reviewState: reviewState as "pending_review" | "reviewed" | "not_started" | "followup_scheduled" | "resolved" | null,
+    hasSubmission,
+    derivedInsights,
+    openTodosCount,
+  });
 
-  const state = reviewState || "pending_review";
-  const { bg, color, icon } = config[state];
-  const isClickable = state === "followup_scheduled" && !!onFollowupClick;
+  const { color, bgColor } = WORKFLOW_STATUS_COLORS[workflowStatus];
+  const label = WORKFLOW_STATUS_LABELS[workflowStatus];
+
+  // Clickable only when there are follow-ups to view
+  const isClickable = workflowStatus === "FOLLOW_UP_SCHEDULED" && !!onFollowupClick;
 
   return (
     <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
       <span
         onClick={isClickable ? onFollowupClick : undefined}
         style={{
-          background: bg,
+          background: bgColor,
           color: color,
           padding: "10px 16px",
           borderRadius: "8px",
@@ -2698,8 +3163,7 @@ function ReviewStateBadge({
         onMouseLeave={isClickable ? (e) => { e.currentTarget.style.filter = ""; } : undefined}
         title={isClickable ? "View follow-up details" : undefined}
       >
-        {icon && <span>{icon}</span>}
-        {REVIEW_STATE_LABELS[state]}
+        {label}
       </span>
       {onUnmark && (
         <button
@@ -2725,6 +3189,189 @@ function ReviewStateBadge({
 }
 
 // ============================================
+// Video Conversation Display Component
+// Shows transcript of coach ↔ student conversation
+// ============================================
+
+interface VideoConversationDisplayProps {
+  conversationTurns: ConversationTurn[];
+  durationSec: number;
+  videoUrl?: string;
+  questionNumber: number;
+  onViewVideo: (videoUrl: string, durationSec: number, questionNum: number, transcript?: ConversationTurn[]) => void;
+}
+
+function VideoConversationDisplay({
+  conversationTurns,
+  durationSec,
+  videoUrl,
+  questionNumber,
+  onViewVideo,
+}: VideoConversationDisplayProps) {
+  const [expanded, setExpanded] = useState(false);
+
+  // Count coach prompts
+  const coachPromptCount = conversationTurns.filter((t) => t.role === "coach").length;
+
+  // Format duration
+  const formatDuration = (sec: number) => {
+    if (sec < 60) return `${Math.round(sec)}s`;
+    const minutes = Math.floor(sec / 60);
+    const seconds = Math.round(sec % 60);
+    return `${minutes}m ${seconds}s`;
+  };
+
+  // Show first 2 turns by default when collapsed
+  const previewTurns = conversationTurns.slice(0, 2);
+  const hasMoreTurns = conversationTurns.length > 2;
+  const turnsToShow = expanded ? conversationTurns : previewTurns;
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+      {/* Metadata row */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: "12px",
+          flexWrap: "wrap",
+        }}
+      >
+        <span
+          style={{
+            background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
+            color: "white",
+            padding: "4px 10px",
+            borderRadius: "12px",
+            fontSize: "0.75rem",
+            fontWeight: 500,
+          }}
+        >
+          Video conversation
+        </span>
+        <span style={{ fontSize: "0.8rem", color: "#666" }}>
+          {coachPromptCount} coach prompt{coachPromptCount !== 1 ? "s" : ""} • {formatDuration(durationSec)}
+        </span>
+        {videoUrl && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onViewVideo(videoUrl, durationSec, questionNumber, conversationTurns);
+            }}
+            style={{
+              background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
+              color: "white",
+              border: "none",
+              borderRadius: "8px",
+              padding: "6px 12px",
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              gap: "6px",
+              fontSize: "0.8rem",
+              fontWeight: 500,
+              marginLeft: "auto",
+            }}
+            title="Watch student's video response"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M23 7l-7 5 7 5V7z" />
+              <rect x="1" y="5" width="15" height="14" rx="2" ry="2" />
+            </svg>
+            Watch video
+          </button>
+        )}
+      </div>
+
+      {/* Conversation transcript */}
+      <div
+        style={{
+          background: "#f8f9fa",
+          borderRadius: "8px",
+          padding: "12px",
+          display: "flex",
+          flexDirection: "column",
+          gap: "10px",
+        }}
+      >
+        {turnsToShow.map((turn, idx) => (
+          <div
+            key={idx}
+            style={{
+              display: "flex",
+              gap: "10px",
+              alignItems: "flex-start",
+            }}
+          >
+            <span
+              style={{
+                fontSize: "0.75rem",
+                fontWeight: 600,
+                color: turn.role === "coach" ? "#667eea" : "#059669",
+                minWidth: "52px",
+                flexShrink: 0,
+              }}
+            >
+              {turn.role === "coach" ? "Coach" : "Student"}
+            </span>
+            <p
+              style={{
+                margin: 0,
+                fontSize: "0.85rem",
+                lineHeight: 1.5,
+                color: "#333",
+                flex: 1,
+              }}
+            >
+              {turn.message}
+            </p>
+          </div>
+        ))}
+
+        {/* Expand/collapse toggle */}
+        {hasMoreTurns && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              setExpanded(!expanded);
+            }}
+            style={{
+              background: "transparent",
+              border: "none",
+              color: "#667eea",
+              fontSize: "0.8rem",
+              fontWeight: 500,
+              cursor: "pointer",
+              padding: "4px 0",
+              textAlign: "left",
+              display: "flex",
+              alignItems: "center",
+              gap: "4px",
+            }}
+          >
+            {expanded ? (
+              <>
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <polyline points="18 15 12 9 6 15" />
+                </svg>
+                Show less
+              </>
+            ) : (
+              <>
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <polyline points="6 9 12 15 18 9" />
+                </svg>
+                View full transcript ({conversationTurns.length - 2} more)
+              </>
+            )}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ============================================
 // Question Card With Attempts Component
 // Shows all attempts for a question, newest first
 // ============================================
@@ -2737,6 +3384,7 @@ interface QuestionCardWithAttemptsProps {
   onNoteChange: (value: string) => void;
   playingAttemptKey: string | null;
   onPlayAudio: (audioBase64: string, audioFormat: string, attemptKey: string) => void;
+  onViewVideo: (videoUrl: string, durationSec: number, questionNum: number, transcript?: ConversationTurn[]) => void;
 }
 
 function QuestionCardWithAttempts({
@@ -2747,6 +3395,7 @@ function QuestionCardWithAttempts({
   onNoteChange,
   playingAttemptKey,
   onPlayAudio,
+  onViewVideo,
 }: QuestionCardWithAttemptsProps) {
   // Outcome colors
   const outcomeColors: Record<string, { bg: string; color: string }> = {
@@ -2774,12 +3423,22 @@ function QuestionCardWithAttempts({
         style={{
           display: "flex",
           justifyContent: "space-between",
-          alignItems: "center",
+          alignItems: "flex-start",
           cursor: "pointer",
+          gap: "12px",
         }}
         onClick={onToggle}
       >
-        <div style={{ display: "flex", alignItems: "center", gap: "12px", flex: 1 }}>
+        {/* Left side: Q# badge + question text */}
+        <div
+          style={{
+            display: "flex",
+            alignItems: "flex-start",
+            gap: "12px",
+            flex: 1,
+            minWidth: 0, // Critical: allows flex child to shrink below content size
+          }}
+        >
           <span
             style={{
               background: "#7c8fce",
@@ -2789,6 +3448,7 @@ function QuestionCardWithAttempts({
               fontSize: "0.85rem",
               fontWeight: 600,
               flexShrink: 0,
+              marginTop: "2px", // Align with first line of text
             }}
           >
             Q{question.questionNumber}
@@ -2797,16 +3457,25 @@ function QuestionCardWithAttempts({
             style={{
               color: "#333",
               fontSize: "0.95rem",
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              whiteSpace: expanded ? "normal" : "nowrap",
+              lineHeight: 1.5,
+              whiteSpace: "normal",
+              wordBreak: "break-word",
+              minWidth: 0, // Allow text to shrink and wrap
             }}
           >
             {question.questionText}
           </span>
         </div>
 
-        <div style={{ display: "flex", alignItems: "center", gap: "8px", flexShrink: 0, marginLeft: "12px" }}>
+        {/* Right side: status metadata (fixed width, vertically centered) */}
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "8px",
+            flexShrink: 0,
+          }}
+        >
           {/* Status indicators */}
           {anyUsedHint && (
             <span style={{ fontSize: "0.7rem", fontWeight: 500, color: "#9178a8" }} title="Used hint">Hint</span>
@@ -2850,6 +3519,25 @@ function QuestionCardWithAttempts({
               }}
             >
               {getQuestionOutcomeLabel(latestAttempt.outcome)}
+            </span>
+          )}
+
+          {/* Deferred by coach badge (neutral, informational) */}
+          {latestAttempt?.deferredByCoach && (
+            <span
+              style={{
+                display: "inline-block",
+                padding: "4px 10px",
+                borderRadius: "8px",
+                fontSize: "0.75rem",
+                fontWeight: 500,
+                background: "#f5f5f5",
+                color: "#666",
+                whiteSpace: "nowrap",
+              }}
+              title={`Deferred after ${latestAttempt.deferralMetadata?.attemptCount || "multiple"} coaching attempts`}
+            >
+              Deferred by coach
             </span>
           )}
 
@@ -2928,42 +3616,129 @@ function QuestionCardWithAttempts({
                         >
                           {getQuestionOutcomeLabel(attempt.outcome)}
                         </span>
+                        {attempt.deferredByCoach && (
+                          <span
+                            style={{
+                              display: "inline-block",
+                              padding: "2px 8px",
+                              borderRadius: "8px",
+                              fontSize: "0.75rem",
+                              fontWeight: 500,
+                              background: "#f0f0f0",
+                              color: "#666",
+                            }}
+                          >
+                            Deferred
+                          </span>
+                        )}
                       </div>
                     </div>
 
-                    {/* Student response */}
-                    <div style={{ display: "flex", alignItems: "flex-start", gap: "12px" }}>
-                      <span style={{ fontSize: "0.8rem", fontWeight: 600, color: "#666" }}>Student</span>
-                      <div style={{ flex: 1 }}>
-                        <p style={{ margin: 0, lineHeight: 1.6, fontSize: "0.95rem" }}>
-                          {attempt.response || <span style={{ color: "#999", fontStyle: "italic" }}>No response</span>}
-                        </p>
+                    {/* Deferral metadata (informational, neutral) */}
+                    {attempt.deferredByCoach && attempt.deferralMetadata && (
+                      <div
+                        style={{
+                          background: "#fafafa",
+                          borderRadius: "6px",
+                          padding: "10px 12px",
+                          marginBottom: "12px",
+                          fontSize: "0.8rem",
+                          color: "#666",
+                          display: "flex",
+                          alignItems: "center",
+                          gap: "12px",
+                        }}
+                      >
+                        <span style={{ fontWeight: 500 }}>Coach moved on</span>
+                        {attempt.deferralMetadata.attemptCount && (
+                          <span>• {attempt.deferralMetadata.attemptCount} coaching turns</span>
+                        )}
+                        {attempt.deferralMetadata.pattern && (
+                          <span>• {attempt.deferralMetadata.pattern.replace(/-/g, " ")}</span>
+                        )}
+                        {attempt.deferralMetadata.deferredAt && (
+                          <span>• {new Date(attempt.deferralMetadata.deferredAt).toLocaleTimeString()}</span>
+                        )}
                       </div>
-                      {attempt.hasVoiceRecording && attempt.audioBase64 && attempt.audioFormat && (
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            onPlayAudio(attempt.audioBase64!, attempt.audioFormat!, attemptKey);
-                          }}
-                          style={{
-                            background: isPlaying ? "#7c8fce" : "#e8f5e9",
-                            color: isPlaying ? "white" : "#166534",
-                            border: "none",
-                            borderRadius: "50%",
-                            width: "36px",
-                            height: "36px",
-                            cursor: "pointer",
-                            display: "flex",
-                            alignItems: "center",
-                            justifyContent: "center",
-                            flexShrink: 0,
-                          }}
-                          title="Listen to student's voice"
-                        >
-                          {isPlaying ? "Stop" : "Play"}
-                        </button>
-                      )}
-                    </div>
+                    )}
+
+                    {/* Student response - Video conversation or text */}
+                    {attempt.hasVideoRecording && attempt.conversationTurns && attempt.conversationTurns.length > 0 ? (
+                      <VideoConversationDisplay
+                        conversationTurns={attempt.conversationTurns}
+                        durationSec={attempt.videoDurationSec || 0}
+                        videoUrl={attempt.videoUrl}
+                        questionNumber={question.questionNumber}
+                        onViewVideo={onViewVideo}
+                      />
+                    ) : (
+                      <div style={{ display: "flex", alignItems: "flex-start", gap: "12px" }}>
+                        <span style={{ fontSize: "0.8rem", fontWeight: 600, color: "#666" }}>Student</span>
+                        <div style={{ flex: 1 }}>
+                          <p style={{ margin: 0, lineHeight: 1.6, fontSize: "0.95rem" }}>
+                            {attempt.response || <span style={{ color: "#999", fontStyle: "italic" }}>No response</span>}
+                          </p>
+                        </div>
+                        {attempt.hasVoiceRecording && attempt.audioBase64 && attempt.audioFormat && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onPlayAudio(attempt.audioBase64!, attempt.audioFormat!, attemptKey);
+                            }}
+                            style={{
+                              background: isPlaying ? "#7c8fce" : "#e8f5e9",
+                              color: isPlaying ? "white" : "#166534",
+                              border: "none",
+                              borderRadius: "50%",
+                              width: "36px",
+                              height: "36px",
+                              cursor: "pointer",
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                              flexShrink: 0,
+                            }}
+                            title="Listen to student's voice"
+                          >
+                            {isPlaying ? "Stop" : "Play"}
+                          </button>
+                        )}
+                        {attempt.hasVideoRecording && attempt.videoUrl && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onViewVideo(
+                                attempt.videoUrl!,
+                                attempt.videoDurationSec || 0,
+                                question.questionNumber,
+                                attempt.conversationTurns
+                              );
+                            }}
+                            style={{
+                              background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
+                              color: "white",
+                              border: "none",
+                              borderRadius: "8px",
+                              padding: "6px 12px",
+                              cursor: "pointer",
+                              display: "flex",
+                              alignItems: "center",
+                              gap: "6px",
+                              fontSize: "0.8rem",
+                              fontWeight: 500,
+                              flexShrink: 0,
+                            }}
+                            title="Watch student's video response"
+                          >
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                              <path d="M23 7l-7 5 7 5V7z" />
+                              <rect x="1" y="5" width="15" height="14" rx="2" ry="2" />
+                            </svg>
+                            View Video
+                          </button>
+                        )}
+                      </div>
+                    )}
                   </div>
                 );
               })}

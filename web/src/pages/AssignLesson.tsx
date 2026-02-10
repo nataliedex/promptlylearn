@@ -10,7 +10,7 @@
 
 import { useState, useEffect } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
-import EducatorHeader from "../components/EducatorHeader";
+import EducatorAppHeader from "../components/EducatorAppHeader";
 import {
   getLessons,
   getClasses,
@@ -194,7 +194,8 @@ export default function AssignLesson() {
 
   return (
     <div className="container">
-      <EducatorHeader
+      <EducatorAppHeader
+        mode="context"
         breadcrumbs={[
           ...(selectedClass ? [{ label: selectedClass.name, to: `/educator/class/${selectedClassId}` }] : []),
           { label: "Assign Lesson" },

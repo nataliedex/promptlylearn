@@ -6,6 +6,7 @@ import {
   type Student,
   type StudentAnalytics,
 } from "../services/api";
+import Header from "../components/Header";
 
 export default function Progress() {
   const { studentId } = useParams<{ studentId: string }>();
@@ -63,9 +64,13 @@ export default function Progress() {
 
   return (
     <div className="container">
-      <Link to={`/student/${studentId}`} className="back-btn">
-        ← Back to Dashboard
-      </Link>
+      <Header
+        mode="context"
+        userType="student"
+        userName={student.preferredName || student.name}
+        homeLink={`/student/${studentId}`}
+        breadcrumbs={[{ label: "Progress" }]}
+      />
 
       <div className="header">
         <h1>Your Progress</h1>
