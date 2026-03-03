@@ -157,7 +157,7 @@ export function recordLessonCreated(questionCount: number): void {
  */
 export function recordQuestionsEdited(
   editedCount: number,
-  originalQuestions: string[],
+  _originalQuestions: string[],
   editedQuestions: string[]
 ): void {
   const prefs = getTeacherPreferences();

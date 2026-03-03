@@ -8,8 +8,8 @@ const PCM_CHANNELS = 1;
 // Streaming playback configuration
 const LATENCY_BUFFER_S = 0.08; // 80ms buffer to prevent underruns
 
-// API base URL
-const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:3000";
+// API base URL — must match the server port (default 3001, not the Vite dev port 5173/3000)
+const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:3001";
 
 export interface RecordingResult {
   text: string;
@@ -25,12 +25,15 @@ export interface UseVoiceReturn {
   error: string | null;
   recordingDuration: number;
   timeToFirstAudio: number | null; // Latency metric (ms)
+  lastSpeakPath: "streaming" | "blob-fallback" | "blob" | "none"; // Which TTS path was used
+  lastSpeakError: string | null; // e.g. "NotAllowedError" if play() was rejected
   startRecording: () => Promise<void>;
   stopRecording: () => Promise<RecordingResult | null>;
   speak: (text: string) => Promise<boolean>;
-  speakStream: (text: string) => Promise<boolean>; // True streaming version - NO blob URLs
+  speakStream: (text: string) => Promise<boolean>; // Streaming with auto blob fallback
   stopSpeaking: () => void; // Barge-in / interrupt
   cancelRecording: () => void;
+  preWarmAudio: () => void; // Pre-warm AudioContext on user gesture
 }
 
 /**
@@ -79,6 +82,8 @@ export function useVoice(): UseVoiceReturn {
   const nextPlayTimeRef = useRef<number>(0);
   const streamingActiveRef = useRef(false);
   const leftoverBytesRef = useRef<Uint8Array | null>(null); // Buffer for partial samples
+  const lastSpeakPathRef = useRef<"streaming" | "blob-fallback" | "blob" | "none">("none");
+  const lastSpeakErrorRef = useRef<string | null>(null); // e.g. "NotAllowedError"
 
   // Check if voice features are available on mount
   useEffect(() => {
@@ -308,8 +313,8 @@ export function useVoice(): UseVoiceReturn {
     }
 
     if (isSpeakingRef.current) {
-      console.log("Speak SKIPPED: already speaking");
-      return false;
+      console.log("[speak] Cancelling prior playback before new speak");
+      stopSpeakingInternal();
     }
 
     if (!text || typeof text !== "string" || text.trim().length === 0) {
@@ -349,14 +354,24 @@ export function useVoice(): UseVoiceReturn {
       const audioUrl = URL.createObjectURL(audioBlob);
       const audioElement = new Audio(audioUrl);
       currentAudioRef.current = audioElement;
+      console.log("[speak] audio element created, src set (blob URL)");
 
       return new Promise<boolean>((resolve) => {
+        audioElement.onplaying = () => {
+          console.log("[speak] audio 'playing' event fired — audio is now audible");
+          lastSpeakErrorRef.current = null; // Clear on successful play
+        };
+
         audioElement.onended = () => {
-          console.log("Speech ended successfully");
+          console.log("[speak] audio 'ended' event fired");
           currentAudioRef.current = null;
           isSpeakingRef.current = false;
           setIsSpeaking(false);
           URL.revokeObjectURL(audioUrl);
+          // Only set to "blob" if not already "blob-fallback" (set by speakStream's catch)
+          if (lastSpeakPathRef.current !== "blob-fallback") {
+            lastSpeakPathRef.current = "blob";
+          }
           resolve(true);
         };
 
@@ -370,8 +385,11 @@ export function useVoice(): UseVoiceReturn {
           resolve(false);
         };
 
+        console.log("[speak] calling audio.play()");
+        lastSpeakErrorRef.current = null;
         audioElement.play().catch((playErr) => {
-          console.error("Audio play() error:", playErr);
+          console.error("[speak] play() REJECTED:", playErr.name, playErr.message);
+          lastSpeakErrorRef.current = playErr.name || "UnknownPlayError";
           currentAudioRef.current = null;
           isSpeakingRef.current = false;
           setIsSpeaking(false);
@@ -379,8 +397,6 @@ export function useVoice(): UseVoiceReturn {
           setError("Failed to start audio playback.");
           resolve(false);
         });
-
-        console.log("Audio playback initiated");
       });
     } catch (err: unknown) {
       const errorMessage = err instanceof Error ? err.message : "Unknown error";
@@ -431,6 +447,9 @@ export function useVoice(): UseVoiceReturn {
    * True streaming TTS - plays raw PCM audio as chunks arrive.
    * Uses Web Audio API directly - NO blob URLs.
    * Audio starts playing while the network request is still streaming.
+   *
+   * On network failure (fetch error, non-200, connection refused),
+   * automatically falls back to blob-based speak() in the same turn.
    */
   const speakStream = useCallback(async (text: string): Promise<boolean> => {
     const requestStart = performance.now();
@@ -438,6 +457,7 @@ export function useVoice(): UseVoiceReturn {
 
     if (!voiceAvailable) {
       console.log("[speakStream] SKIPPED: voice not available");
+      lastSpeakPathRef.current = "none";
       return false;
     }
 
@@ -449,6 +469,7 @@ export function useVoice(): UseVoiceReturn {
 
     if (!text || typeof text !== "string" || text.trim().length === 0) {
       console.log("[speakStream] SKIPPED: invalid text");
+      lastSpeakPathRef.current = "none";
       return false;
     }
 
@@ -464,6 +485,17 @@ export function useVoice(): UseVoiceReturn {
 
     // Get or create shared AudioContext (reused for lifetime of page)
     const audioContext = getAudioContext();
+
+    // Ensure AudioContext is active (may be suspended after tab switch / inactivity)
+    if (audioContext.state === "suspended") {
+      console.log("[speakStream] AudioContext suspended, resuming...");
+      try {
+        await audioContext.resume();
+        console.log("[speakStream] AudioContext resumed, state:", audioContext.state);
+      } catch (e) {
+        console.error("[speakStream] AudioContext resume failed:", e);
+      }
+    }
 
     // Initialize scheduling state
     scheduledSourcesRef.current = [];
@@ -485,7 +517,7 @@ export function useVoice(): UseVoiceReturn {
       });
 
       if (!response.ok) {
-        throw new Error(`TTS request failed: ${response.status}`);
+        throw new Error(`TTS stream request failed: ${response.status}`);
       }
 
       // Log server timing headers (dev metrics)
@@ -577,32 +609,43 @@ export function useVoice(): UseVoiceReturn {
       }
 
       const totalTime = performance.now() - requestStart;
-      console.log(`[speakStream] Complete in ${totalTime.toFixed(0)}ms`);
+      console.log(`[speakStream] Complete in ${totalTime.toFixed(0)}ms (path=streaming)`);
 
       // Clear scheduling state (keep AudioContext for reuse)
       stopScheduledAudio();
       abortControllerRef.current = null;
       isSpeakingRef.current = false;
       setIsSpeaking(false);
+      lastSpeakPathRef.current = "streaming";
       return true;
 
     } catch (err: unknown) {
-      if (err instanceof Error && err.name === "AbortError") {
-        console.log("[speakStream] Aborted by user");
-      } else {
-        const errorMessage = err instanceof Error ? err.message : "Unknown error";
-        console.error("[speakStream] Error:", errorMessage);
-        setError("Failed to play audio: " + errorMessage);
-      }
-
-      // Clear scheduling state (keep AudioContext for reuse)
+      // Clean up streaming state before any fallback
       stopScheduledAudio();
       abortControllerRef.current = null;
       isSpeakingRef.current = false;
+      streamingActiveRef.current = false;
       setIsSpeaking(false);
-      return false;
+
+      // User-initiated abort — don't fall back
+      if (err instanceof Error && err.name === "AbortError") {
+        console.log("[speakStream] Aborted by user — no fallback");
+        lastSpeakPathRef.current = "none";
+        return false;
+      }
+
+      // Network / server failure — automatically fall back to blob-based speak()
+      const errorMessage = err instanceof Error ? err.message : "Unknown error";
+      console.warn(`[speakStream] Stream failed (${errorMessage}) — falling back to blob TTS`);
+
+      // Use the blob-based speak() path. It calls textToSpeech() from api.ts
+      // which uses the correct API_BASE and a different endpoint (/api/voice/speak).
+      const blobResult = await speak(text);
+      lastSpeakPathRef.current = blobResult ? "blob-fallback" : "none";
+      console.log(`[speakStream] Blob fallback result: ${blobResult} (path=blob-fallback)`);
+      return blobResult;
     }
-  }, [voiceAvailable]);
+  }, [voiceAvailable, speak]);
 
   /**
    * Stop speaking / barge-in - interrupts current audio playback instantly.
@@ -610,6 +653,29 @@ export function useVoice(): UseVoiceReturn {
    */
   const stopSpeaking = useCallback(() => {
     stopSpeakingInternal();
+  }, []);
+
+  /**
+   * Pre-warm AudioContext on a user gesture (click/tap).
+   * Creates the context, resumes it, and plays a silent 50ms buffer.
+   * This satisfies browser autoplay policies so later speak() calls work.
+   */
+  const preWarmAudio = useCallback(() => {
+    try {
+      const ctx = getAudioContext();
+      if (ctx.state === "suspended") {
+        ctx.resume().catch(() => {});
+      }
+      // Play a silent 50ms buffer to fully unlock audio output
+      const silent = ctx.createBuffer(1, Math.ceil(ctx.sampleRate * 0.05), ctx.sampleRate);
+      const src = ctx.createBufferSource();
+      src.buffer = silent;
+      src.connect(ctx.destination);
+      src.start();
+      console.log("[useVoice] Audio pre-warmed on user gesture");
+    } catch {
+      // AudioContext not available — no-op
+    }
   }, []);
 
   return {
@@ -620,11 +686,14 @@ export function useVoice(): UseVoiceReturn {
     error,
     recordingDuration,
     timeToFirstAudio,
+    lastSpeakPath: lastSpeakPathRef.current,
+    lastSpeakError: lastSpeakErrorRef.current,
     startRecording,
     stopRecording,
     speak,
     speakStream,
     stopSpeaking,
     cancelRecording,
+    preWarmAudio,
   };
 }

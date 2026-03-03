@@ -10,7 +10,7 @@
 /**
  * Input preference for assignments
  */
-export type InputPreference = "voice" | "typing" | "no_preference";
+export type InputPreference = "video" | "typing" | "no_preference";
 
 /**
  * Pacing preference for coach interactions

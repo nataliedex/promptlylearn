@@ -6,6 +6,7 @@ import {
   updateSession,
   getCoachFeedback,
   continueCoachConversation,
+  getVideoCoachTurn,
   markAssignmentCompleted,
   uploadVideo,
   type Lesson as LessonType,
@@ -20,6 +21,11 @@ import ModeToggle from "../components/ModeToggle";
 import VideoRecorder from "../components/VideoRecorder";
 import VideoConversationRecorder, { type ConversationTurn } from "../components/VideoConversationRecorder";
 import Header from "../components/Header";
+import {
+  computeVideoCoachAction,
+  deriveVideoOutcome,
+  type VideoEndReason,
+} from "../domain/videoCoachStateMachine";
 
 type LessonMode = "voice" | "type" | "video";
 type VoiceState = "idle" | "speaking" | "listening" | "processing";
@@ -58,6 +64,18 @@ export default function Lesson() {
   const [coachAskedQuestion, setCoachAskedQuestion] = useState(false);
   const [coachIsSpeaking, setCoachIsSpeaking] = useState(false);
 
+  // Video/Voice hint state (separate from typed mode hint state)
+  const [videoHintUsed, setVideoHintUsed] = useState(false);
+  const [videoHintIndex, setVideoHintIndex] = useState(0);
+  const [videoHintDeclineCount, setVideoHintDeclineCount] = useState(0);
+  const [videoHintOfferPending, setVideoHintOfferPending] = useState(false);
+
+  // Video state machine tracking
+  const [videoAttemptCount, setVideoAttemptCount] = useState(0);
+  const [videoFollowUpCount, setVideoFollowUpCount] = useState(0);
+  const [lastLLMScore, setLastLLMScore] = useState<number | undefined>(undefined);
+  const [videoEndReason, setVideoEndReason] = useState<VideoEndReason | undefined>(undefined);
+
   // Voice mode state
   const [voiceState, setVoiceState] = useState<VoiceState>("idle");
   const [voiceStarted, setVoiceStarted] = useState(false);
@@ -76,8 +94,12 @@ export default function Lesson() {
     startRecording,
     stopRecording,
     speak,
+    speakStream,
     stopSpeaking,
     cancelRecording,
+    preWarmAudio,
+    lastSpeakPath,
+    lastSpeakError,
   } = useVoice();
 
   // Update voice state based on hook states
@@ -303,6 +325,7 @@ export default function Lesson() {
         promptId: currentPrompt.id,
         response: answerText.trim(),
         hintUsed: showHint,
+        hintCountUsed: showHint ? hintIndex + 1 : undefined, // hintIndex is 0-based, so +1 for count
         ...(audioBase64 && { audioBase64 }),
         ...(audioFormat && { audioFormat }),
       };
@@ -521,24 +544,48 @@ export default function Lesson() {
       const coachTurns = turns.filter(t => t.role === "coach").length;
       const conversationSummary = `[Video conversation: ${coachTurns} coach prompts, ${durationSec}s duration]`;
 
-      // Use deterministic closure message - no LLM call needed
-      // The real conversation already happened during the video recording
+      // Derive outcome from state machine — no fabricated scores
+      const outcome = deriveVideoOutcome({
+        lastScore: lastLLMScore,
+        hintUsed: videoHintUsed,
+        endReason: videoEndReason,
+      });
+
+      if (process.env.NODE_ENV === "development") {
+        console.log("[VideoSM] deriveVideoOutcome result", outcome);
+        if (outcome.score === undefined) {
+          console.log("[VideoSM] Storing needs-review due to missing score");
+        }
+      }
+
       const closureResponse = {
         feedback: "Your response has been submitted.",
-        score: 80, // Default positive score for completing the conversation
-        isCorrect: true,
-        encouragement: "Got it.",
-        shouldContinue: false, // No more coach interaction after submission
+        score: outcome.score ?? 0, // 0 for display only; session uses real score
+        isCorrect: outcome.isCorrect,
+        encouragement: outcome.isCorrect ? "Good work." : "Keep practicing.",
+        shouldContinue: false,
       };
 
       setFeedback(closureResponse);
       setConversationHistory([]);
 
+      // DEV LOGGING: Hint persistence
+      if (process.env.NODE_ENV === "development") {
+        console.log("[TalkHint] persisting video response", {
+          promptId: currentPrompt.id,
+          studentId,
+          sessionId: session.id,
+          hintUsed: videoHintUsed,
+          hintCountUsed: videoHintIndex,
+        });
+      }
+
       // Update session with video response (include conversation metadata)
       const response: PromptResponse = {
         promptId: currentPrompt.id,
         response: conversationSummary,
-        hintUsed: showHint,
+        hintUsed: videoHintUsed,
+        hintCountUsed: videoHintIndex > 0 ? videoHintIndex : undefined, // Only persist if hints were used
         inputSource: "video",
         video: videoMetadata,
         // Store conversation turns in the response for teacher review
@@ -657,6 +704,15 @@ export default function Lesson() {
       // Reset video mode state for next question
       setCoachAskedQuestion(false);
       setVideoError(null);
+      // Reset video/voice hint state for next question
+      setVideoHintUsed(false);
+      setVideoHintIndex(0);
+      setVideoHintDeclineCount(0);
+      setVideoHintOfferPending(false);
+      setVideoAttemptCount(0);
+      setVideoFollowUpCount(0);
+      setLastLLMScore(undefined);
+      setVideoEndReason(undefined);
     }
   };
 
@@ -801,7 +857,7 @@ export default function Lesson() {
           {!lessonStarted && (
             <div>
               <h2 style={{ marginBottom: "16px" }}>Ready for Voice Lesson</h2>
-              <p style={{ color: "#666", marginBottom: "32px" }}>
+              <p style={{ color: "var(--text-secondary)", marginBottom: "32px" }}>
                 The coach will read each question aloud, then listen for your answer.
               </p>
               <button
@@ -835,12 +891,12 @@ export default function Lesson() {
                     width: "48px",
                     height: "48px",
                     borderRadius: "50%",
-                    background: "#667eea",
+                    background: "#3d5a80",
                     margin: "0 auto 16px",
                     animation: "pulse 1.5s infinite",
                   }}
                 />
-                <p style={{ fontSize: "1.2rem", color: "#667eea" }}>Coach is speaking...</p>
+                <p style={{ fontSize: "1.2rem", color: "#3d5a80" }}>Coach is speaking...</p>
               </div>
             )}
 
@@ -862,7 +918,7 @@ export default function Lesson() {
                 <p style={{ fontSize: "1.2rem", color: "#4caf50", fontWeight: 600 }}>
                   Listening... ({recordingDuration}s)
                 </p>
-                <p style={{ fontSize: "1rem", color: "#666", marginTop: "8px" }}>
+                <p style={{ fontSize: "1rem", color: "var(--text-secondary)", marginTop: "8px" }}>
                   Tap anywhere when done speaking
                 </p>
               </div>
@@ -871,7 +927,7 @@ export default function Lesson() {
             {voiceState === "processing" && (
               <div className="voice-indicator processing">
                 <div className="loading-spinner" style={{ margin: "0 auto 16px" }}></div>
-                <p style={{ fontSize: "1.2rem", color: "#666" }}>
+                <p style={{ fontSize: "1.2rem", color: "var(--text-secondary)" }}>
                   {isTranscribing ? "Transcribing..." : "Thinking..."}
                 </p>
               </div>
@@ -879,7 +935,7 @@ export default function Lesson() {
 
             {voiceState === "idle" && !feedback && (
               <div className="voice-indicator idle">
-                <p style={{ fontSize: "1rem", color: "#666" }}>Starting voice interaction...</p>
+                <p style={{ fontSize: "1rem", color: "var(--text-secondary)" }}>Starting voice interaction...</p>
               </div>
             )}
           </div>
@@ -963,7 +1019,7 @@ export default function Lesson() {
                 padding: "14px 28px",
                 fontSize: "1rem",
                 fontWeight: 600,
-                background: "#1a1a2e",
+                background: "#1e293b",
                 color: "#ffffff",
                 border: "none",
                 borderRadius: "10px",
@@ -975,18 +1031,18 @@ export default function Lesson() {
                 transition: "background 0.2s, transform 0.1s",
               }}
               onMouseEnter={(e) => {
-                e.currentTarget.style.background = "#2d2d44";
+                e.currentTarget.style.background = "#334155";
                 e.currentTarget.style.transform = "translateY(-1px)";
               }}
               onMouseLeave={(e) => {
-                e.currentTarget.style.background = "#1a1a2e";
+                e.currentTarget.style.background = "#1e293b";
                 e.currentTarget.style.transform = "translateY(0)";
               }}
             >
               Take a break
             </button>
-            <p style={{ marginTop: "8px", fontSize: "0.85rem", color: "#888" }}>
-              Your progress is saved. Come back anytime!
+            <p style={{ marginTop: "8px", fontSize: "0.85rem", color: "var(--text-muted)" }}>
+              You can take a break anytime.
             </p>
           </div>
         )}
@@ -1006,50 +1062,158 @@ export default function Lesson() {
   const generateVideoCoachResponse = async (
     question: string,
     transcript: Array<{ role: "coach" | "student"; message: string; timestamp: number }>,
-    videoGradeLevel?: string
+    videoGradeLevel?: string,
+    timeRemainingSec?: number
   ): Promise<{ response: string; shouldContinue: boolean }> => {
     if (!lessonId || !currentPrompt) {
       return { response: "Can you tell me more about your thinking?", shouldContinue: true };
     }
 
-    try {
-      // Get the student's responses from transcript
-      const studentResponses = transcript.filter(t => t.role === "student");
-      const latestStudentResponse = studentResponses[studentResponses.length - 1]?.message || "";
+    const studentResponses = transcript.filter(t => t.role === "student");
+    const latestStudentResponse = studentResponses[studentResponses.length - 1]?.message || "";
 
-      // Convert transcript to ConversationMessage format for the API
-      const conversationHistory: ConversationMessage[] = transcript.map(t => ({
-        role: t.role === "coach" ? "coach" : "student",
-        message: t.message,
-      }));
+    const hints = currentPrompt.hints || [];
 
-      // Call the coach API
-      const coachResponse = await continueCoachConversation(
-        lessonId,
-        currentPrompt.id,
-        studentResponses[0]?.message || "", // original answer
-        latestStudentResponse,
-        conversationHistory,
-        videoGradeLevel || lesson?.gradeLevel
-      );
+    // Build state for the state machine
+    const smState = {
+      latestStudentResponse,
+      attemptCount: videoAttemptCount,
+      hintOfferPending: videoHintOfferPending,
+      hintIndex: videoHintIndex,
+      hintDeclineCount: videoHintDeclineCount,
+      hintsAvailable: hints,
+      maxAttempts: 3,
+      questionText: currentPrompt.input,
+      followUpCount: videoFollowUpCount,
+    };
 
-      // Combine feedback and follow-up question for the response
-      const response = coachResponse.followUpQuestion
-        ? `${coachResponse.feedback} ${coachResponse.followUpQuestion}`
-        : coachResponse.feedback;
-
-      return {
-        response,
-        shouldContinue: coachResponse.shouldContinue ?? false,
-      };
-    } catch (err) {
-      console.error("Failed to generate coach response:", err);
-      // Return a generic encouraging response on error
-      return {
-        response: "That's interesting! Can you tell me a bit more about why you think that?",
-        shouldContinue: true,
-      };
+    if (process.env.NODE_ENV === "development") {
+      console.log("[VideoSM] generateVideoCoachResponse input state", smState);
     }
+
+    const action = computeVideoCoachAction(smState);
+
+    // Capture locally BEFORE setState — React batches updates,
+    // so videoAttemptCount would be stale during resolvePostEvaluation.
+    const nextAttemptCount = action.stateUpdates.attemptCount;
+
+    if (process.env.NODE_ENV === "development") {
+      console.log(
+        "[VideoFlow] SM action=" + action.type +
+        " utteranceIntent=" + (action.utteranceIntent ?? "N/A") +
+        " evaluationSkipped=" + (action.type !== "EVALUATE_ANSWER") +
+        " shouldContinue=" + action.shouldContinue +
+        " attemptCount(" + videoAttemptCount + "->" + nextAttemptCount + ")" +
+        " hintOfferPending(" + videoHintOfferPending + "->" + action.stateUpdates.hintOfferPending + ")" +
+        " coachTurnCount=N/A(Lesson.tsx)"
+      );
+    }
+
+    // Apply state updates from the state machine
+    setVideoAttemptCount(nextAttemptCount);
+    setVideoHintOfferPending(action.stateUpdates.hintOfferPending);
+    setVideoHintIndex(action.stateUpdates.hintIndex);
+    setVideoHintDeclineCount(action.stateUpdates.hintDeclineCount);
+    if (action.stateUpdates.hintUsed) {
+      setVideoHintUsed(true);
+    }
+
+    // Track end reason for outcome derivation
+    if (action.endReason) {
+      setVideoEndReason(action.endReason);
+      console.log("[VideoSM] Ending due to:", action.endReason);
+    }
+
+    // EVALUATE_ANSWER: single combined endpoint (parallel LLM calls + server guardrails)
+    if (action.type === "EVALUATE_ANSWER") {
+      try {
+        const conversationHistoryForApi: ConversationMessage[] = transcript.map(t => ({
+          role: t.role === "coach" ? "coach" : "student",
+          message: t.message,
+        }));
+
+        // Extract ALL coach questions for probe dedup (full history)
+        const coachTurns = transcript.filter(t => t.role === "coach" && t.message.includes("?"));
+        const allCoachQuestions = coachTurns.map(t => t.message);
+        const lastCoachQ = allCoachQuestions.length > 0 ? allCoachQuestions[allCoachQuestions.length - 1] : undefined;
+
+        const result = await getVideoCoachTurn({
+          lessonId,
+          promptId: currentPrompt.id,
+          studentAnswer: studentResponses[0]?.message || "",
+          studentResponse: latestStudentResponse,
+          conversationHistory: conversationHistoryForApi,
+          gradeLevel: videoGradeLevel || lesson?.gradeLevel,
+          attemptCount: nextAttemptCount,
+          maxAttempts: 3,
+          followUpCount: videoFollowUpCount,
+          lastCoachQuestion: lastCoachQ,
+          askedCoachQuestions: allCoachQuestions,
+          timeRemainingSec,
+        });
+
+        // Store the real LLM score
+        setLastLLMScore(result.score);
+
+        if (process.env.NODE_ENV === "development") {
+          console.log(
+            "[VideoFlow] video-turn:" +
+            " score=" + result.score +
+            " shouldContinue=" + result.shouldContinue +
+            " probeFirst=" + result.probeFirst +
+            " turnKind=" + (result.turnKind ?? "unknown") +
+            " attemptCount=" + nextAttemptCount +
+            " timeRemainingSec=" + timeRemainingSec
+          );
+        }
+
+        if (result.probeFirst) {
+          setVideoFollowUpCount(prev => prev + 1);
+        }
+
+        // CLIENT-SIDE SAFETY NET: If the server response contains a question
+        // but shouldContinue=false, override to true. This prevents the session
+        // from ending right after the coach asks a question.
+        let finalShouldContinue = result.shouldContinue;
+        if (result.response.includes("?") && !result.shouldContinue) {
+          console.log(
+            "[contract-violation] question + shouldContinue=false — overriding to continue |",
+            "response:", result.response.slice(0, 80)
+          );
+          finalShouldContinue = true;
+        }
+
+        return {
+          response: result.response,
+          shouldContinue: finalShouldContinue,
+          turnKind: result.turnKind,
+        };
+      } catch (err) {
+        console.error("[VideoSM] Failed to evaluate answer:", err);
+        return {
+          response: "That's interesting! Can you tell me a bit more about why you think that?",
+          shouldContinue: true,
+          turnKind: "PROBE" as const,
+        };
+      }
+    }
+
+    // All other actions: return pre-built response
+    // CLIENT-SIDE SAFETY NET: same invariant check
+    const smResponse = action.response!;
+    let smContinue = action.shouldContinue;
+    if (smResponse.includes("?") && !smContinue) {
+      console.log(
+        "[contract-violation] SM response has question + shouldContinue=false — overriding |",
+        "response:", smResponse.slice(0, 80)
+      );
+      smContinue = true;
+    }
+    return {
+      response: smResponse,
+      shouldContinue: smContinue,
+      turnKind: smContinue ? "PROBE" as const : "WRAP" as const,
+    };
   };
 
   // Video mode UI - continuous conversation recording per question
@@ -1098,9 +1262,35 @@ export default function Lesson() {
                 setCoachAskedQuestion(false);
               }}
               speak={speak}
+              speakStream={speakStream}
+              preWarmAudio={preWarmAudio}
+              lastSpeakPath={lastSpeakPath}
+              lastSpeakError={lastSpeakError}
               isSpeaking={isSpeaking}
               generateCoachResponse={generateVideoCoachResponse}
               isSubmitting={videoUploading}
+              isFinalQuestion={isLastQuestion}
+              successCriteria={currentPrompt.assessment?.successCriteria}
+              onKeepCoaching={(context) => {
+                // Video submit is fire-and-forget from VideoConversationRecorder
+                // Navigate to CoachSession with assignment context
+                navigate(
+                  `/student/${studentId}/coach?topics=${encodeURIComponent(
+                    JSON.stringify([lesson.title, currentPrompt.input.slice(0, 50)])
+                  )}&gradeLevel=${encodeURIComponent(lesson?.gradeLevel || "")}`,
+                  {
+                    state: {
+                      fromAssignment: true,
+                      transcript: context.transcript,
+                      question: context.question,
+                      lessonTitle: lesson.title,
+                      durationSec: context.durationSec,
+                      coachTurns: context.coachTurns,
+                      lastScore: lastLLMScore,
+                    },
+                  }
+                );
+              }}
             />
           ) : (
             <>
@@ -1128,7 +1318,7 @@ export default function Lesson() {
                 </h3>
 
                 {/* Subtitle */}
-                <p style={{ margin: "0 0 16px 0", color: "#666", fontSize: "0.95rem" }}>
+                <p style={{ margin: "0 0 16px 0", color: "var(--text-secondary)", fontSize: "0.95rem" }}>
                   Your teacher will review your video.
                 </p>
 
@@ -1168,7 +1358,7 @@ export default function Lesson() {
                 padding: "14px 28px",
                 fontSize: "1rem",
                 fontWeight: 600,
-                background: "#1a1a2e",
+                background: "#1e293b",
                 color: "#ffffff",
                 border: "none",
                 borderRadius: "10px",
@@ -1180,18 +1370,18 @@ export default function Lesson() {
                 transition: "background 0.2s, transform 0.1s",
               }}
               onMouseEnter={(e) => {
-                e.currentTarget.style.background = "#2d2d44";
+                e.currentTarget.style.background = "#334155";
                 e.currentTarget.style.transform = "translateY(-1px)";
               }}
               onMouseLeave={(e) => {
-                e.currentTarget.style.background = "#1a1a2e";
+                e.currentTarget.style.background = "#1e293b";
                 e.currentTarget.style.transform = "translateY(0)";
               }}
             >
               Take a break
             </button>
-            <p style={{ marginTop: "8px", fontSize: "0.85rem", color: "#888" }}>
-              Your progress is saved. Come back anytime!
+            <p style={{ marginTop: "8px", fontSize: "0.85rem", color: "var(--text-muted)" }}>
+              You can take a break anytime.
             </p>
           </div>
         )}
@@ -1288,7 +1478,7 @@ export default function Lesson() {
                       padding: "8px 16px",
                       fontSize: "0.9rem",
                       fontWeight: 500,
-                      background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
+                      background: "#3d5a80",
                       color: "white",
                       border: "none",
                       borderRadius: "8px",
@@ -1356,7 +1546,7 @@ export default function Lesson() {
                   <p style={{ margin: 0, fontWeight: 600, color: feedback.isCorrect ? "#2e7d32" : "#ef6c00" }}>
                     {feedback.encouragement}
                   </p>
-                  <p style={{ margin: 0, fontSize: "0.85rem", color: "#666" }}>
+                  <p style={{ margin: 0, fontSize: "0.85rem", color: "var(--text-secondary)" }}>
                     Score: {feedback.score}/100
                   </p>
                 </div>
@@ -1378,7 +1568,7 @@ export default function Lesson() {
                         maxWidth: "85%",
                         padding: "12px 16px",
                         borderRadius: msg.role === "student" ? "16px 16px 4px 16px" : "16px 16px 16px 4px",
-                        background: msg.role === "student" ? "#667eea" : "#f5f5f5",
+                        background: msg.role === "student" ? "#3d5a80" : "#f5f5f5",
                         color: msg.role === "student" ? "white" : "#333",
                       }}
                     >

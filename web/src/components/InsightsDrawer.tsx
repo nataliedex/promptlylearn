@@ -160,7 +160,7 @@ export default function InsightsDrawer({
           <p style={{ margin: 0, fontSize: "0.95rem" }}>
             No insights for this student.
           </p>
-          <p style={{ margin: "8px 0 0 0", fontSize: "0.85rem", color: "#94a3b8" }}>
+          <p style={{ margin: "8px 0 0 0", fontSize: "0.85rem", color: "var(--text-muted)" }}>
             No AI recommendations or scheduled follow-ups.
           </p>
         </div>
@@ -420,7 +420,7 @@ function TodoCard({
             <div
               style={{
                 fontSize: "0.75rem",
-                color: "#94a3b8",
+                color: "var(--text-muted)",
                 marginTop: "4px",
               }}
             >
@@ -505,7 +505,7 @@ function HistoryCard({
             {title}
           </div>
           {detail && (
-            <div style={{ fontSize: "0.72rem", color: "#94a3b8", marginTop: "2px" }}>
+            <div style={{ fontSize: "0.72rem", color: "var(--text-muted)", marginTop: "2px" }}>
               {detail}
             </div>
           )}

@@ -1,0 +1,28 @@
+{
+  "id": "demo-writing-opinion",
+  "title": "Writing an Opinion",
+  "description": "Learning to write opinion pieces with supporting reasons.",
+  "subject": "Writing",
+  "gradeLevel": "3rd Grade",
+  "difficulty": "intermediate",
+  "prompts": [
+    {
+      "id": "q1",
+      "type": "explain",
+      "input": "What is your favorite season and why? Give at least two reasons.",
+      "hints": [
+        "Think about what you can do in that season.",
+        "How does that season make you feel?"
+      ]
+    },
+    {
+      "id": "q2",
+      "type": "explain",
+      "input": "Some people think summer is the best season. Do you agree or disagree? Explain your thinking.",
+      "hints": [
+        "State your opinion clearly.",
+        "Give reasons to support your opinion."
+      ]
+    }
+  ]
+}

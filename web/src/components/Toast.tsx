@@ -138,7 +138,7 @@ function ToastItem({ toast, onDismiss }: ToastItemProps) {
     },
     info: {
       bg: "#f8fafc",
-      border: "#7c8fce",
+      border: "#3d5a80",
       color: "#475569",
       icon: "i",
     },
@@ -216,7 +216,7 @@ function ToastItem({ toast, onDismiss }: ToastItemProps) {
         style={{
           background: "none",
           border: "none",
-          color: "#94a3b8",
+          color: "var(--text-muted)",
           cursor: "pointer",
           padding: "0",
           fontSize: "1rem",

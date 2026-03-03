@@ -71,7 +71,7 @@ button {
 
 button:focus,
 button:focus-visible {
-  outline: 2px solid rgba(124, 143, 206, 0.5);
+  outline: 2px solid rgba(61, 90, 128, 0.5);
   outline-offset: 2px;
 }
 
@@ -91,5 +91,5 @@ img {
 
 /* Selection styling */
 ::selection {
-  background: rgba(124, 143, 206, 0.2);
+  background: rgba(61, 90, 128, 0.2);
 }

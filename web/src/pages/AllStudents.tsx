@@ -49,7 +49,7 @@ export default function AllStudents() {
 
       {students.length === 0 ? (
         <div className="card">
-          <p style={{ color: "#666", textAlign: "center", padding: "24px" }}>
+          <p style={{ color: "var(--text-secondary)", textAlign: "center", padding: "24px" }}>
             No students yet.
           </p>
         </div>
@@ -74,12 +74,12 @@ export default function AllStudents() {
                 onMouseLeave={(e) => (e.currentTarget.style.background = "#f8f9fa")}
               >
                 <div>
-                  <span style={{ fontWeight: 500, color: "#667eea" }}>{student.name}</span>
-                  <span style={{ color: "#666", marginLeft: "16px", fontSize: "0.9rem" }}>
+                  <span style={{ fontWeight: 500, color: "#3d5a80" }}>{student.name}</span>
+                  <span style={{ color: "var(--text-secondary)", marginLeft: "16px", fontSize: "0.9rem" }}>
                     Joined {new Date(student.createdAt).toLocaleDateString()}
                   </span>
                 </div>
-                <span style={{ color: "#667eea" }}>→</span>
+                <span style={{ color: "#3d5a80" }}>→</span>
               </div>
             ))}
           </div>

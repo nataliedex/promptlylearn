@@ -130,7 +130,7 @@ export default function Drawer({
                 background: "none",
                 border: "none",
                 fontSize: "1.25rem",
-                color: "#94a3b8",
+                color: "var(--text-muted)",
                 cursor: "pointer",
                 padding: "4px 8px",
                 lineHeight: 1,
@@ -142,7 +142,7 @@ export default function Drawer({
                 e.currentTarget.style.background = "#f1f5f9";
               }}
               onMouseLeave={(e) => {
-                e.currentTarget.style.color = "#94a3b8";
+                e.currentTarget.style.color = "var(--text-muted)";
                 e.currentTarget.style.background = "none";
               }}
             >

@@ -51,6 +51,9 @@ import {
   computeTeacherWorkflowStatus,
   resolveAllInsightsForStudent,
   reactivateInsightsForStudent,
+  generateSessionSummary,
+  type SessionSummaryResponse,
+  type PromptAssessment,
 } from "../services/api";
 import Drawer from "../components/Drawer";
 import EducatorAppHeader from "../components/EducatorAppHeader";
@@ -63,8 +66,14 @@ import {
   getCoachSupportLabel,
   getQuestionOutcomeLabel,
   calculateQuestionOutcome,
+  wasHintUsed,
 } from "../utils/teacherDashboardUtils";
-import { getCategoryConfig } from "../utils/recommendationConfig";
+import {
+  getCategoryConfig,
+  getInsightDisplayConfig,
+  isBlockingInsight,
+  getBlockingInsightTypes,
+} from "../utils/recommendationConfig";
 import type { StudentDrilldownData, QuestionOutcome } from "../types/teacherDashboard";
 
 // Type for a conversation turn in video transcript
@@ -115,23 +124,28 @@ interface QuestionWithAttempts {
 // Recommendation Logic (per schema)
 // ============================================
 
-// Human-readable labels for recommendation types
+/**
+ * Human-readable labels for recommendation types (score/hint based)
+ *
+ * IMPORTANT: "Needs support" label is RESERVED for blocking DerivedInsights only.
+ * Score/hint-based recommendations use "Check in" or "Developing" labels.
+ */
 const RECOMMENDATION_TYPE_LABELS: Record<string, string> = {
-  // From insightType (actual backend values)
+  // From insightType (actual backend values) - score/hint based
   "challenge_opportunity": "Extend learning",
   "celebrate_progress": "Celebrate progress",
-  "check_in": "Needs support",
+  "check_in": "Check in",         // Changed from "Needs support"
   "monitor": "Monitor",
   // Legacy/alternate forms
   "extend_learning": "Extend learning",
-  "needs_support": "Needs support",
+  "needs_support": "Check in",    // Changed from "Needs support"
   "challenge-opportunity": "Extend learning",
   "celebrate-progress": "Celebrate progress",
-  "needs-support": "Needs support",
+  "needs-support": "Check in",    // Changed: score/hint-based → "Check in"
   "group-review": "Group review",
-  "check-in-suggested": "Needs support",
-  "developing": "Needs support",
-  "individual-checkin": "Needs support",
+  "check-in-suggested": "Check in",
+  "developing": "Developing",     // Changed from "Needs support"
+  "individual-checkin": "Check in",
   "small-group": "Group review",
   "enrichment": "Extend learning",
   "celebrate": "Celebrate progress",
@@ -313,6 +327,7 @@ interface AnalyzedQuestion {
 
 const OUTCOME_RANK: Record<QuestionOutcome, number> = {
   "developing": 0,
+  "needs-review": 0, // Same priority as developing - needs attention
   "not-attempted": 1,
   "with-support": 2,
   "demonstrated": 3,
@@ -323,6 +338,7 @@ const OUTCOME_LABELS: Record<QuestionOutcome, string> = {
   "not-attempted": "Not Attempted",
   "with-support": "Succeeded with Support",
   "demonstrated": "Demonstrated Understanding",
+  "needs-review": "Needs Review",
 };
 
 function analyzeQuestions(questions: QuestionWithAttempts[]): AnalyzedQuestion[] {
@@ -601,6 +617,11 @@ export default function StudentAssignmentReview() {
     setVideoModalOpen(true);
   };
 
+  // Scroll to top when navigating to this page
+  useEffect(() => {
+    window.scrollTo(0, 0);
+  }, [lessonId, studentId]);
+
   useEffect(() => {
     if (!lessonId || !studentId) return;
 
@@ -680,7 +701,7 @@ export default function StudentAssignmentReview() {
                   sessionDate,
                   response: response.response,
                   outcome,
-                  usedHint: response.hintUsed ?? false,
+                  usedHint: wasHintUsed(response),
                   hasVoiceRecording: !!response.audioBase64,
                   audioBase64: response.audioBase64,
                   audioFormat: response.audioFormat,
@@ -954,6 +975,19 @@ export default function StudentAssignmentReview() {
   const handleMarkReviewed = async () => {
     if (!lessonId || !studentId) return;
 
+    // Defense-in-depth: re-check for unresolved blocking-priority insights
+    // This catches cases where state changed between click and execution
+    const currentHasBlocking = derivedInsights.some((insight) => isBlockingInsight(insight.type));
+    const currentHasAction = (awardBadgeChecked && !!selectedBadgeType) ||
+      (createTodoChecked && !!selectedTodoType && (selectedTodoType !== "custom" || customTodoText.trim() !== "")) ||
+      (pushCoachingChecked && coachingTitle.trim() !== "") ||
+      (teacherNote !== (session?.educatorNotes || ""));
+
+    if (currentHasBlocking && !currentHasAction) {
+      showError("Cannot mark reviewed: take an action on flagged insights first.");
+      return;
+    }
+
     setIsMarkingReviewed(true);
     try {
       // Mark reviewed WITHOUT appending the note yet
@@ -1014,6 +1048,12 @@ export default function StudentAssignmentReview() {
   };
 
   const handleMarkReviewedClick = () => {
+    // Hard guard: if review is blocked, do not proceed
+    if (isReviewBlocked) {
+      showError("Action required: add a note, create a to-do, or take another action before marking reviewed.");
+      return;
+    }
+
     if (isActionRequired) {
       setShowReviewConfirmation(true);
     } else {
@@ -1023,6 +1063,14 @@ export default function StudentAssignmentReview() {
 
   const handleConfirmNoFollowUp = async () => {
     if (!lessonId || !studentId) return;
+
+    // Guard: "No follow-up needed" bypass is NOT allowed for blocking-priority insights
+    const hasBlocking = derivedInsights.some((insight) => isBlockingInsight(insight.type));
+    if (hasBlocking) {
+      showError("Blocking insights require an action before marking reviewed.");
+      setShowReviewConfirmation(false);
+      return;
+    }
 
     setShowReviewConfirmation(false);
 
@@ -1482,18 +1530,45 @@ export default function StudentAssignmentReview() {
   });
   const isActionRequired = workflowStatus === "ACTION_REQUIRED";
 
+  // Check for blocking-priority insights that REQUIRE action before marking reviewed
+  // Uses canonical mapping from recommendationConfig
+  const hasBlockingInsights = derivedInsights.some(
+    (insight) => isBlockingInsight(insight.type)
+  );
+
+  // Determine if teacher has taken a required action (note change, todo, badge, or coaching session)
+  const hasBadgeToAward = awardBadgeChecked && !!selectedBadgeType;
+  const hasTodoToCreate = createTodoChecked && !!selectedTodoType && (selectedTodoType !== "custom" || customTodoText.trim() !== "");
+  const hasCoachingToCreate = pushCoachingChecked && coachingTitle.trim() !== "";
+  const hasNoteChange = teacherNote !== (session?.educatorNotes || "");
+  const hasTakenRequiredAction = hasBadgeToAward || hasTodoToCreate || hasCoachingToCreate || hasNoteChange;
+
+  // Block review if:
+  // 1. High-priority insights exist and no action taken, OR
+  // 2. Insights are still loading (wait for full data before allowing review)
+  const isReviewBlocked = (hasBlockingInsights && !hasTakenRequiredAction) || (insightsLoading && isActionRequired);
+
+  // DEV LOGGING: Remove after validation
+  if (process.env.NODE_ENV === "development") {
+    console.log("[StudentAssignmentReview] Review blocking state:", {
+      lessonId,
+      studentId,
+      insightsLoading,
+      derivedInsightsCount: derivedInsights.length,
+      derivedInsightTypes: derivedInsights.map((i) => ({ type: i.type, isBlocking: isBlockingInsight(i.type) })),
+      hasBlockingInsights,
+      hasTakenRequiredAction,
+      isReviewBlocked,
+      isActionRequired,
+      workflowStatus,
+    });
+  }
+
   // Get the suggested actions from the recommendation (mapped to UI action types)
   const suggestedActions = activeRecommendation ? getSuggestedActions(activeRecommendation) : [];
 
-  // Scroll to actions section if coming from recommended actions
-  // This useEffect must be before any early returns to satisfy React hooks rules
-  useEffect(() => {
-    if (!loading && !recommendationLoading && hasActionableRecommendation && cameFromRecommendedActions) {
-      setTimeout(() => {
-        actionsSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-      }, 300);
-    }
-  }, [loading, recommendationLoading, hasActionableRecommendation, cameFromRecommendedActions]);
+  // NOTE: Previously scrolled to actions section when coming from recommended actions.
+  // Removed per user request - page should always show top when navigating here.
 
   // Auto-close the review confirmation panel if ACTION_REQUIRED status is resolved
   useEffect(() => {
@@ -1558,7 +1633,7 @@ export default function StudentAssignmentReview() {
             fontSize: "0.9rem",
           }}
         >
-          <span style={{ color: "#666" }}>Reviewing:</span>
+          <span style={{ color: "var(--text-secondary)" }}>Reviewing:</span>
           <span style={{ fontWeight: 500, color: "#333" }}>{lesson.title}</span>
           {lesson.subject && (
             <span
@@ -1595,9 +1670,9 @@ export default function StudentAssignmentReview() {
         </div>
 
         <div className="card" style={{ textAlign: "center", padding: "48px" }}>
-          <div style={{ fontSize: "1rem", marginBottom: "16px", fontWeight: 600, color: "#666" }}>Not started</div>
+          <div style={{ fontSize: "1rem", marginBottom: "16px", fontWeight: 600, color: "var(--text-secondary)" }}>Not started</div>
           <h2>Not Started Yet</h2>
-          <p style={{ color: "#666" }}>
+          <p style={{ color: "var(--text-secondary)" }}>
             {student.name} hasn't started this assignment yet.
           </p>
         </div>
@@ -1705,17 +1780,18 @@ export default function StudentAssignmentReview() {
                 {assignment.reviewState === "pending_review" && (
                   <button
                     onClick={handleMarkReviewedClick}
-                    disabled={isMarkingReviewed}
+                    disabled={isMarkingReviewed || isReviewBlocked}
+                    title={isReviewBlocked ? "Take an action on flagged insights before marking reviewed" : undefined}
                     style={{
                       padding: "10px 16px",
-                      background: isMarkingReviewed ? "#e2e8f0" : "#667eea",
-                      color: isMarkingReviewed ? "#64748b" : "white",
+                      background: isMarkingReviewed || isReviewBlocked ? "#e2e8f0" : "#3d5a80",
+                      color: isMarkingReviewed || isReviewBlocked ? "#64748b" : "white",
                       border: "none",
                       borderRadius: "8px",
-                      cursor: isMarkingReviewed ? "not-allowed" : "pointer",
+                      cursor: isMarkingReviewed || isReviewBlocked ? "not-allowed" : "pointer",
                       fontSize: "0.9rem",
                       fontWeight: 600,
-                      opacity: isMarkingReviewed ? 0.7 : 1,
+                      opacity: isMarkingReviewed || isReviewBlocked ? 0.7 : 1,
                       whiteSpace: "nowrap",
                     }}
                   >
@@ -1725,8 +1801,24 @@ export default function StudentAssignmentReview() {
               </div>
             )}
 
-            {/* Inline confirmation panel for ACTION_REQUIRED status */}
-            {showReviewConfirmation && assignment?.reviewState === "pending_review" && isActionRequired && (
+            {/* Guidance when review is blocked due to high-priority insights */}
+            {isReviewBlocked && assignment?.reviewState === "pending_review" && (
+              <div style={{
+                background: "#fef2f2",
+                border: "1px solid #fca5a5",
+                borderRadius: "8px",
+                padding: "10px 12px",
+                maxWidth: "320px",
+              }}>
+                <div style={{ fontSize: "0.82rem", color: "#991b1b", lineHeight: 1.4 }}>
+                  This submission has flagged insights that need attention.
+                  Add a note, create a to-do, or take another action before marking reviewed.
+                </div>
+              </div>
+            )}
+
+            {/* Inline confirmation panel for ACTION_REQUIRED status (non-blocking insights only) */}
+            {showReviewConfirmation && assignment?.reviewState === "pending_review" && isActionRequired && !hasBlockingInsights && (
               <div style={{
                 background: "#fffbeb",
                 border: "1px solid #f59e0b",
@@ -1745,7 +1837,7 @@ export default function StudentAssignmentReview() {
                     onClick={handleScrollToActions}
                     style={{
                       padding: "6px 12px",
-                      background: "#667eea",
+                      background: "#3d5a80",
                       color: "white",
                       border: "none",
                       borderRadius: "6px",
@@ -1800,16 +1892,8 @@ export default function StudentAssignmentReview() {
           }}
         >
           {derivedInsights.map((insight) => {
-            const insightConfig = {
-              NEEDS_SUPPORT: { color: "#dc2626", bgColor: "#fef2f2", label: "NEEDS SUPPORT" },
-              CHECK_IN: { color: "#d97706", bgColor: "#fffbeb", label: "CHECK IN" },
-              EXTEND_LEARNING: { color: "#059669", bgColor: "#ecfdf5", label: "EXTEND LEARNING" },
-              CHALLENGE_OPPORTUNITY: { color: "#7c3aed", bgColor: "#f5f3ff", label: "CHALLENGE OPPORTUNITY" },
-              CELEBRATE_PROGRESS: { color: "#0891b2", bgColor: "#ecfeff", label: "CELEBRATE PROGRESS" },
-              GROUP_SUPPORT_CANDIDATE: { color: "#dc2626", bgColor: "#fef2f2", label: "GROUP REVIEW" },
-              MOVE_ON_EVENT: { color: "#dc2626", bgColor: "#fef2f2", label: "MOVED ON" },
-              MISCONCEPTION_FLAG: { color: "#ea580c", bgColor: "#fff7ed", label: "MISCONCEPTION" },
-            }[insight.type] || { color: "#64748b", bgColor: "#f1f5f9", label: insight.type };
+            // Use canonical config from recommendationConfig
+            const insightConfig = getInsightDisplayConfig(insight.type);
 
             const isHighlightedQuestion =
               navigationState?.highlightQuestionId === insight.questionId ||
@@ -1911,7 +1995,7 @@ export default function StudentAssignmentReview() {
       <div className="card" style={{ background: "white", border: "1px solid #e2e8f0", marginBottom: "12px" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
           <h3 style={{ margin: 0, color: "#1e293b", fontSize: "1rem" }}>Notes</h3>
-          <div style={{ fontSize: "0.8rem", color: "#94a3b8" }}>
+          <div style={{ fontSize: "0.8rem", color: "var(--text-muted)" }}>
             {saving && "Saving..."}
             {!saving && lastSaved && `Saved ${lastSaved.toLocaleTimeString()}`}
           </div>
@@ -1972,7 +2056,7 @@ export default function StudentAssignmentReview() {
           className="card"
           style={{
             background: "white",
-            border: actionsHighlighted ? "2px solid #667eea" : "1px solid #e2e8f0",
+            border: actionsHighlighted ? "2px solid #3d5a80" : "1px solid #e2e8f0",
             boxShadow: actionsHighlighted ? "0 0 0 3px rgba(102, 126, 234, 0.2)" : undefined,
             transition: "border-color 0.3s ease, box-shadow 0.3s ease",
           }}
@@ -1987,7 +2071,7 @@ export default function StudentAssignmentReview() {
                 <h4 style={{ margin: "0 0 8px 0", color: "#64748b", fontSize: "0.85rem", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.03em" }}>
                   Recommended Actions
                 </h4>
-                <p style={{ margin: "0 0 10px 0", color: "#94a3b8", fontSize: "0.8rem" }}>
+                <p style={{ margin: "0 0 10px 0", color: "var(--text-muted)", fontSize: "0.8rem" }}>
                   Based on this student's performance
                 </p>
 
@@ -2169,7 +2253,7 @@ export default function StudentAssignmentReview() {
                               boxSizing: "border-box",
                             }}
                           />
-                          <p style={{ margin: "4px 0 0 0", fontSize: "0.8rem", color: "#666" }}>
+                          <p style={{ margin: "4px 0 0 0", fontSize: "0.8rem", color: "var(--text-secondary)" }}>
                             This will appear as the invitation title for the student
                           </p>
                         </div>
@@ -2232,7 +2316,7 @@ export default function StudentAssignmentReview() {
                                   style={{
                                     background: "none",
                                     border: "none",
-                                    color: "#667eea",
+                                    color: "#3d5a80",
                                     fontSize: "0.78rem",
                                     fontWeight: 500,
                                     cursor: "pointer",
@@ -2249,7 +2333,7 @@ export default function StudentAssignmentReview() {
                                 ))}
                               </ul>
                               {suggestion.basedOn.length > 0 && (
-                                <p style={{ margin: "6px 0 0 0", fontSize: "0.75rem", color: "#94a3b8" }}>
+                                <p style={{ margin: "6px 0 0 0", fontSize: "0.75rem", color: "var(--text-muted)" }}>
                                   Based on: {suggestion.basedOn.join(", ")}
                                 </p>
                               )}
@@ -2277,7 +2361,7 @@ export default function StudentAssignmentReview() {
                                       onClick={handleConfirmReplace}
                                       style={{
                                         padding: "4px 10px",
-                                        background: "#667eea",
+                                        background: "#3d5a80",
                                         color: "white",
                                         border: "none",
                                         borderRadius: "4px",
@@ -2354,7 +2438,7 @@ export default function StudentAssignmentReview() {
                               We'll focus on: "{coachingFocus.trim()}"
                             </p>
                           )}
-                          <p style={{ margin: "4px 0 0 0", color: "#666", fontSize: "0.8rem" }}>
+                          <p style={{ margin: "4px 0 0 0", color: "var(--text-secondary)", fontSize: "0.8rem" }}>
                             {isSupportSession
                               ? "The session will focus on building understanding and practice."
                               : "The session will operate in enrichment mode with deeper challenges."}
@@ -2484,7 +2568,7 @@ export default function StudentAssignmentReview() {
                       <div
                         style={{
                           fontSize: "0.85rem",
-                          color: "#666",
+                          color: "var(--text-secondary)",
                           background: "#f5f5f5",
                           padding: "8px",
                           borderRadius: "4px",
@@ -2557,7 +2641,7 @@ export default function StudentAssignmentReview() {
                 padding: "12px 24px",
                 fontSize: "0.95rem",
                 fontWeight: 600,
-                background: canSaveActions() && !isSavingActions ? "#7c8fce" : "#ccc",
+                background: canSaveActions() && !isSavingActions ? "#3d5a80" : "#ccc",
                 color: "white",
                 border: "none",
                 borderRadius: "6px",
@@ -2570,7 +2654,7 @@ export default function StudentAssignmentReview() {
               {isSavingActions ? "Saving..." : "Save actions"}
             </button>
             {!canSaveActions() && (
-              <span style={{ fontSize: "0.85rem", color: "#666" }}>
+              <span style={{ fontSize: "0.85rem", color: "var(--text-secondary)" }}>
                 Select an action or modify notes to enable
               </span>
             )}
@@ -2623,7 +2707,7 @@ export default function StudentAssignmentReview() {
           <span style={{ padding: "2px 8px", background: "#e3f2fd", color: "#1565c0", borderRadius: "10px", fontSize: "0.75rem" }}>Improved</span>
         )}
         {drilldown.insights.recoveredWithSupport && (
-          <span style={{ padding: "2px 8px", background: "#f3e5f5", color: "#9178a8", borderRadius: "10px", fontSize: "0.75rem" }}>Recovered</span>
+          <span style={{ padding: "2px 8px", background: "#e8ecf0", color: "#4a6b8a", borderRadius: "10px", fontSize: "0.75rem" }}>Recovered</span>
         )}
         {drilldown.insights.struggledConsistently && (
           <span style={{ padding: "2px 8px", background: "#ffebee", color: "#c62828", borderRadius: "10px", fontSize: "0.75rem" }}>Struggling</span>
@@ -2641,13 +2725,13 @@ export default function StudentAssignmentReview() {
           marginBottom: "12px",
         }}
       >
-        <h2 style={{ color: "white", margin: 0 }}>Question Breakdown</h2>
+        <h2 style={{ color: "var(--text-primary)", margin: 0 }}>Question Breakdown</h2>
         <button
           onClick={allExpanded ? collapseAll : expandAll}
           style={{
-            background: "rgba(255,255,255,0.1)",
+            background: "rgba(0,0,0,0.06)",
             border: "none",
-            color: "white",
+            color: "var(--text-primary)",
             padding: "8px 16px",
             borderRadius: "8px",
             cursor: "pointer",
@@ -2673,6 +2757,7 @@ export default function StudentAssignmentReview() {
           playingAttemptKey={playingQuestionId}
           onPlayAudio={playAudio}
           onViewVideo={handleViewVideo}
+          assessment={lesson?.prompts.find(p => p.id === question.questionId)?.assessment}
         />
       ))}
 
@@ -2734,7 +2819,7 @@ export default function StudentAssignmentReview() {
                     {followupTodo.label}
                   </div>
                   {followupTodo.assignmentTitle && (
-                    <div style={{ fontSize: "0.75rem", color: "#94a3b8", marginTop: "4px" }}>
+                    <div style={{ fontSize: "0.75rem", color: "var(--text-muted)", marginTop: "4px" }}>
                       {followupTodo.subject ? `${followupTodo.subject} \u00b7 ` : ""}{followupTodo.assignmentTitle}
                     </div>
                   )}
@@ -2757,7 +2842,7 @@ export default function StudentAssignmentReview() {
                       style={{
                         background: "transparent", border: "none",
                         padding: "4px 6px", cursor: isMovingBack ? "wait" : "pointer",
-                        color: "#999", fontSize: "1rem", lineHeight: 1, borderRadius: "4px",
+                        color: "var(--text-muted)", fontSize: "1rem", lineHeight: 1, borderRadius: "4px",
                       }}
                       title="More options"
                     >
@@ -2802,10 +2887,10 @@ export default function StudentAssignmentReview() {
               display: "flex", alignItems: "center", justifyContent: "space-between",
               marginTop: "12px", padding: "0 4px",
             }}>
-              <span style={{ fontSize: "0.75rem", color: "#94a3b8" }}>
+              <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
                 Created {new Date(followupTodo.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
               </span>
-              <span style={{ display: "flex", alignItems: "center", gap: "5px", fontSize: "0.75rem", color: "#94a3b8" }}>
+              <span style={{ display: "flex", alignItems: "center", gap: "5px", fontSize: "0.75rem", color: "var(--text-muted)" }}>
                 <span style={{
                   display: "inline-block", width: "7px", height: "7px", borderRadius: "50%",
                   background: followupTodo.status === "open" ? "#f59e0b" : "#22c55e",
@@ -2975,7 +3060,7 @@ export default function StudentAssignmentReview() {
                                 <span
                                   style={{
                                     fontSize: "0.7rem",
-                                    color: "#94a3b8",
+                                    color: "var(--text-muted)",
                                     fontFamily: "monospace",
                                   }}
                                 >
@@ -3006,7 +3091,7 @@ export default function StudentAssignmentReview() {
                       background: "#f8fafc",
                       borderRadius: "8px",
                       fontSize: "0.85rem",
-                      color: "#94a3b8",
+                      color: "var(--text-muted)",
                       textAlign: "center",
                       fontStyle: "italic",
                     }}
@@ -3094,7 +3179,7 @@ function RecommendationContext({
             padding: "4px 8px",
             background: "transparent",
             border: "none",
-            color: "#94a3b8",
+            color: "var(--text-muted)",
             fontSize: "0.75rem",
             cursor: "pointer",
             flexShrink: 0,
@@ -3239,7 +3324,7 @@ function VideoConversationDisplay({
       >
         <span
           style={{
-            background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
+            background: "#3d5a80",
             color: "white",
             padding: "4px 10px",
             borderRadius: "12px",
@@ -3249,7 +3334,7 @@ function VideoConversationDisplay({
         >
           Video conversation
         </span>
-        <span style={{ fontSize: "0.8rem", color: "#666" }}>
+        <span style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}>
           {coachPromptCount} coach prompt{coachPromptCount !== 1 ? "s" : ""} • {formatDuration(durationSec)}
         </span>
         {videoUrl && (
@@ -3259,7 +3344,7 @@ function VideoConversationDisplay({
               onViewVideo(videoUrl, durationSec, questionNumber, conversationTurns);
             }}
             style={{
-              background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
+              background: "#3d5a80",
               color: "white",
               border: "none",
               borderRadius: "8px",
@@ -3307,7 +3392,7 @@ function VideoConversationDisplay({
               style={{
                 fontSize: "0.75rem",
                 fontWeight: 600,
-                color: turn.role === "coach" ? "#667eea" : "#059669",
+                color: turn.role === "coach" ? "#3d5a80" : "#059669",
                 minWidth: "52px",
                 flexShrink: 0,
               }}
@@ -3338,7 +3423,7 @@ function VideoConversationDisplay({
             style={{
               background: "transparent",
               border: "none",
-              color: "#667eea",
+              color: "#3d5a80",
               fontSize: "0.8rem",
               fontWeight: 500,
               cursor: "pointer",
@@ -3372,6 +3457,215 @@ function VideoConversationDisplay({
 }
 
 // ============================================
+// Rubric Summary Panel
+// Teacher-facing LLM-generated summary aligned to assessment criteria.
+// On-demand generation — click to generate, cached in component state.
+// ============================================
+
+function RubricSummaryPanel({
+  questionText,
+  conversationTurns,
+  learningObjective,
+  successCriteria,
+}: {
+  questionText: string;
+  conversationTurns: ConversationTurn[];
+  learningObjective?: string;
+  successCriteria: string[];
+}) {
+  const [summary, setSummary] = useState<SessionSummaryResponse | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(false);
+
+  const handleGenerate = async () => {
+    setLoading(true);
+    setError(false);
+    try {
+      const result = await generateSessionSummary(
+        questionText,
+        conversationTurns,
+        learningObjective,
+        successCriteria
+      );
+      console.log("[RubricSummary] guardrailsVersion:", result.guardrailsVersion, "bullets:", result.bullets.length);
+      setSummary(result);
+    } catch {
+      setError(true);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div
+      style={{
+        marginTop: "16px",
+        padding: "14px 16px",
+        background: "#f0f7ff",
+        borderRadius: "8px",
+        border: "1px solid #d0e0f0",
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          marginBottom: summary ? "10px" : "0",
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+          <span
+            style={{
+              fontSize: "0.8rem",
+              fontWeight: 600,
+              color: "#3d5a80",
+              textTransform: "uppercase",
+              letterSpacing: "0.03em",
+            }}
+          >
+            Rubric Summary
+          </span>
+          {!summary && !loading && (
+            <span style={{ fontSize: "0.75rem", color: "#7a8ea8" }}>
+              AI-generated from transcript
+            </span>
+          )}
+        </div>
+
+        {!summary && !loading && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              handleGenerate();
+            }}
+            style={{
+              background: "#3d5a80",
+              color: "white",
+              border: "none",
+              borderRadius: "6px",
+              padding: "5px 12px",
+              fontSize: "0.78rem",
+              fontWeight: 500,
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              gap: "5px",
+            }}
+          >
+            Generate
+          </button>
+        )}
+
+        {summary && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              handleGenerate();
+            }}
+            style={{
+              background: "none",
+              border: "none",
+              color: "#7a8ea8",
+              fontSize: "0.72rem",
+              cursor: "pointer",
+              padding: "2px 6px",
+            }}
+            title="Regenerate summary"
+          >
+            ↻ Regenerate
+          </button>
+        )}
+      </div>
+
+      {/* Loading state */}
+      {loading && (
+        <div style={{ display: "flex", alignItems: "center", gap: "8px", padding: "8px 0" }}>
+          <div
+            style={{
+              width: "14px",
+              height: "14px",
+              border: "2px solid #d0e0f0",
+              borderTopColor: "#3d5a80",
+              borderRadius: "50%",
+              animation: "spin 0.8s linear infinite",
+            }}
+          />
+          <span style={{ fontSize: "0.82rem", color: "#7a8ea8" }}>Analyzing transcript...</span>
+        </div>
+      )}
+
+      {/* Error state */}
+      {error && !loading && (
+        <div style={{ padding: "6px 0" }}>
+          <span style={{ fontSize: "0.82rem", color: "#d32f2f" }}>
+            Failed to generate summary.{" "}
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                handleGenerate();
+              }}
+              style={{
+                background: "none",
+                border: "none",
+                color: "#3d5a80",
+                cursor: "pointer",
+                fontSize: "0.82rem",
+                textDecoration: "underline",
+                padding: 0,
+              }}
+            >
+              Try again
+            </button>
+          </span>
+        </div>
+      )}
+
+      {/* Summary content */}
+      {summary && !loading && (
+        <div>
+          <ul
+            style={{
+              margin: "0 0 10px 0",
+              paddingLeft: "18px",
+              display: "flex",
+              flexDirection: "column",
+              gap: "5px",
+            }}
+          >
+            {summary.bullets.map((bullet, idx) => (
+              <li
+                key={idx}
+                style={{
+                  fontSize: "0.85rem",
+                  color: "#333",
+                  lineHeight: 1.5,
+                }}
+              >
+                {bullet}
+              </li>
+            ))}
+          </ul>
+          <p
+            style={{
+              margin: 0,
+              fontSize: "0.85rem",
+              color: "#3d5a80",
+              fontWeight: 500,
+              lineHeight: 1.5,
+              borderTop: "1px solid #d0e0f0",
+              paddingTop: "8px",
+            }}
+          >
+            {summary.overall}
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ============================================
 // Question Card With Attempts Component
 // Shows all attempts for a question, newest first
 // ============================================
@@ -3385,6 +3679,7 @@ interface QuestionCardWithAttemptsProps {
   playingAttemptKey: string | null;
   onPlayAudio: (audioBase64: string, audioFormat: string, attemptKey: string) => void;
   onViewVideo: (videoUrl: string, durationSec: number, questionNum: number, transcript?: ConversationTurn[]) => void;
+  assessment?: PromptAssessment;
 }
 
 function QuestionCardWithAttempts({
@@ -3396,13 +3691,15 @@ function QuestionCardWithAttempts({
   playingAttemptKey,
   onPlayAudio,
   onViewVideo,
+  assessment,
 }: QuestionCardWithAttemptsProps) {
   // Outcome colors
   const outcomeColors: Record<string, { bg: string; color: string }> = {
     demonstrated: { bg: "#e8f5e9", color: "#166534" },
     "with-support": { bg: "#e3f2fd", color: "#1565c0" },
     developing: { bg: "#fff3e0", color: "#e65100" },
-    "not-attempted": { bg: "#f5f5f5", color: "#666" },
+    "needs-review": { bg: "#fef3c7", color: "#92400e" }, // Amber - requires teacher attention
+    "not-attempted": { bg: "#f5f5f5", color: "var(--text-secondary)" },
   };
 
   // Get the latest attempt for the header badge (attempts are sorted newest first)
@@ -3441,7 +3738,7 @@ function QuestionCardWithAttempts({
         >
           <span
             style={{
-              background: "#7c8fce",
+              background: "#3d5a80",
               color: "white",
               padding: "4px 10px",
               borderRadius: "8px",
@@ -3478,13 +3775,13 @@ function QuestionCardWithAttempts({
         >
           {/* Status indicators */}
           {anyUsedHint && (
-            <span style={{ fontSize: "0.7rem", fontWeight: 500, color: "#9178a8" }} title="Used hint">Hint</span>
+            <span style={{ fontSize: "0.7rem", fontWeight: 500, color: "#4a6b8a" }} title="Used hint">Hint</span>
           )}
           {anyHasVoice && (
             <span style={{ fontSize: "0.7rem", fontWeight: 500, color: "#2e7d32" }} title="Voice recording">Voice</span>
           )}
           {hasNote && (
-            <span style={{ fontSize: "0.7rem", fontWeight: 500, color: "#666" }} title="Has your note">Note</span>
+            <span style={{ fontSize: "0.7rem", fontWeight: 500, color: "var(--text-secondary)" }} title="Has your note">Note</span>
           )}
 
           {/* Attempts count badge */}
@@ -3532,7 +3829,7 @@ function QuestionCardWithAttempts({
                 fontSize: "0.75rem",
                 fontWeight: 500,
                 background: "#f5f5f5",
-                color: "#666",
+                color: "var(--text-secondary)",
                 whiteSpace: "nowrap",
               }}
               title={`Deferred after ${latestAttempt.deferralMetadata?.attemptCount || "multiple"} coaching attempts`}
@@ -3542,7 +3839,7 @@ function QuestionCardWithAttempts({
           )}
 
           {/* Expand/collapse arrow */}
-          <span style={{ color: "#666", fontSize: "1.2rem" }}>
+          <span style={{ color: "var(--text-secondary)", fontSize: "1.2rem" }}>
             {expanded ? "▼" : "▶"}
           </span>
         </div>
@@ -3559,7 +3856,7 @@ function QuestionCardWithAttempts({
                 padding: "16px",
                 marginBottom: "12px",
                 textAlign: "center",
-                color: "#999",
+                color: "var(--text-muted)",
               }}
             >
               No response recorded
@@ -3580,7 +3877,7 @@ function QuestionCardWithAttempts({
                       background: isLatest ? "#f5f5f5" : "#fafafa",
                       borderRadius: "8px",
                       padding: "16px",
-                      border: isLatest ? "2px solid #7c8fce" : "1px solid #eee",
+                      border: isLatest ? "2px solid #3d5a80" : "1px solid #eee",
                     }}
                   >
                     {/* Attempt header */}
@@ -3590,18 +3887,18 @@ function QuestionCardWithAttempts({
                           style={{
                             fontSize: "0.8rem",
                             fontWeight: 600,
-                            color: isLatest ? "#7c8fce" : "#666",
+                            color: isLatest ? "#3d5a80" : "var(--text-secondary)",
                           }}
                         >
                           {isLatest ? "Latest Attempt" : `Attempt #${attempt.attemptNumber}`}
                         </span>
-                        <span style={{ fontSize: "0.8rem", color: "#999" }}>
+                        <span style={{ fontSize: "0.8rem", color: "var(--text-muted)" }}>
                           {new Date(attempt.sessionDate).toLocaleDateString()}
                         </span>
                       </div>
                       <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
                         {attempt.usedHint && (
-                          <span style={{ fontSize: "0.75rem", color: "#9178a8" }}>Hint used</span>
+                          <span style={{ fontSize: "0.75rem", color: "#4a6b8a" }}>Hint used</span>
                         )}
                         <span
                           style={{
@@ -3625,7 +3922,7 @@ function QuestionCardWithAttempts({
                               fontSize: "0.75rem",
                               fontWeight: 500,
                               background: "#f0f0f0",
-                              color: "#666",
+                              color: "var(--text-secondary)",
                             }}
                           >
                             Deferred
@@ -3643,7 +3940,7 @@ function QuestionCardWithAttempts({
                           padding: "10px 12px",
                           marginBottom: "12px",
                           fontSize: "0.8rem",
-                          color: "#666",
+                          color: "var(--text-secondary)",
                           display: "flex",
                           alignItems: "center",
                           gap: "12px",
@@ -3673,10 +3970,10 @@ function QuestionCardWithAttempts({
                       />
                     ) : (
                       <div style={{ display: "flex", alignItems: "flex-start", gap: "12px" }}>
-                        <span style={{ fontSize: "0.8rem", fontWeight: 600, color: "#666" }}>Student</span>
+                        <span style={{ fontSize: "0.8rem", fontWeight: 600, color: "var(--text-secondary)" }}>Student</span>
                         <div style={{ flex: 1 }}>
                           <p style={{ margin: 0, lineHeight: 1.6, fontSize: "0.95rem" }}>
-                            {attempt.response || <span style={{ color: "#999", fontStyle: "italic" }}>No response</span>}
+                            {attempt.response || <span style={{ color: "var(--text-muted)", fontStyle: "italic" }}>No response</span>}
                           </p>
                         </div>
                         {attempt.hasVoiceRecording && attempt.audioBase64 && attempt.audioFormat && (
@@ -3686,7 +3983,7 @@ function QuestionCardWithAttempts({
                               onPlayAudio(attempt.audioBase64!, attempt.audioFormat!, attemptKey);
                             }}
                             style={{
-                              background: isPlaying ? "#7c8fce" : "#e8f5e9",
+                              background: isPlaying ? "#3d5a80" : "#e8f5e9",
                               color: isPlaying ? "white" : "#166534",
                               border: "none",
                               borderRadius: "50%",
@@ -3715,7 +4012,7 @@ function QuestionCardWithAttempts({
                               );
                             }}
                             style={{
-                              background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
+                              background: "#3d5a80",
                               color: "white",
                               border: "none",
                               borderRadius: "8px",
@@ -3745,10 +4042,23 @@ function QuestionCardWithAttempts({
             </div>
           )}
 
+          {/* Rubric-Aligned Summary (for questions with assessment metadata + conversation) */}
+          {assessment?.successCriteria && assessment.successCriteria.length > 0 && (() => {
+            const latestWithTranscript = question.attempts.find(a => a.conversationTurns && a.conversationTurns.length > 0);
+            return latestWithTranscript ? (
+              <RubricSummaryPanel
+                questionText={question.questionText}
+                conversationTurns={latestWithTranscript.conversationTurns!}
+                learningObjective={assessment.learningObjective}
+                successCriteria={assessment.successCriteria}
+              />
+            ) : null;
+          })()}
+
           {/* Teacher Note for this question */}
           <div style={{ marginTop: "16px" }}>
             <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "6px" }}>
-              <span style={{ fontSize: "0.85rem", color: "#666" }}>Your note for Q{question.questionNumber}:</span>
+              <span style={{ fontSize: "0.85rem", color: "var(--text-secondary)" }}>Your note for Q{question.questionNumber}:</span>
             </div>
             <textarea
               value={note}

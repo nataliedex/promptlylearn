@@ -132,7 +132,7 @@ router.patch("/students/:studentId/profile", (req, res) => {
     }
 
     // Validate updates
-    if (updates.inputPreference && !["voice", "typing", "no_preference"].includes(updates.inputPreference)) {
+    if (updates.inputPreference && !["video", "typing", "no_preference"].includes(updates.inputPreference)) {
       return res.status(400).json({ error: "Invalid inputPreference value" });
     }
     if (updates.pacePreference && !["take_my_time", "keep_it_moving"].includes(updates.pacePreference)) {

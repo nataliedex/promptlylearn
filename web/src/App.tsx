@@ -62,7 +62,7 @@ class ErrorBoundary extends Component<{ children: ReactNode }, ErrorBoundaryStat
             style={{
               marginTop: "16px",
               padding: "10px 20px",
-              background: "#667eea",
+              background: "#3d5a80",
               color: "white",
               border: "none",
               borderRadius: "6px",

@@ -63,10 +63,11 @@ export type ReviewState =
  * Question-level outcome focused on learning journey.
  */
 export type QuestionOutcome =
-  | "demonstrated"    // Got it, showed reasoning
-  | "with-support"    // Needed help but succeeded
-  | "developing"      // Still working on it
-  | "not-attempted";  // Didn't try
+  | "demonstrated"    // Got it, showed reasoning (score >= 80, no hint)
+  | "with-support"    // Needed help but succeeded (score >= 50)
+  | "developing"      // Still working on it (score < 50)
+  | "needs-review"    // Has response but no score yet - teacher must review
+  | "not-attempted";  // Didn't try (empty response)
 
 // ============================================
 // Dashboard-Level Types
@@ -186,6 +187,7 @@ export interface AssignmentReviewData {
   title: string;
   questionCount: number;
   assignedAt?: string; // ISO date string of earliest assignment
+  dueDate?: string; // ISO date string of due date
 
   // Summary stats
   stats: {

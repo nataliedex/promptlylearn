@@ -520,39 +520,52 @@ export default function AskCoachTopicDrawer({
             </div>
           )}
 
-          {/* Step 2: Ready to Chat */}
+          {/* Step 2: Ready to Start - Single combined screen */}
           {step === "ready" && (
-            <div style={{ padding: "16px", flex: 1 }}>
+            <div style={{ padding: "20px", flex: 1 }}>
+              {/* Headline */}
               <h3
                 style={{
-                  margin: "0 0 8px 0",
-                  fontSize: "1.1rem",
+                  margin: "0 0 6px 0",
+                  fontSize: "1.15rem",
                   fontWeight: 600,
                   color: "var(--text-primary)",
+                  textAlign: "center",
                 }}
               >
-                Ready to chat?
+                Need a little help?
               </h3>
+              <p
+                style={{
+                  margin: "0 0 20px 0",
+                  fontSize: "0.85rem",
+                  color: "var(--text-secondary)",
+                  textAlign: "center",
+                  lineHeight: 1.5,
+                }}
+              >
+                Talk through a question, practice out loud, or ask for clarification.
+              </p>
 
               {/* Selected topics display */}
               <div
                 style={{
-                  marginBottom: "20px",
-                  padding: "16px",
+                  marginBottom: "16px",
+                  padding: "14px",
                   background: "var(--surface-accent-tint)",
-                  borderRadius: "12px",
+                  borderRadius: "10px",
                   border: "1px solid var(--accent-secondary)",
                 }}
               >
                 <p
                   style={{
                     margin: "0 0 8px 0",
-                    fontSize: "0.85rem",
+                    fontSize: "0.8rem",
                     color: "var(--text-secondary)",
                     fontWeight: 500,
                   }}
                 >
-                  We'll talk about:
+                  We'll practice:
                 </p>
                 <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
                   {selectedTopics.map((topic) => (
@@ -560,10 +573,10 @@ export default function AskCoachTopicDrawer({
                       key={topic}
                       style={{
                         display: "inline-block",
-                        padding: "6px 12px",
+                        padding: "5px 12px",
                         background: "var(--accent-primary)",
                         color: "white",
-                        borderRadius: "16px",
+                        borderRadius: "14px",
                         fontSize: "0.85rem",
                         fontWeight: 500,
                       }}
@@ -572,70 +585,51 @@ export default function AskCoachTopicDrawer({
                     </span>
                   ))}
                 </div>
-                {selectedSubjects.length > 0 && (
-                  <p
-                    style={{
-                      margin: "10px 0 0 0",
-                      fontSize: "0.8rem",
-                      color: "var(--text-muted)",
-                    }}
-                  >
-                    Subject{selectedSubjects.length > 1 ? "s" : ""}: {selectedSubjects.join(", ")}
-                  </p>
-                )}
+                <button
+                  onClick={handleBack}
+                  style={{
+                    background: "none",
+                    border: "none",
+                    color: "var(--accent-primary)",
+                    fontSize: "0.8rem",
+                    cursor: "pointer",
+                    padding: "0",
+                    marginTop: "10px",
+                    textDecoration: "underline",
+                  }}
+                >
+                  Change topics
+                </button>
               </div>
 
-              {/* Edit topics link */}
-              <button
-                onClick={handleBack}
-                style={{
-                  background: "none",
-                  border: "none",
-                  color: "var(--accent-primary)",
-                  fontSize: "0.9rem",
-                  cursor: "pointer",
-                  padding: "0",
-                  marginBottom: "24px",
-                  textDecoration: "underline",
-                  fontWeight: 500,
-                }}
-              >
-                Edit topics
-              </button>
-
-              {/* Mode toggle */}
-              <div
-                style={{
-                  marginBottom: "24px",
-                  padding: "16px",
-                  background: "var(--surface-muted)",
-                  borderRadius: "12px",
-                }}
-              >
+              {/* Mode selection */}
+              <div style={{ marginBottom: "16px" }}>
                 <p
                   style={{
-                    margin: "0 0 12px 0",
+                    margin: "0 0 10px 0",
                     fontSize: "0.9rem",
                     color: "var(--text-primary)",
                     fontWeight: 500,
+                    textAlign: "center",
                   }}
                 >
-                  How do you want to chat?
+                  How would you like to practice?
                 </p>
-                <div style={{ display: "flex", gap: "12px" }}>
+                <div style={{ display: "flex", gap: "10px" }}>
+                  {/* Talk - Primary/Recommended */}
                   <button
                     onClick={() => setSelectedMode("voice")}
                     style={{
                       flex: 1,
-                      padding: "14px",
-                      border: selectedMode === "voice" ? "2px solid var(--accent-primary)" : "2px solid var(--border-subtle)",
+                      padding: "14px 12px",
+                      border: selectedMode === "voice" ? "2px solid #3d5a80" : "2px solid var(--border-subtle)",
                       borderRadius: "10px",
-                      background: selectedMode === "voice" ? "var(--surface-accent-tint)" : "white",
+                      background: selectedMode === "voice" ? "#eef2ff" : "white",
                       cursor: "pointer",
                       display: "flex",
                       flexDirection: "column",
                       alignItems: "center",
-                      gap: "6px",
+                      gap: "4px",
                       transition: "all 0.15s ease",
                     }}
                   >
@@ -643,28 +637,44 @@ export default function AskCoachTopicDrawer({
                       style={{
                         fontWeight: 600,
                         fontSize: "0.95rem",
-                        color: selectedMode === "voice" ? "var(--accent-primary)" : "var(--text-primary)",
+                        color: selectedMode === "voice" ? "#2c4a6e" : "var(--text-primary)",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "6px",
                       }}
                     >
-                      Voice
+                      Talk
+                      <span
+                        style={{
+                          fontSize: "0.65rem",
+                          fontWeight: 500,
+                          color: "#3d5a80",
+                          background: "#e0e7ff",
+                          padding: "2px 5px",
+                          borderRadius: "4px",
+                        }}
+                      >
+                        recommended
+                      </span>
                     </span>
-                    <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
-                      Talk with your coach
+                    <span style={{ fontSize: "0.72rem", color: "var(--text-muted)" }}>
+                      Practice out loud
                     </span>
                   </button>
+                  {/* Type - Secondary */}
                   <button
                     onClick={() => setSelectedMode("type")}
                     style={{
                       flex: 1,
-                      padding: "14px",
-                      border: selectedMode === "type" ? "2px solid var(--accent-primary)" : "2px solid var(--border-subtle)",
+                      padding: "14px 12px",
+                      border: selectedMode === "type" ? "2px solid #3d5a80" : "2px solid var(--border-subtle)",
                       borderRadius: "10px",
-                      background: selectedMode === "type" ? "var(--surface-accent-tint)" : "white",
+                      background: selectedMode === "type" ? "#f0f4ff" : "white",
                       cursor: "pointer",
                       display: "flex",
                       flexDirection: "column",
                       alignItems: "center",
-                      gap: "6px",
+                      gap: "4px",
                       transition: "all 0.15s ease",
                     }}
                   >
@@ -672,17 +682,31 @@ export default function AskCoachTopicDrawer({
                       style={{
                         fontWeight: 600,
                         fontSize: "0.95rem",
-                        color: selectedMode === "type" ? "var(--accent-primary)" : "var(--text-primary)",
+                        color: selectedMode === "type" ? "#2c4a6e" : "var(--text-primary)",
                       }}
                     >
                       Type
                     </span>
-                    <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>
+                    <span style={{ fontSize: "0.72rem", color: "var(--text-muted)" }}>
                       Type your messages
                     </span>
                   </button>
                 </div>
               </div>
+
+              {/* Safety / Trust message */}
+              <p
+                style={{
+                  margin: "0",
+                  fontSize: "0.78rem",
+                  color: "var(--text-muted)",
+                  textAlign: "center",
+                  fontStyle: "italic",
+                  lineHeight: 1.4,
+                }}
+              >
+                This conversation is not graded and is not shared with your teacher.
+              </p>
             </div>
           )}
         </div>
@@ -739,7 +763,7 @@ export default function AskCoachTopicDrawer({
                 gap: "8px",
               }}
             >
-              Start Session
+              Start Coaching
             </button>
           )}
         </div>

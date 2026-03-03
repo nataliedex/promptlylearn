@@ -43,6 +43,220 @@ import { teacherSettingsStore } from "../../stores/teacherSettingsStore";
 import { teacherTodoStore } from "../../stores/teacherTodoStore";
 import { TeacherTodo, RecommendationCategory } from "../../domain/teacherTodo";
 
+// ============================================
+// Assignment State Filtering (AUTHORITATIVE RULE)
+// ============================================
+
+/**
+ * AUTHORITATIVE PRODUCT RULE:
+ *
+ * Recommended Actions shows ONLY recommendations that:
+ * 1. Have a valid assignmentId
+ * 2. Successfully map to at least one existing StudentAssignment
+ * 3. Have at least one student where reviewState === "pending_review"
+ *
+ * Everything else is filtered out. No safety keeps. No ambiguous states.
+ * If it is not actionable, it does not belong in Recommended Actions.
+ *
+ * "pending_review" is the ONLY actionable state.
+ * All other states are filtered out:
+ * - "not_started" (student hasn't submitted)
+ * - "reviewed" (teacher already reviewed)
+ * - "resolved" (completed with action)
+ * - "followup_scheduled" (has pending follow-up)
+ * - null/undefined (unknown state)
+ * - missing assignment record
+ * - missing assignmentId
+ */
+const ACTIONABLE_REVIEW_STATE = "pending_review";
+
+/**
+ * Filter decision result with detailed reason for logging and auto-resolution
+ */
+interface FilterDecision {
+  keep: boolean;
+  reason:
+    | "has_pending_review"
+    | "no_assignment_id"
+    | "no_valid_assignments"
+    | "all_non_pending";
+  shouldAutoResolve: boolean;
+}
+
+/**
+ * AUTHORITATIVE: Determine if a recommendation should be shown.
+ *
+ * Returns keep: true ONLY IF:
+ * - rec.assignmentId exists AND
+ * - At least one StudentAssignment record is found AND
+ * - At least one has reviewState === "pending_review"
+ *
+ * Returns keep: false for ALL other cases (no safety keeps).
+ */
+function shouldKeepRecommendation(
+  rec: ReturnType<typeof recommendationStore.getActive>[0],
+  store: StudentAssignmentStore
+): FilterDecision {
+  // STRICT: No assignmentId → FILTER OUT
+  if (!rec.assignmentId) {
+    return {
+      keep: false,
+      reason: "no_assignment_id",
+      shouldAutoResolve: true,
+    };
+  }
+
+  let foundAnyAssignment = false;
+
+  // Check each student in the recommendation
+  for (const studentId of rec.studentIds) {
+    const assignment = store.getAssignment(rec.assignmentId, studentId);
+
+    if (!assignment) {
+      // No assignment record found for this student - continue checking others
+      continue;
+    }
+
+    foundAnyAssignment = true;
+
+    // ONLY pending_review is actionable
+    if (assignment.reviewState === ACTIONABLE_REVIEW_STATE) {
+      return {
+        keep: true,
+        reason: "has_pending_review",
+        shouldAutoResolve: false,
+      };
+    }
+  }
+
+  // STRICT: No valid assignment records found → FILTER OUT
+  if (!foundAnyAssignment) {
+    return {
+      keep: false,
+      reason: "no_valid_assignments",
+      shouldAutoResolve: true,
+    };
+  }
+
+  // All assignments exist but none are pending_review → FILTER OUT
+  return {
+    keep: false,
+    reason: "all_non_pending",
+    shouldAutoResolve: true,
+  };
+}
+
+/**
+ * AUTHORITATIVE: Filter recommendations to show ONLY actionable work.
+ *
+ * PRODUCT RULE: Recommended Actions is strictly
+ * "Work that requires teacher action right now."
+ *
+ * It is NOT:
+ * - A historical feed
+ * - A general awareness list
+ * - A soft suggestion panel
+ *
+ * Auto-resolves stale recommendations to prevent them from reappearing.
+ */
+function filterByAssignmentState(
+  recommendations: ReturnType<typeof recommendationStore.getActive>,
+  store: StudentAssignmentStore,
+  enableLogging: boolean = process.env.NODE_ENV === "development"
+): ReturnType<typeof recommendationStore.getActive> {
+  let keptCount = 0;
+  let filteredCount = 0;
+  const autoResolvedIds: string[] = [];
+
+  const result = recommendations.filter((rec) => {
+    const decision = shouldKeepRecommendation(rec, store);
+
+    if (enableLogging) {
+      // Build detailed assignment state info for logging
+      const assignmentStates = rec.studentIds.map((studentId) => {
+        const assignment = rec.assignmentId
+          ? store.getAssignment(rec.assignmentId, studentId)
+          : null;
+        return {
+          studentId,
+          foundAssignment: !!assignment,
+          reviewState: assignment?.reviewState ?? null,
+          isPendingReview: assignment?.reviewState === ACTIONABLE_REVIEW_STATE,
+        };
+      });
+
+      console.log("[RecommendationFilter]", {
+        recommendationId: rec.id,
+        assignmentId: rec.assignmentId,
+        ruleName: rec.triggerData?.ruleName,
+        insightType: rec.insightType,
+        status: rec.status,
+        studentIds: rec.studentIds,
+        assignmentStates,
+        decision: decision.keep ? "KEEP" : "FILTER_OUT",
+        reason: decision.reason,
+      });
+
+      // DEFENSIVE: Contract violation check
+      if (decision.keep) {
+        const hasPendingReview = assignmentStates.some((s) => s.isPendingReview);
+        if (!hasPendingReview) {
+          console.error(
+            "[RecommendationFilter] CONTRACT VIOLATION: Recommendation kept without pending_review!",
+            {
+              recommendationId: rec.id,
+              assignmentId: rec.assignmentId,
+              assignmentStates,
+            }
+          );
+        }
+      }
+    }
+
+    if (decision.keep) {
+      keptCount++;
+    } else {
+      filteredCount++;
+
+      // AUTO-RESOLVE: Mark stale recommendations as resolved to prevent reappearing
+      if (decision.shouldAutoResolve && rec.status === "active") {
+        try {
+          recommendationStore.markResolved(
+            rec.id,
+            "system-cleanup",
+            "completed" // ResolutionStatus
+          );
+          autoResolvedIds.push(rec.id);
+          if (enableLogging) {
+            console.log(
+              `[RecommendationFilter] Auto-resolved stale recommendation: ${rec.id} (reason: ${decision.reason})`
+            );
+          }
+        } catch (err) {
+          console.error(
+            `[RecommendationFilter] Failed to auto-resolve ${rec.id}:`,
+            err
+          );
+        }
+      }
+    }
+
+    return decision.keep;
+  });
+
+  if (enableLogging) {
+    console.log(
+      `[RecommendationFilter] Summary: ${keptCount} kept, ${filteredCount} filtered, ${autoResolvedIds.length} auto-resolved (${recommendations.length} → ${result.length})`
+    );
+  }
+
+  return result;
+}
+
+// ============================================
+// Helper Functions
+// ============================================
+
 /**
  * Map recommendation rule name to human-readable category
  */
@@ -63,6 +277,299 @@ function getRuleCategory(ruleName: string): RecommendationCategory {
     default:
       return "Needs Support"; // Default fallback
   }
+}
+
+// ============================================
+// ReasonKey Computation (for Shared Issues grouping)
+// ============================================
+
+/**
+ * Compute reason metadata for grouping recommendations on AssignmentReview.
+ *
+ * PRODUCT GOAL: Enable "Shared Issues" section on AssignmentReview that groups
+ * students who share the same underlying issue. Dashboard shows individual cards.
+ *
+ * reasonKey format: `assignmentId::ruleName::subReason`
+ * - assignmentId: The assignment this recommendation relates to
+ * - ruleName: The detection rule (e.g., "needs-support", "developing")
+ * - subReason: Finer-grained categorization based on trigger signals
+ *
+ * @returns { reasonKey, reasonLabel, reasonDetails }
+ */
+function computeReasonMetadata(rec: ReturnType<typeof recommendationStore.getActive>[0]): {
+  reasonKey: string;
+  reasonLabel: string;
+  reasonDetails: string;
+} {
+  const assignmentId = rec.assignmentId || "unknown";
+  const ruleName = rec.triggerData?.ruleName || "unknown";
+  const signals = rec.triggerData?.signals || {};
+
+  // Determine sub-reason based on rule and signals
+  let subReason = "general";
+  let reasonLabel = "";
+  let reasonDetails = "";
+
+  switch (ruleName) {
+    case "needs-support": {
+      // Sub-categorize by primary trigger: low score vs high hint usage
+      const score = typeof signals.score === "number" ? signals.score : null;
+      const hintRate = typeof signals.hintUsageRate === "number" ? signals.hintUsageRate : null;
+
+      if (score !== null && score < 50) {
+        subReason = "low_score";
+        reasonLabel = "Needs Support: Low Score";
+        reasonDetails = `Score ${score}% - may need additional instruction`;
+      } else if (hintRate !== null && hintRate > 0.5) {
+        subReason = "high_hints";
+        reasonLabel = "Needs Support: Heavy Hint Usage";
+        reasonDetails = `Used hints on ${Math.round(hintRate * 100)}% of questions`;
+      } else {
+        subReason = "general";
+        reasonLabel = "Needs Support";
+        reasonDetails = "Student may benefit from check-in";
+      }
+      break;
+    }
+
+    case "developing": {
+      // Developing students: moderate performance with some scaffolding needs
+      const score = typeof signals.score === "number" ? signals.score : null;
+      subReason = "developing_range";
+      reasonLabel = "Developing";
+      reasonDetails = score !== null
+        ? `Score ${score}% - progressing but may benefit from targeted practice`
+        : "Making progress with some support needs";
+      break;
+    }
+
+    case "group-support": {
+      // Group support: multiple students with same issue
+      const studentCount = typeof signals.studentCount === "number" ? signals.studentCount : rec.studentIds.length;
+      subReason = "group_needs_support";
+      reasonLabel = "Group Needs Support";
+      reasonDetails = `${studentCount} students showing similar support needs`;
+      break;
+    }
+
+    case "ready-for-challenge": {
+      // Strong performance: ready for extension
+      const score = typeof signals.score === "number" ? signals.score : null;
+      subReason = "strong_performance";
+      reasonLabel = "Ready for Challenge";
+      reasonDetails = score !== null
+        ? `Score ${score}% - ready for extension activities`
+        : "Demonstrating mastery, ready for enrichment";
+      break;
+    }
+
+    case "notable-improvement": {
+      // Celebrate progress: significant score improvement
+      const improvement = typeof signals.improvement === "number" ? signals.improvement : null;
+      const previousScore = typeof signals.previousScore === "number" ? signals.previousScore : null;
+      const currentScore = typeof signals.currentScore === "number" ? signals.currentScore : null;
+      subReason = "improvement";
+      reasonLabel = "Celebrate Progress";
+      if (improvement !== null && previousScore !== null && currentScore !== null) {
+        reasonDetails = `Improved from ${previousScore}% to ${currentScore}% (+${improvement} points)`;
+      } else {
+        reasonDetails = "Showed significant improvement";
+      }
+      break;
+    }
+
+    case "persistence": {
+      // Persistence: completed despite challenges
+      subReason = "persistence";
+      reasonLabel = "Celebrate Persistence";
+      reasonDetails = "Showed great persistence through difficulty";
+      break;
+    }
+
+    case "watch-progress": {
+      // Monitor: worth watching
+      subReason = "monitor";
+      reasonLabel = "Monitor";
+      reasonDetails = "Situation worth monitoring";
+      break;
+    }
+
+    default: {
+      // Fallback for unknown rules
+      subReason = "general";
+      reasonLabel = ruleName.split("-").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+      reasonDetails = rec.reason || "Recommended for review";
+    }
+  }
+
+  const reasonKey = `${assignmentId}::${ruleName}::${subReason}`;
+
+  return { reasonKey, reasonLabel, reasonDetails };
+}
+
+// ============================================
+// Deduplication: One Recommendation per (studentId, assignmentId)
+// ============================================
+
+/**
+ * RULE PRIORITY for deduplication (highest = most urgent, pick first):
+ *
+ * 1. Coach moved on / move-on signals - student gave up or coach escalated
+ * 2. Misconception detected - specific learning gap identified
+ * 3. needs-support - low score or high hints, needs immediate attention
+ * 4. developing - making progress but needs guidance
+ * 5. persistence - completed despite difficulty (celebrate but lower urgency)
+ * 6. notable-improvement / celebrate-progress - positive, lower urgency
+ * 7. ready-for-challenge / extend learning - enrichment opportunity
+ * 8. watch-progress / monitor - passive observation
+ *
+ * Tiebreaker: more recent completedAt, then stable sort by rec.id
+ */
+const RULE_PRIORITY: Record<string, number> = {
+  // Highest priority (most urgent)
+  "coach-moved-on": 100,
+  "move-on": 100,
+  // Misconception
+  "misconception": 90,
+  "misconception-detected": 90,
+  // Needs support
+  "needs-support": 80,
+  "seed_needs_support": 80,
+  "seed_group_support": 80,
+  "check-in-suggested": 75,
+  // Developing
+  "developing": 60,
+  // Persistence
+  "persistence": 50,
+  // Celebrate
+  "notable-improvement": 40,
+  "celebrate-progress": 40,
+  // Extend learning
+  "ready-for-challenge": 30,
+  "challenge-opportunity": 30,
+  "seed_extend_learning": 30,
+  // Monitor (lowest)
+  "watch-progress": 10,
+  "monitor": 10,
+};
+
+/**
+ * Get priority score for a recommendation based on rule and signals.
+ * Higher = more urgent = should be kept when deduping.
+ */
+function getDedupeScore(rec: ReturnType<typeof recommendationStore.getActive>[0]): number {
+  const ruleName = rec.triggerData?.ruleName || "";
+  const signals = rec.triggerData?.signals || {};
+
+  // Start with rule-based priority
+  let score = RULE_PRIORITY[ruleName] ?? 20; // Default to 20 if unknown rule
+
+  // Boost for specific signals that indicate urgency
+  if (signals.movedOn === true || signals.coachMovedOn === true) {
+    score = Math.max(score, 100); // Escalate to top priority
+  }
+  if (signals.misconception === true) {
+    score = Math.max(score, 90);
+  }
+
+  // Boost for very low scores (more urgent)
+  const rawScore = typeof signals.score === "number" ? signals.score : null;
+  if (rawScore !== null && rawScore < 30) {
+    score += 15; // Very low score boost
+  } else if (rawScore !== null && rawScore < 50) {
+    score += 5; // Low score boost
+  }
+
+  // Boost for very high hint usage
+  const hintRate = typeof signals.hintUsageRate === "number" ? signals.hintUsageRate : null;
+  if (hintRate !== null && hintRate > 0.8) {
+    score += 10; // High hint usage boost
+  }
+
+  return score;
+}
+
+/**
+ * Dedupe recommendations so each (studentId, assignmentId) appears at most once.
+ *
+ * For individual recommendations (studentIds.length === 1), group by studentId+assignmentId
+ * and keep only the highest-priority one.
+ *
+ * @param recommendations - Array of recommendations (should already be filtered to individuals)
+ * @param enableLogging - Log dedupe decisions in dev mode
+ * @returns Deduplicated array
+ */
+function dedupeByStudentAssignment(
+  recommendations: ReturnType<typeof recommendationStore.getActive>,
+  enableLogging: boolean = false
+): ReturnType<typeof recommendationStore.getActive> {
+  // Group by (studentId, assignmentId)
+  const groups = new Map<string, typeof recommendations>();
+
+  for (const rec of recommendations) {
+    // Only dedupe individual recommendations (group recs should be filtered out before this)
+    if (rec.studentIds.length !== 1) continue;
+
+    const studentId = rec.studentIds[0];
+    const assignmentId = rec.assignmentId || "no-assignment";
+    const key = `${studentId}::${assignmentId}`;
+
+    if (!groups.has(key)) {
+      groups.set(key, []);
+    }
+    groups.get(key)!.push(rec);
+  }
+
+  // For each group, pick the highest priority recommendation
+  const result: typeof recommendations = [];
+  let dedupeCount = 0;
+
+  for (const [key, recs] of groups) {
+    if (recs.length === 1) {
+      result.push(recs[0]);
+      continue;
+    }
+
+    // Multiple recs for same student+assignment - need to pick one
+    dedupeCount += recs.length - 1;
+
+    // Sort by: dedupeScore DESC, then completedAt DESC, then id ASC (stable)
+    recs.sort((a, b) => {
+      const scoreA = getDedupeScore(a);
+      const scoreB = getDedupeScore(b);
+      if (scoreA !== scoreB) return scoreB - scoreA; // Higher score first
+
+      // Tiebreaker: more recent completedAt
+      const dateA = a.triggerData?.signals?.completedAt;
+      const dateB = b.triggerData?.signals?.completedAt;
+      if (dateA && dateB) {
+        const timeA = new Date(dateA as string).getTime();
+        const timeB = new Date(dateB as string).getTime();
+        if (timeA !== timeB) return timeB - timeA; // More recent first
+      }
+
+      // Final tiebreaker: stable sort by id
+      return (a.id || "").localeCompare(b.id || "");
+    });
+
+    const winner = recs[0];
+    result.push(winner);
+
+    if (enableLogging) {
+      const [studentId, assignmentId] = key.split("::");
+      const studentName = winner.triggerData?.signals?.studentName || studentId;
+      console.log(
+        `[Dedupe] ${studentName} + ${assignmentId.slice(0, 8)}...: kept "${winner.triggerData?.ruleName}" (score=${getDedupeScore(winner)}), dropped ${recs.length - 1} others:`,
+        recs.slice(1).map((r) => `"${r.triggerData?.ruleName}" (score=${getDedupeScore(r)})`)
+      );
+    }
+  }
+
+  if (enableLogging && dedupeCount > 0) {
+    console.log(`[Dedupe] Removed ${dedupeCount} duplicate recommendations (same student+assignment)`);
+  }
+
+  return result;
 }
 
 const router = Router();
@@ -272,6 +779,44 @@ router.get("/", (req, res) => {
       recommendations = recommendations.filter((r) => r.studentIds.includes(studentId));
     }
 
+    // KEY FIX: Filter to show only recommendations with pending_review assignments
+    // PRODUCT RULE: Recommended Actions shows only assignments awaiting teacher review
+    // (reviewState === "pending_review"), not those already reviewed/resolved/scheduled
+    if (statusFilter !== "all" && statusFilter !== "resolved") {
+      recommendations = filterByAssignmentState(recommendations, studentAssignmentStore);
+    }
+
+    // ============================================
+    // DASHBOARD-SPECIFIC FILTERING (for active/default status)
+    // ============================================
+    const isDashboardView = !statusFilter || statusFilter === "active";
+    const enableDevLogging = process.env.NODE_ENV === "development";
+
+    if (isDashboardView) {
+      // RULE 1: Filter out GROUP recommendations (studentIds.length > 1)
+      // Groups belong on Assignment page Shared Issues, not dashboard feed
+      const beforeGroupFilter = recommendations.length;
+      recommendations = recommendations.filter((rec) => rec.studentIds.length === 1);
+
+      if (enableDevLogging && beforeGroupFilter !== recommendations.length) {
+        console.log(
+          `[Recommendations] Filtered out ${beforeGroupFilter - recommendations.length} group recommendations (dashboard shows individuals only)`
+        );
+      }
+
+      // RULE 2: Dedupe by (studentId, assignmentId)
+      // For same student+assignment, keep only the highest-priority recommendation
+      // Priority order (highest to lowest):
+      //   1. coachMovedOn / move-on signals (most urgent)
+      //   2. misconception detected
+      //   3. needs-support (low score / high hints)
+      //   4. developing
+      //   5. persistence
+      //   6. celebrate progress / notable-improvement
+      //   7. ready-for-challenge / extend learning
+      recommendations = dedupeByStudentAssignment(recommendations, enableDevLogging);
+    }
+
     // Sort by priority
     recommendations.sort((a, b) => b.priority - a.priority);
 
@@ -279,10 +824,44 @@ router.get("/", (req, res) => {
     const maxLimit = limit ? parseInt(limit as string, 10) : RECOMMENDATION_CONFIG.MAX_ACTIVE_RECOMMENDATIONS;
     recommendations = recommendations.slice(0, maxLimit);
 
+    // Build lesson title lookup for enrichment (avoid per-rec queries)
+    const lessons = getAllLessons();
+    const lessonTitleMap = new Map(lessons.map((l) => [l.id, { title: l.title, subject: l.subject }]));
+
+    // Add reason metadata AND ensure assignmentTitle is present
+    const enrichedRecommendations = recommendations.map((rec) => {
+      const { reasonKey, reasonLabel, reasonDetails } = computeReasonMetadata(rec);
+
+      // Ensure assignmentTitle is in signals (for seeded/legacy recs that don't have it)
+      let enrichedTriggerData = rec.triggerData;
+      const signals = rec.triggerData?.signals || {};
+      if (!signals.assignmentTitle && rec.assignmentId) {
+        const lessonInfo = lessonTitleMap.get(rec.assignmentId);
+        if (lessonInfo) {
+          enrichedTriggerData = {
+            ...rec.triggerData,
+            signals: {
+              ...signals,
+              assignmentTitle: lessonInfo.title,
+              subject: lessonInfo.subject,
+            },
+          };
+        }
+      }
+
+      return {
+        ...rec,
+        triggerData: enrichedTriggerData,
+        reasonKey,
+        reasonLabel,
+        reasonDetails,
+      };
+    });
+
     const stats = recommendationStore.getStats();
 
     res.json({
-      recommendations,
+      recommendations: enrichedRecommendations,
       stats,
     });
   } catch (error) {

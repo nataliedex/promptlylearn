@@ -19,8 +19,22 @@ export interface LessonSummary {
   difficulty: "beginner" | "intermediate" | "advanced";
   gradeLevel?: string;
   promptCount: number;
-  standards?: string[];
   subject?: string;
+  systemIndex?: string; // System-managed lesson index (e.g., "Math 1.3")
+}
+
+export type EvaluationFocusArea =
+  | "understanding"
+  | "reasoning"
+  | "evidence"
+  | "clarity"
+  | "creativity";
+
+export interface PromptAssessment {
+  learningObjective?: string;
+  successCriteria?: string[];
+  misconceptions?: string[];
+  evaluationFocus?: EvaluationFocusArea[];
 }
 
 export interface Prompt {
@@ -28,7 +42,7 @@ export interface Prompt {
   type: string;
   input: string;
   hints: string[];
-  standards?: string[];
+  assessment?: PromptAssessment;
 }
 
 export interface Lesson {
@@ -38,21 +52,21 @@ export interface Lesson {
   difficulty: "beginner" | "intermediate" | "advanced";
   gradeLevel?: string;
   prompts: Prompt[];
-  standards?: string[];
   subject?: string;
+  systemIndex?: string; // System-managed lesson index (e.g., "Math 1.3")
 }
 
-export interface Standard {
-  code: string;
-  description: string;
-  strand: string;
-  strandName: string;
-}
-
-export interface GradeStandards {
-  grade: string;
-  gradeName: string;
-  standards: Standard[];
+/**
+ * Video response metadata.
+ * The actual video file is stored on disk; only metadata is stored in JSON.
+ */
+export interface VideoResponse {
+  url: string; // Public URL to the video file (served by backend)
+  mimeType: string; // e.g., "video/webm"
+  durationSec: number; // Duration in seconds
+  sizeBytes: number; // File size in bytes
+  createdAt: string; // ISO timestamp
+  kind: "answer" | "coach_convo"; // Video type
 }
 
 export interface PromptResponse {
@@ -60,10 +74,18 @@ export interface PromptResponse {
   response: string;
   reflection?: string;
   hintUsed: boolean;
-  inputSource?: "typed" | "voice";
+  hintCountUsed?: number; // how many hints were used (0 = none, 1 = first hint, etc.)
+  inputSource?: "typed" | "voice" | "video";
   audioBase64?: string;
   audioFormat?: string;
+  video?: VideoResponse; // video response metadata (if video input)
   educatorNote?: string;
+  // Video conversation metadata (for continuous recording mode)
+  conversationTurns?: Array<{
+    role: "coach" | "student";
+    message: string;
+    timestampSec: number;
+  }>;
 }
 
 export interface Session {
@@ -489,6 +511,51 @@ export async function generateQuestion(
   });
 }
 
+export async function generateAssessment(
+  questionText: string,
+  lessonContext: string,
+  options?: { subject?: string; gradeLevel?: string; difficulty?: string; lessonDescription?: string }
+): Promise<PromptAssessment> {
+  return fetchJson(`${API_BASE}/lessons/generate-assessment`, {
+    method: "POST",
+    body: JSON.stringify({
+      questionText,
+      lessonContext,
+      ...(options?.subject && { subject: options.subject }),
+      ...(options?.gradeLevel && { gradeLevel: options.gradeLevel }),
+      ...(options?.difficulty && { difficulty: options.difficulty }),
+      ...(options?.lessonDescription && { lessonDescription: options.lessonDescription }),
+    }),
+  });
+}
+
+// ============================================
+// Session Summary (teacher-facing, rubric-aligned)
+// ============================================
+
+export interface SessionSummaryResponse {
+  bullets: string[];
+  overall: string;
+  guardrailsVersion?: string;
+}
+
+export async function generateSessionSummary(
+  questionText: string,
+  conversationTurns: Array<{ role: "coach" | "student"; message: string; timestampSec?: number }>,
+  learningObjective?: string,
+  successCriteria?: string[]
+): Promise<SessionSummaryResponse> {
+  return fetchJson(`${API_BASE}/coach/session-summary`, {
+    method: "POST",
+    body: JSON.stringify({
+      questionText,
+      conversationTurns,
+      ...(learningObjective && { learningObjective }),
+      ...(successCriteria?.length && { successCriteria }),
+    }),
+  });
+}
+
 export async function saveLesson(lesson: Lesson): Promise<{ lesson: Lesson; filePath: string }> {
   return fetchJson(`${API_BASE}/lessons`, {
     method: "POST",
@@ -560,15 +627,6 @@ export async function updateVoiceSettings(settings: Partial<VoiceSettings>): Pro
   });
 }
 
-// Standards
-export async function getStandardsForGrade(gradeLevel: string): Promise<GradeStandards> {
-  return fetchJson(`${API_BASE}/standards/${encodeURIComponent(gradeLevel)}`);
-}
-
-export async function getReadingStandards(gradeLevel: string): Promise<Standard[]> {
-  return fetchJson(`${API_BASE}/standards/${encodeURIComponent(gradeLevel)}/reading`);
-}
-
 // Coach Types
 export interface ConversationMessage {
   role: "student" | "coach";
@@ -622,6 +680,44 @@ export async function continueCoachConversation(
       conversationHistory,
       gradeLevel,
     }),
+  });
+}
+
+// Video Coach Turn (combined endpoint — parallel LLM calls + server-side guardrails)
+export interface VideoCoachTurnRequest {
+  lessonId: string;
+  promptId: string;
+  studentAnswer: string;
+  studentResponse: string;
+  conversationHistory: ConversationMessage[];
+  gradeLevel?: string;
+  attemptCount: number;
+  maxAttempts: number;
+  followUpCount: number;
+  lastCoachQuestion?: string;
+  askedCoachQuestions?: string[];
+  timeRemainingSec?: number;
+}
+
+export type VideoTurnKind = "FEEDBACK" | "PROBE" | "WRAP";
+
+export interface VideoCoachTurnResponse {
+  response: string;
+  shouldContinue: boolean;
+  score: number;
+  isCorrect: boolean;
+  probeFirst: boolean;
+  turnKind: VideoTurnKind;
+  coachActionTag?: string;
+  deferredByCoach?: boolean;
+}
+
+export async function getVideoCoachTurn(
+  params: VideoCoachTurnRequest
+): Promise<VideoCoachTurnResponse> {
+  return fetchJson(`${API_BASE}/coach/video-turn`, {
+    method: "POST",
+    body: JSON.stringify(params),
   });
 }
 
@@ -992,6 +1088,47 @@ export async function getArchivedAssignments(): Promise<ArchivedAssignment[]> {
 }
 
 // ============================================
+// Shared Issues (Question-Level Grouping)
+// ============================================
+
+/**
+ * A shared issue groups students who have the same underlying problem.
+ * Only created when there's a specific, question-level reason (not just low score).
+ */
+export interface SharedIssue {
+  type: "question_missed" | "hint_dependent" | "low_score_only";
+  questionId?: string;
+  questionNumber?: number;
+  questionText?: string;
+  studentIds: string[];
+  studentNames: string[];
+  title: string;
+  evidence: string;
+}
+
+export interface SharedIssuesResponse {
+  assignmentId: string;
+  /** True if we have question-level grouping data (not just low scores) */
+  hasQuestionLevelData: boolean;
+  /** Question-level shared issues (only when hasQuestionLevelData = true) */
+  sharedIssues: SharedIssue[];
+  /** Students with score < 50 (fallback when no question-level data) */
+  lowScoreStudents: {
+    studentId: string;
+    studentName: string;
+    score: number;
+  }[];
+}
+
+/**
+ * Get shared issues for an assignment.
+ * Returns question-level groupings when available, otherwise low-score fallback.
+ */
+export async function getSharedIssues(assignmentId: string): Promise<SharedIssuesResponse> {
+  return fetchJson(`${API_BASE}/assignments/${assignmentId}/shared-issues`);
+}
+
+// ============================================
 // Class / Section Types
 // ============================================
 
@@ -1002,7 +1139,9 @@ export interface Class {
   gradeLevel?: string;
   schoolYear?: string;
   period?: string;
+  sectionLabel?: string;
   subject?: string;
+  subjects?: string[];
   studentIds: string[];
   teacherId?: string;
   createdAt: string;
@@ -1016,6 +1155,7 @@ export interface ClassSummary {
   gradeLevel?: string;
   schoolYear?: string;
   period?: string;
+  sectionLabel?: string;
   subject?: string;
   subjects?: string[];
   studentCount: number;
@@ -1033,6 +1173,7 @@ export interface CreateClassInput {
   gradeLevel?: string;
   schoolYear?: string;
   period?: string;
+  sectionLabel?: string;
   subject?: string;
   studentIds?: string[];
   teacherId?: string;
@@ -1044,6 +1185,7 @@ export interface UpdateClassInput {
   gradeLevel?: string;
   schoolYear?: string;
   period?: string;
+  sectionLabel?: string;
   subject?: string;
 }
 
@@ -1324,6 +1466,7 @@ export interface AssignedStudentsResponse {
   classId?: string;
   className?: string;
   earliestAssignedAt?: string; // ISO date string of earliest assignment
+  dueDate?: string; // ISO date string of due date
   count: number;
 }
 
@@ -1659,6 +1802,11 @@ export interface Recommendation {
     submittedAt: string;
     submittedBy: string;
   }[];
+
+  // Reason metadata for grouping (added by API)
+  reasonKey?: string;      // Format: assignmentId::ruleName::subReason
+  reasonLabel?: string;    // Human-readable label (e.g., "Needs Support: Low Score")
+  reasonDetails?: string;  // Detailed explanation (e.g., "Score 32% - may need additional instruction")
 }
 
 export interface RecommendationStats {
@@ -1785,7 +1933,7 @@ export async function getRecommendations(options?: {
   assignmentId?: string;
   studentId?: string;
   includeReviewed?: boolean;
-  status?: "active" | "pending" | "resolved" | "reviewed" | "all";
+  status?: "active" | "pending" | "resolved" | "reviewed" | "dismissed" | "all";
 }): Promise<RecommendationsResponse> {
   const params = new URLSearchParams();
   if (options?.limit) params.set("limit", options.limit.toString());
@@ -2461,12 +2609,14 @@ export async function getTeacherTodos(options?: {
   status?: TeacherTodoStatus;
   teacherId?: string;
   classId?: string;
+  studentId?: string;
   grouped?: boolean;
 }): Promise<GetTeacherTodosResponse> {
   const params = new URLSearchParams();
   if (options?.status) params.set("status", options.status);
   if (options?.teacherId) params.set("teacherId", options.teacherId);
   if (options?.classId) params.set("classId", options.classId);
+  if (options?.studentId) params.set("studentId", options.studentId);
   if (options?.grouped) params.set("grouped", "true");
 
   const queryString = params.toString();
@@ -2872,11 +3022,6 @@ export async function updateCoachingInviteActivity(
 export type CoachTone = "supportive" | "direct" | "structured";
 
 /**
- * Voice mode for coach
- */
-export type CoachVoiceMode = "default_coach_voice" | "teacher_voice";
-
-/**
  * Teacher voice configuration
  */
 export interface TeacherVoiceConfig {
@@ -2920,7 +3065,7 @@ export interface TeacherProfileUpdate {
 /**
  * Student input preference
  */
-export type InputPreference = "voice" | "typing" | "no_preference";
+export type InputPreference = "video" | "typing" | "no_preference";
 
 /**
  * Student pacing preference
@@ -3139,4 +3284,533 @@ export async function deleteLessonDraft(
   return fetchJson(`${API_BASE}/educator/lesson-drafts/${id}`, {
     method: "DELETE",
   });
+}
+
+// ============================================
+// Video Upload API
+// ============================================
+
+/**
+ * Upload a video response for a student assignment question.
+ *
+ * @param videoBlob - The recorded video blob
+ * @param studentId - Student ID
+ * @param assignmentId - Assignment ID
+ * @param questionId - Question/Prompt ID
+ * @param durationSec - Video duration in seconds
+ * @param kind - "answer" for question responses, "coach_convo" for coach conversations
+ * @returns VideoResponse metadata
+ */
+export async function uploadVideo(
+  videoBlob: Blob,
+  studentId: string,
+  assignmentId: string,
+  questionId: string,
+  durationSec: number,
+  kind: "answer" | "coach_convo" = "answer"
+): Promise<VideoResponse> {
+  const formData = new FormData();
+  formData.append("video", videoBlob, "recording.webm");
+  formData.append("studentId", studentId);
+  formData.append("assignmentId", assignmentId);
+  formData.append("questionId", questionId);
+  formData.append("durationSec", durationSec.toString());
+  formData.append("kind", kind);
+
+  const response = await fetch(`${API_BASE}/uploads/video`, {
+    method: "POST",
+    body: formData,
+    // Note: Don't set Content-Type header - browser sets it with boundary for multipart
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ error: "Upload failed" }));
+    throw new Error(error.error || "Failed to upload video");
+  }
+
+  return response.json();
+}
+
+// ============================================
+// Derived Insights (from Coach Analytics)
+// ============================================
+
+export type DerivedInsightType =
+  | "NEEDS_SUPPORT"
+  | "CHECK_IN"
+  | "EXTEND_LEARNING"
+  | "CHALLENGE_OPPORTUNITY"
+  | "CELEBRATE_PROGRESS"
+  | "GROUP_SUPPORT_CANDIDATE"
+  | "MOVE_ON_EVENT"
+  | "MISCONCEPTION_FLAG";
+
+export type DerivedInsightSeverity = "low" | "medium" | "high";
+export type DerivedInsightScope = "assignment" | "question" | "session";
+
+export type SuggestedInsightAction =
+  | "ADD_TODO"
+  | "AWARD_BADGE"
+  | "INVITE_SUPPORT_SESSION"
+  | "INVITE_ENRICHMENT_SESSION"
+  | "REASSIGN_WITH_HINTS"
+  | "MARK_REVIEWED";
+
+export interface InsightNavigationTargets {
+  route: string;
+  state: {
+    scrollToSection?: string;
+    highlightQuestionId?: string;
+  };
+}
+
+export interface InsightEvidence {
+  timeSpentMs?: number;
+  hintCount?: number;
+  probeCount?: number;
+  reframeCount?: number;
+  moveOnTriggered?: boolean;
+  misconceptionType?: string;
+  correctnessEstimate?: string;
+  confidenceEstimate?: string;
+  supportLevelUsed?: string;
+  studentTurnCount?: number;
+  questionIndex?: number;
+  outcomeTag?: string;
+  stagnationReason?: string;
+}
+
+export interface DerivedInsight {
+  id: string;
+  attemptId: string;
+  assignmentId: string;
+  studentId: string;
+  classId: string;
+  createdAt: string;
+
+  type: DerivedInsightType;
+  severity: DerivedInsightSeverity;
+  scope: DerivedInsightScope;
+
+  questionId?: string;
+  title: string;
+  why: string;
+  evidence: InsightEvidence;
+  suggestedActions: SuggestedInsightAction[];
+  navigationTargets: InsightNavigationTargets;
+}
+
+export interface GroupInsight {
+  id: string;
+  assignmentId: string;
+  classId: string;
+  createdAt: string;
+
+  type: "GROUP_SUPPORT_CANDIDATE";
+  severity: DerivedInsightSeverity;
+
+  title: string;
+  why: string;
+  affectedStudentIds: string[];
+  commonMisconceptionType?: string;
+  commonQuestionId?: string;
+  suggestedActions: SuggestedInsightAction[];
+  navigationTargets: InsightNavigationTargets;
+}
+
+// ============================================
+// Derived Insights API Functions
+// ============================================
+
+/**
+ * Get derived insights for a specific student assignment.
+ */
+export async function getStudentAssignmentDerivedInsights(
+  assignmentId: string,
+  studentId: string
+): Promise<{ insights: DerivedInsight[]; insightCount: number }> {
+  const response = await fetch(
+    `${API_BASE}/educator/assignments/${assignmentId}/students/${studentId}/derived-insights`
+  );
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ error: "Request failed" }));
+    throw new Error(error.error || "Failed to fetch derived insights");
+  }
+  return response.json();
+}
+
+/**
+ * Get derived insights for all students in an assignment.
+ */
+export async function getAssignmentDerivedInsights(
+  assignmentId: string,
+  options?: { severity?: DerivedInsightSeverity; type?: DerivedInsightType }
+): Promise<{
+  insights: DerivedInsight[];
+  totalInsights: number;
+  uniqueStudents: number;
+  byStudent: Record<string, DerivedInsight[]>;
+}> {
+  const params = new URLSearchParams();
+  if (options?.severity) params.set("severity", options.severity);
+  if (options?.type) params.set("type", options.type);
+
+  const url = params.toString()
+    ? `${API_BASE}/educator/assignments/${assignmentId}/derived-insights?${params}`
+    : `${API_BASE}/educator/assignments/${assignmentId}/derived-insights`;
+
+  const response = await fetch(url);
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ error: "Request failed" }));
+    throw new Error(error.error || "Failed to fetch assignment insights");
+  }
+  return response.json();
+}
+
+/**
+ * Get group-level insights for an assignment.
+ */
+export async function getAssignmentGroupInsights(
+  assignmentId: string
+): Promise<{ insights: GroupInsight[]; insightCount: number }> {
+  const response = await fetch(
+    `${API_BASE}/educator/assignments/${assignmentId}/group-insights`
+  );
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ error: "Request failed" }));
+    throw new Error(error.error || "Failed to fetch group insights");
+  }
+  return response.json();
+}
+
+// ============================================
+// Teacher Workflow Status (Unified)
+// ============================================
+
+export type TeacherWorkflowStatus =
+  | "NEEDS_REVIEW"
+  | "ACTION_REQUIRED"
+  | "FOLLOW_UP_SCHEDULED"
+  | "RESOLVED"
+  | "NO_ACTION";
+
+export const WORKFLOW_STATUS_LABELS: Record<TeacherWorkflowStatus, string> = {
+  NEEDS_REVIEW: "Needs review",
+  ACTION_REQUIRED: "Action required",
+  FOLLOW_UP_SCHEDULED: "Follow-up scheduled",
+  RESOLVED: "Resolved",
+  NO_ACTION: "\u2014", // em-dash
+};
+
+export const WORKFLOW_STATUS_COLORS: Record<
+  TeacherWorkflowStatus,
+  { color: string; bgColor: string }
+> = {
+  NEEDS_REVIEW: { color: "#d97706", bgColor: "#fffbeb" },
+  ACTION_REQUIRED: { color: "#dc2626", bgColor: "#fef2f2" },
+  FOLLOW_UP_SCHEDULED: { color: "#7c3aed", bgColor: "#f5f3ff" },
+  RESOLVED: { color: "#059669", bgColor: "#ecfdf5" },
+  NO_ACTION: { color: "#94a3b8", bgColor: "#f8fafc" },
+};
+
+// Insight types that have blocking priority (require ACTION_REQUIRED before review)
+// Must match INSIGHT_DISPLAY_CONFIG in utils/recommendationConfig.ts
+const BLOCKING_INSIGHT_TYPES: DerivedInsightType[] = [
+  "NEEDS_SUPPORT",
+  "MISCONCEPTION_FLAG",
+  "MOVE_ON_EVENT",
+];
+
+// Insight types that are actionable (all types with suggested actions)
+const ACTIONABLE_INSIGHT_TYPES: DerivedInsightType[] = [
+  "NEEDS_SUPPORT",
+  "MISCONCEPTION_FLAG",
+  "MOVE_ON_EVENT",
+  "CHECK_IN",
+  "EXTEND_LEARNING",
+  "CHALLENGE_OPPORTUNITY",
+  "CELEBRATE_PROGRESS",
+];
+
+export interface WorkflowStatusInputs {
+  reviewState: "pending_review" | "reviewed" | "not_started" | "followup_scheduled" | "resolved" | null;
+  hasSubmission: boolean;
+  derivedInsights: DerivedInsight[];
+  openTodosCount: number;
+}
+
+/**
+ * Compute teacher workflow status from inputs.
+ * This is the single source of truth for "what does the teacher need to do next?"
+ */
+export function computeTeacherWorkflowStatus(
+  inputs: WorkflowStatusInputs
+): TeacherWorkflowStatus {
+  const { reviewState, hasSubmission, derivedInsights, openTodosCount } = inputs;
+
+  // Get actionable insights
+  const actionableInsights = derivedInsights.filter(
+    (insight) =>
+      ACTIONABLE_INSIGHT_TYPES.includes(insight.type) &&
+      insight.suggestedActions.length > 0
+  );
+
+  // Check for blocking-priority insights
+  const hasBlockingInsight = actionableInsights.some(
+    (insight) =>
+      BLOCKING_INSIGHT_TYPES.includes(insight.type) ||
+      insight.severity === "high" ||
+      insight.severity === "medium"
+  );
+
+  // Rule 1 & 2: Pending review states
+  if (reviewState === "pending_review") {
+    if (hasBlockingInsight) {
+      return "ACTION_REQUIRED";
+    }
+    return "NEEDS_REVIEW";
+  }
+
+  // Rule 3: Follow-up scheduled
+  if (
+    (reviewState === "reviewed" || reviewState === "followup_scheduled") &&
+    openTodosCount > 0
+  ) {
+    return "FOLLOW_UP_SCHEDULED";
+  }
+
+  // Rule 4: Resolved
+  if (
+    reviewState === "reviewed" ||
+    reviewState === "resolved" ||
+    reviewState === "followup_scheduled"
+  ) {
+    if (openTodosCount === 0) {
+      return "RESOLVED";
+    }
+    return "FOLLOW_UP_SCHEDULED";
+  }
+
+  // Rule 5: No action needed
+  if (!hasSubmission && openTodosCount === 0 && actionableInsights.length === 0) {
+    return "NO_ACTION";
+  }
+
+  // Fallback
+  if (hasSubmission) {
+    return "NEEDS_REVIEW";
+  }
+
+  return "NO_ACTION";
+}
+
+export interface AssignmentWorkflowRollup {
+  needsReviewCount: number;
+  actionRequiredCount: number;
+  followUpScheduledCount: number;
+  resolvedCount: number;
+  notSubmittedCount: number;
+  totalStudents: number;
+}
+
+/**
+ * Get assignment-level status label from rollup.
+ */
+export function getAssignmentStatusLabel(rollup: AssignmentWorkflowRollup): string {
+  if (rollup.actionRequiredCount > 0) {
+    return "Needs attention";
+  }
+  if (rollup.needsReviewCount > 0) {
+    return "Needs review";
+  }
+  if (rollup.followUpScheduledCount > 0) {
+    return "Follow-ups scheduled";
+  }
+  if (rollup.resolvedCount > 0) {
+    return "Reviewed";
+  }
+  return "Awaiting submissions";
+}
+
+/**
+ * Get summary text for assignment review status.
+ */
+export function getAssignmentReviewSummary(rollup: AssignmentWorkflowRollup): string {
+  const {
+    needsReviewCount,
+    actionRequiredCount,
+    followUpScheduledCount,
+    resolvedCount,
+    notSubmittedCount,
+    totalStudents,
+  } = rollup;
+
+  if (needsReviewCount === 0 && actionRequiredCount === 0) {
+    if (followUpScheduledCount > 0) {
+      return `Reviews complete. Follow-ups scheduled for ${followUpScheduledCount} student${followUpScheduledCount === 1 ? "" : "s"}.`;
+    }
+    if (resolvedCount === totalStudents) {
+      return "All students reviewed";
+    }
+    if (notSubmittedCount > 0) {
+      return `${resolvedCount} reviewed, ${notSubmittedCount} awaiting submission`;
+    }
+    return "All students reviewed";
+  }
+
+  if (actionRequiredCount > 0) {
+    return `${actionRequiredCount} student${actionRequiredCount === 1 ? "" : "s"} need${actionRequiredCount === 1 ? "s" : ""} attention`;
+  }
+
+  if (needsReviewCount > 0) {
+    return `${needsReviewCount} student${needsReviewCount === 1 ? "" : "s"} need${needsReviewCount === 1 ? "s" : ""} review`;
+  }
+
+  return "";
+}
+
+/**
+ * Check if all reviews are complete.
+ */
+export function areAllReviewsComplete(rollup: AssignmentWorkflowRollup): boolean {
+  return rollup.needsReviewCount === 0 && rollup.actionRequiredCount === 0;
+}
+
+// ============================================
+// Insight Resolution
+// ============================================
+
+/**
+ * Resolve a specific insight (mark as handled).
+ */
+export async function resolveInsight(
+  assignmentId: string,
+  studentId: string,
+  insightId: string,
+  attemptId?: string,
+  reason?: string
+): Promise<{ success: boolean }> {
+  const response = await fetch(
+    `${API_BASE}/educator/assignments/${assignmentId}/students/${studentId}/resolve-insight`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ insightId, attemptId, reason }),
+    }
+  );
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ error: "Request failed" }));
+    throw new Error(error.error || "Failed to resolve insight");
+  }
+  return response.json();
+}
+
+/**
+ * Resolve all insights for a student assignment (mark all as handled).
+ */
+export async function resolveAllInsightsForStudent(
+  assignmentId: string,
+  studentId: string,
+  reason?: string
+): Promise<{ success: boolean; resolvedCount: number }> {
+  const response = await fetch(
+    `${API_BASE}/educator/assignments/${assignmentId}/students/${studentId}/resolve-all-insights`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reason }),
+    }
+  );
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ error: "Request failed" }));
+    throw new Error(error.error || "Failed to resolve insights");
+  }
+  return response.json();
+}
+
+/**
+ * Reactivate insights for a student assignment (undo resolution).
+ * Used when reopening for review.
+ */
+export async function reactivateInsightsForStudent(
+  assignmentId: string,
+  studentId: string
+): Promise<{ success: boolean; reactivatedCount: number }> {
+  const response = await fetch(
+    `${API_BASE}/educator/assignments/${assignmentId}/students/${studentId}/reactivate-insights`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+    }
+  );
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ error: "Request failed" }));
+    throw new Error(error.error || "Failed to reactivate insights");
+  }
+  return response.json();
+}
+
+// ============================================
+// Dev-only API functions (seed/reset data)
+// ============================================
+
+/**
+ * Check if dev mode is available.
+ */
+export async function getDevStatus(): Promise<{ devMode: boolean; nodeEnv: string }> {
+  try {
+    const response = await fetch(`${API_BASE}/dev/status`);
+    if (!response.ok) {
+      return { devMode: false, nodeEnv: "unknown" };
+    }
+    return response.json();
+  } catch {
+    return { devMode: false, nodeEnv: "unknown" };
+  }
+}
+
+/**
+ * Seed demo data for testing workflows.
+ */
+export async function seedDemoData(): Promise<{
+  success: boolean;
+  message: string;
+  counts?: Record<string, number>;
+  error?: string;
+}> {
+  const response = await fetch(`${API_BASE}/dev/seed`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+  });
+  return response.json();
+}
+
+/**
+ * Remove only demo/seeded data (preserves user-created data).
+ */
+export async function resetDemoData(): Promise<{
+  success: boolean;
+  message: string;
+  error?: string;
+}> {
+  const response = await fetch(`${API_BASE}/dev/reset-demo`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+  });
+  return response.json();
+}
+
+/**
+ * Reset/clear ALL data (destructive - deletes everything).
+ */
+export async function resetAllData(): Promise<{
+  success: boolean;
+  message: string;
+  error?: string;
+}> {
+  const response = await fetch(`${API_BASE}/dev/reset-all`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+  });
+  return response.json();
 }

@@ -461,4 +461,247 @@ router.get("/archived/list", (req, res) => {
   }
 });
 
+// ============================================
+// Shared Issues API (Question-Level Grouping)
+// ============================================
+
+/**
+ * Shared Issue Types
+ */
+interface SharedIssue {
+  type: "question_missed" | "hint_dependent" | "low_score_only";
+  questionId?: string;
+  questionNumber?: number;
+  questionText?: string;
+  studentIds: string[];
+  studentNames: string[];
+  title: string;
+  evidence: string;
+}
+
+interface SharedIssuesResponse {
+  assignmentId: string;
+  hasQuestionLevelData: boolean;
+  sharedIssues: SharedIssue[];
+  lowScoreStudents: {
+    studentId: string;
+    studentName: string;
+    score: number;
+  }[];
+}
+
+/**
+ * GET /api/assignments/:id/shared-issues
+ *
+ * Computes question-level shared issues for an assignment.
+ * Groups students by:
+ * 1. Same question missed (outcome = "developing" or "not-attempted")
+ * 2. Same hint dependency (used hints on same question)
+ *
+ * Falls back to low-score-only if no question-level patterns exist.
+ */
+router.get("/:id/shared-issues", (req, res) => {
+  try {
+    const { id } = req.params;
+    const lessons = getAllLessons();
+    const lesson = lessons.find(l => l.id === id);
+
+    if (!lesson) {
+      return res.status(404).json({ error: "Assignment not found" });
+    }
+
+    const assignedStudentIds = studentAssignmentStore.getAssignedStudentIds(id);
+    const allSessions = sessionStore.getAll();
+    const allStudents = studentStore.getAll();
+
+    // Get completed sessions for this assignment
+    const completedSessions = allSessions.filter(
+      s => s.lessonId === id && s.status === "completed"
+    );
+
+    // Build student name lookup
+    const studentNameMap = new Map<string, string>();
+    allStudents.forEach(s => studentNameMap.set(s.id, s.name));
+
+    // Track question-level issues
+    // Map: questionId -> { missed: Set<studentId>, hintUsed: Set<studentId> }
+    const questionIssues = new Map<string, {
+      missed: Set<string>;
+      hintUsed: Set<string>;
+    }>();
+
+    // Track low-score students (score < 50)
+    const lowScoreStudents: { studentId: string; studentName: string; score: number }[] = [];
+
+    // Process each completed session
+    for (const session of completedSessions) {
+      const studentName = studentNameMap.get(session.studentId) || "Student";
+      const score = session.evaluation?.totalScore ?? 100;
+
+      // Track low score students
+      if (score < 50) {
+        lowScoreStudents.push({
+          studentId: session.studentId,
+          studentName,
+          score: Math.round(score),
+        });
+      }
+
+      // Process each response
+      for (const response of session.submission?.responses || []) {
+        const promptId = response.promptId;
+
+        if (!questionIssues.has(promptId)) {
+          questionIssues.set(promptId, {
+            missed: new Set(),
+            hintUsed: new Set(),
+          });
+        }
+
+        const issues = questionIssues.get(promptId)!;
+
+        // Check if question was "missed" (low score on this question)
+        const criteriaScore = session.evaluation?.criteriaScores?.find(
+          c => c.criterionId === promptId
+        );
+        const questionScore = criteriaScore?.score;
+
+        // Consider "missed" if score < 60 or no score recorded
+        if (questionScore !== undefined && questionScore < 60) {
+          issues.missed.add(session.studentId);
+        }
+
+        // Track hint usage
+        if (response.hintUsed) {
+          issues.hintUsed.add(session.studentId);
+        }
+      }
+    }
+
+    // Build shared issues from question-level data
+    const sharedIssues: SharedIssue[] = [];
+
+    // Group by same question missed (2+ students)
+    for (const [questionId, issues] of questionIssues) {
+      if (issues.missed.size >= 2) {
+        const prompt = lesson.prompts.find(p => p.id === questionId);
+        const promptIndex = lesson.prompts.findIndex(p => p.id === questionId);
+        const studentIds = Array.from(issues.missed);
+        const studentNames = studentIds.map(id => studentNameMap.get(id) || "Student");
+
+        // Truncate question text for display
+        const questionText = prompt?.input || "";
+        const truncatedText = questionText.length > 60
+          ? questionText.slice(0, 60) + "..."
+          : questionText;
+
+        sharedIssues.push({
+          type: "question_missed",
+          questionId,
+          questionNumber: promptIndex + 1,
+          questionText: truncatedText,
+          studentIds,
+          studentNames,
+          title: `${studentIds.length} students missed Question ${promptIndex + 1}`,
+          evidence: `"${truncatedText}"`,
+        });
+
+        // DEV LOGGING
+        if (process.env.NODE_ENV === "development") {
+          console.log("[SharedIssues] Question missed:", {
+            assignmentId: id,
+            questionId,
+            questionNumber: promptIndex + 1,
+            studentIds,
+            studentNames,
+          });
+        }
+      }
+    }
+
+    // Group by same hint dependency (2+ students used hints on same question)
+    // Only add if not already captured by "missed" for same students
+    for (const [questionId, issues] of questionIssues) {
+      if (issues.hintUsed.size >= 2) {
+        // Check if we already have a "missed" issue for these same students
+        const existingMissedIssue = sharedIssues.find(
+          si => si.questionId === questionId && si.type === "question_missed"
+        );
+
+        // Skip if the hint users are a subset of the missed users
+        if (existingMissedIssue) {
+          const hintUsers = Array.from(issues.hintUsed);
+          const missedUsers = new Set(existingMissedIssue.studentIds);
+          const allHintUsersAlreadyCaptured = hintUsers.every(id => missedUsers.has(id));
+          if (allHintUsersAlreadyCaptured) continue;
+        }
+
+        const prompt = lesson.prompts.find(p => p.id === questionId);
+        const promptIndex = lesson.prompts.findIndex(p => p.id === questionId);
+        const studentIds = Array.from(issues.hintUsed);
+        const studentNames = studentIds.map(id => studentNameMap.get(id) || "Student");
+
+        const questionText = prompt?.input || "";
+        const truncatedText = questionText.length > 60
+          ? questionText.slice(0, 60) + "..."
+          : questionText;
+
+        sharedIssues.push({
+          type: "hint_dependent",
+          questionId,
+          questionNumber: promptIndex + 1,
+          questionText: truncatedText,
+          studentIds,
+          studentNames,
+          title: `${studentIds.length} students needed hints on Question ${promptIndex + 1}`,
+          evidence: `Used coaching support to complete this question`,
+        });
+
+        // DEV LOGGING
+        if (process.env.NODE_ENV === "development") {
+          console.log("[SharedIssues] Hint dependent:", {
+            assignmentId: id,
+            questionId,
+            questionNumber: promptIndex + 1,
+            studentIds,
+            studentNames,
+          });
+        }
+      }
+    }
+
+    // Sort by number of students (most impactful first)
+    sharedIssues.sort((a, b) => b.studentIds.length - a.studentIds.length);
+
+    const hasQuestionLevelData = sharedIssues.length > 0;
+
+    // DEV LOGGING: Summary
+    if (process.env.NODE_ENV === "development") {
+      console.log("[SharedIssues] Summary:", {
+        assignmentId: id,
+        hasQuestionLevelData,
+        sharedIssuesCount: sharedIssues.length,
+        lowScoreStudentsCount: lowScoreStudents.length,
+        sharedIssueTypes: sharedIssues.map(si => ({
+          type: si.type,
+          questionId: si.questionId,
+          studentCount: si.studentIds.length,
+        })),
+      });
+    }
+
+    const response: SharedIssuesResponse = {
+      assignmentId: id,
+      hasQuestionLevelData,
+      sharedIssues,
+      lowScoreStudents,
+    };
+
+    res.json(response);
+  } catch (error) {
+    console.error("Error fetching shared issues:", error);
+    res.status(500).json({ error: "Failed to fetch shared issues" });
+  }
+});
+
 export default router;

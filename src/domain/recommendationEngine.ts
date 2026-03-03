@@ -222,10 +222,12 @@ function detectCheckInNeeds(students: StudentPerformanceData[]): Recommendation[
     const evidence: string[] = [];
     const signals: Record<string, any> = {
       studentName: student.studentName,
+      assignmentTitle: student.assignmentTitle,
       score: student.score,
       hintUsageRate: student.hintUsageRate,
       coachIntent: student.coachIntent,
       hasTeacherNote: student.hasTeacherNote,
+      completedAt: student.completedAt,
     };
 
     // Condition 1: Score below threshold (< 50%)
@@ -390,10 +392,12 @@ function detectDeveloping(students: StudentPerformanceData[]): Recommendation[] 
 
     const signals: Record<string, any> = {
       studentName: student.studentName,
+      assignmentTitle: student.assignmentTitle,
       score: student.score,
       hintUsageRate: student.hintUsageRate,
       coachIntent: student.coachIntent,
       hasTeacherNote: student.hasTeacherNote,
+      completedAt: student.completedAt,
     };
 
     // Developing is medium priority with moderate confidence
@@ -425,78 +429,13 @@ function detectDeveloping(students: StudentPerformanceData[]): Recommendation[] 
 }
 
 // ============================================
-// Rule 2: Group Check-in (Multiple Students May Need Support)
+// Rule 2: Challenge Opportunity (Ready for Extension)
 // ============================================
-
-function detectGroupCheckIn(
-  students: StudentPerformanceData[],
-  aggregates: AssignmentAggregateData[]
-): Recommendation[] {
-  const recommendations: Recommendation[] = [];
-  const config = RECOMMENDATION_CONFIG;
-
-  for (const agg of aggregates) {
-    // Need at least MIN_GROUP_SIZE students needing support
-    if (agg.studentsNeedingSupport.length < config.MIN_GROUP_SIZE) continue;
-
-    // Get student details for those needing support
-    const supportStudents = students.filter(
-      (s) =>
-        agg.studentsNeedingSupport.includes(s.studentId) && s.assignmentId === agg.assignmentId
-    );
-
-    if (supportStudents.length < config.MIN_GROUP_SIZE) continue;
-
-    // Check for duplicate
-    if (
-      recommendationStore.exists("group-support", agg.studentsNeedingSupport, agg.assignmentId)
-    ) {
-      continue;
-    }
-
-    const studentNames = supportStudents.map((s) => s.studentName).join(", ");
-    const avgScore = Math.round(
-      supportStudents.reduce((sum, s) => sum + s.score, 0) / supportStudents.length
-    );
-
-    // Higher confidence with more students
-    const confidenceScore: ConfidenceScore = supportStudents.length >= 3 ? 0.95 : 0.85;
-
-    const rec = createInsight({
-      insightType: "check_in",
-      legacyType: "small-group",
-      summary: `${supportStudents.length} students may benefit from group review on ${agg.assignmentTitle}`,
-      evidence: [
-        `${studentNames} show similar patterns`,
-        `Group averaged ${avgScore}% on this assignment`,
-        `From ${agg.className}`,
-      ],
-      suggestedTeacherActions: [
-        "Consider a small group review session focused on common areas of difficulty",
-        "Review responses to identify shared misconceptions",
-        "Prepare targeted practice activities for this group",
-      ],
-      priorityLevel: "high",
-      confidenceScore,
-      studentIds: agg.studentsNeedingSupport,
-      assignmentId: agg.assignmentId,
-      ruleName: "group-support",
-      signals: {
-        studentCount: supportStudents.length,
-        studentNames,
-        averageScore: avgScore,
-        className: agg.className,
-      },
-    });
-
-    recommendations.push(rec);
-  }
-
-  return recommendations;
-}
-
-// ============================================
-// Rule 3: Challenge Opportunity (Ready for Extension)
+//
+// NOTE: Old "Group Check-in" (detectGroupCheckIn) has been REMOVED.
+// Group insights are now computed at the question-level via the
+// /api/assignments/:id/shared-issues endpoint, shown only on
+// AssignmentReview page. Recommended Actions shows individual students only.
 // ============================================
 
 function detectChallengeOpportunities(students: StudentPerformanceData[]): Recommendation[] {
@@ -590,9 +529,11 @@ function detectChallengeOpportunities(students: StudentPerformanceData[]): Recom
         ruleName: "ready-for-challenge",
         signals: {
           studentName: student.studentName,
+          assignmentTitle: student.assignmentTitle,
           score: student.score,
           hintUsageRate: student.hintUsageRate,
           coachIntent: student.coachIntent,
+          completedAt: student.completedAt,
         },
         suggestedBadge,
       });
@@ -696,9 +637,11 @@ function detectCelebrateProgress(students: StudentPerformanceData[]): Recommenda
         ruleName: "notable-improvement",
         signals: {
           studentName: student.studentName,
+          assignmentTitle: student.assignmentTitle,
           previousScore: student.previousScore,
           currentScore: student.score,
           improvement,
+          completedAt: student.completedAt,
         },
         suggestedBadge,
       });
@@ -792,9 +735,11 @@ function detectPersistence(students: StudentPerformanceData[]): Recommendation[]
       ruleName: "persistence",
       signals: {
         studentName: student.studentName,
+        assignmentTitle: student.assignmentTitle,
         score: student.score,
         hintUsageRate: student.hintUsageRate,
         timeSpentMinutes: student.timeSpentMinutes,
+        completedAt: student.completedAt,
       },
       suggestedBadge,
     });
@@ -850,6 +795,8 @@ function detectMonitorSituations(aggregates: AssignmentAggregateData[]): Recomme
           assignmentId: agg.assignmentId,
           ruleName: "watch-progress",
           signals: {
+            assignmentTitle: agg.assignmentTitle,
+            className: agg.className,
             averageScore: agg.averageScore,
             completionRate,
             daysSinceAssigned: agg.daysSinceAssigned,
@@ -1037,9 +984,10 @@ export function generateRecommendations(
   aggregates: AssignmentAggregateData[]
 ): GenerateRecommendationsResult {
   // Run all detection rules
+  // NOTE: Group check-ins removed - grouping now happens at question-level
+  // via /api/assignments/:id/shared-issues endpoint (AssignmentReview only)
   const checkIns = detectCheckInNeeds(students);          // Needs Support
   const developing = detectDeveloping(students);          // Developing
-  const groupCheckIns = detectGroupCheckIn(students, aggregates);
   const challenges = detectChallengeOpportunities(students);
   const celebrations = detectCelebrateProgress(students);
   const persistence = detectPersistence(students);        // Focus Badge
@@ -1048,7 +996,6 @@ export function generateRecommendations(
   const rawRecommendations = [
     ...checkIns,
     ...developing,
-    ...groupCheckIns,
     ...challenges,
     ...celebrations,
     ...persistence,

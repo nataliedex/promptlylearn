@@ -190,7 +190,7 @@ export default function BadgeDetailModal({ badge, studentId, onClose }: BadgeDet
             background: "none",
             border: "none",
             fontSize: "1.5rem",
-            color: "#999",
+            color: "var(--text-muted)",
             cursor: "pointer",
             padding: "4px 8px",
             lineHeight: 1,
@@ -221,7 +221,7 @@ export default function BadgeDetailModal({ badge, studentId, onClose }: BadgeDet
             {badge.badgeTypeName || config.name}
           </h2>
           {/* Subject & Date */}
-          <p style={{ margin: 0, color: "#666", fontSize: "0.9rem" }}>
+          <p style={{ margin: 0, color: "var(--text-secondary)", fontSize: "0.9rem" }}>
             {badge.subject && <span>{badge.subject} • </span>}
             {new Date(badge.awardedAt).toLocaleDateString("en-US", {
               month: "long",
@@ -255,7 +255,7 @@ export default function BadgeDetailModal({ badge, studentId, onClose }: BadgeDet
           <p
             style={{
               margin: 0,
-              color: "#555",
+              color: "var(--text-secondary)",
               fontSize: "0.95rem",
               lineHeight: 1.5,
             }}
@@ -290,7 +290,7 @@ export default function BadgeDetailModal({ badge, studentId, onClose }: BadgeDet
               style={{
                 margin: 0,
                 paddingLeft: "20px",
-                color: "#555",
+                color: "var(--text-secondary)",
                 fontSize: "0.95rem",
                 lineHeight: 1.6,
               }}
@@ -328,7 +328,7 @@ export default function BadgeDetailModal({ badge, studentId, onClose }: BadgeDet
               <p
                 style={{
                   margin: "0 0 8px 0",
-                  color: "#555",
+                  color: "var(--text-secondary)",
                   fontSize: "0.95rem",
                 }}
               >
@@ -338,7 +338,7 @@ export default function BadgeDetailModal({ badge, studentId, onClose }: BadgeDet
               <p
                 style={{
                   margin: "0 0 8px 0",
-                  color: "#555",
+                  color: "var(--text-secondary)",
                   fontSize: "0.95rem",
                 }}
               >
@@ -348,7 +348,7 @@ export default function BadgeDetailModal({ badge, studentId, onClose }: BadgeDet
             <button
               onClick={handleViewWork}
               style={{
-                background: "#7c8fce",
+                background: "#3d5a80",
                 color: "white",
                 border: "none",
                 borderRadius: "8px",

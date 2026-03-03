@@ -1,0 +1,28 @@
+{
+  "id": "demo-science-weather",
+  "title": "Weather Patterns",
+  "description": "Learning about different types of weather and how to predict it.",
+  "subject": "Science",
+  "gradeLevel": "3rd Grade",
+  "difficulty": "intermediate",
+  "prompts": [
+    {
+      "id": "q1",
+      "type": "explain",
+      "input": "What are three different types of weather? Describe each one.",
+      "hints": [
+        "Think about sunny, rainy, and other conditions.",
+        "What does each type feel like?"
+      ]
+    },
+    {
+      "id": "q2",
+      "type": "explain",
+      "input": "How can you predict what the weather might be tomorrow?",
+      "hints": [
+        "What tools do weather scientists use?",
+        "What clues can you look for in the sky?"
+      ]
+    }
+  ]
+}

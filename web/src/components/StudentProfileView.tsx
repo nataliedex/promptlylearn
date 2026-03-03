@@ -50,7 +50,7 @@ export default function StudentProfileView({
   if (!isOpen) return null;
 
   const inputPrefLabel = {
-    voice: "Voice",
+    video: "Video",
     typing: "Typing",
     no_preference: "No preference",
   };

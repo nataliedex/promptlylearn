@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { loadLesson, getAllLessons } from "../../loaders/lessonLoader";
-import { generateLesson, generateSingleQuestion, type LessonParams } from "../../domain/lessonGenerator";
-import { saveLesson, archiveLesson, unarchiveLesson, deleteLesson, getArchivedLessons, updateLessonSubject } from "../../stores/lessonStore";
+import { generateLesson, generateSingleQuestion, generateAssessmentData, type LessonParams } from "../../domain/lessonGenerator";
+import { saveLesson, archiveLesson, unarchiveLesson, deleteLesson, getArchivedLessons, updateLessonSubject, generateSystemIndex } from "../../stores/lessonStore";
 import { StudentAssignmentStore } from "../../stores/studentAssignmentStore";
 import { ClassStore } from "../../stores/classStore";
 import { recommendationStore } from "../../stores/recommendationStore";
@@ -11,6 +11,7 @@ import { StudentStore } from "../../stores/studentStore";
 import { SessionStore } from "../../stores/sessionStore";
 import { ChecklistActionKey, CHECKLIST_ACTIONS } from "../../domain/recommendation";
 import { deriveReviewState } from "../../domain/studentAssignment";
+import { getStudentAssignmentDerivedInsights } from "../../stores/derivedInsightStore";
 
 const router = Router();
 const studentAssignmentStore = new StudentAssignmentStore();
@@ -30,8 +31,8 @@ router.get("/", (req, res) => {
       difficulty: lesson.difficulty,
       gradeLevel: lesson.gradeLevel,
       promptCount: lesson.prompts.length,
-      standards: lesson.standards,
       subject: lesson.subject,
+      systemIndex: lesson.systemIndex,
     }));
     res.json(lessonList);
   } catch (error) {
@@ -56,8 +57,8 @@ router.get("/unassigned", (req, res) => {
       difficulty: lesson.difficulty,
       gradeLevel: lesson.gradeLevel,
       promptCount: lesson.prompts.length,
-      standards: lesson.standards,
       subject: lesson.subject,
+      systemIndex: lesson.systemIndex,
     }));
     res.json(lessonList);
   } catch (error) {
@@ -143,7 +144,37 @@ router.post("/generate-question", async (req, res) => {
   }
 });
 
+// POST /api/lessons/generate-assessment - Generate assessment data for a question
+router.post("/generate-assessment", async (req, res) => {
+  try {
+    const { questionText, lessonContext, subject, gradeLevel, difficulty, lessonDescription } = req.body;
+
+    if (!questionText || !lessonContext) {
+      return res.status(400).json({
+        error: "questionText and lessonContext are required",
+      });
+    }
+
+    const assessment = await generateAssessmentData(questionText, lessonContext, {
+      subject: subject || undefined,
+      gradeLevel: gradeLevel || undefined,
+      difficulty: difficulty || undefined,
+      lessonDescription: lessonDescription || undefined,
+    });
+
+    if (!assessment) {
+      return res.status(500).json({ error: "Failed to generate assessment data" });
+    }
+
+    res.json(assessment);
+  } catch (error) {
+    console.error("Error generating assessment:", error);
+    res.status(500).json({ error: "Failed to generate assessment data" });
+  }
+});
+
 // POST /api/lessons - Save a new lesson
+// Note: systemIndex is NOT generated here - it's generated when the lesson is assigned
 router.post("/", (req, res) => {
   try {
     const lesson = req.body;
@@ -174,8 +205,8 @@ router.get("/archived/list", (req, res) => {
       difficulty: lesson.difficulty,
       gradeLevel: lesson.gradeLevel,
       promptCount: lesson.prompts.length,
-      standards: lesson.standards,
       subject: lesson.subject,
+      systemIndex: lesson.systemIndex,
       archivedAt: (lesson as any).archivedAt,
     }));
     res.json(lessonList);
@@ -350,6 +381,15 @@ router.post("/:id/assign", (req, res) => {
       return res.status(400).json({ error: "Class has no students to assign" });
     }
 
+    // Generate systemIndex if the lesson doesn't have one yet
+    // This happens at assignment time, not at lesson creation
+    let updatedLesson = lesson;
+    if (!lesson.systemIndex && lesson.subject && lesson.gradeLevel && lesson.difficulty) {
+      const systemIndex = generateSystemIndex(lesson.subject, lesson.gradeLevel, lesson.difficulty);
+      updatedLesson = { ...lesson, systemIndex };
+      saveLesson(updatedLesson);
+    }
+
     // Create assignments
     const newAssignments = studentAssignmentStore.assignLesson(
       id,
@@ -367,6 +407,7 @@ router.post("/:id/assign", (req, res) => {
       assignedCount: newAssignments.length,
       totalInClass: classObj.studentIds.length,
       assignments: newAssignments,
+      systemIndex: updatedLesson.systemIndex,
     });
   } catch (error) {
     console.error("Error assigning lesson:", error);
@@ -457,15 +498,19 @@ router.get("/:id/assigned-students", (req, res) => {
       }
     });
 
-    // Derive classId from the first assignment (all share the same class context)
+    // Derive classId and dueDate from the first assignment (all share the same class context)
     let classId: string | undefined;
     let className: string | undefined;
+    let dueDate: string | undefined;
     for (const sid of studentIds) {
       const a = studentAssignmentStore.getAssignment(id, sid);
       if (a?.classId) {
         classId = a.classId;
         const classObj = classStore.load(a.classId);
         className = classObj?.name;
+        if (a.dueDate) {
+          dueDate = a.dueDate;
+        }
         break;
       }
     }
@@ -478,6 +523,7 @@ router.get("/:id/assigned-students", (req, res) => {
       classId,
       className,
       earliestAssignedAt,
+      dueDate,
       count: studentIds.length,
     });
   } catch (error) {
@@ -511,11 +557,34 @@ router.get("/:id/students/:studentId/assignment", (req, res) => {
  * Mark a student's assignment as reviewed by teacher
  * This removes the student from the "needs attention" summaries
  * AND resolves any related global recommendations to ensure consistency
+ *
+ * Validation: High-priority insights (NEEDS_SUPPORT, MISCONCEPTION_FLAG, MOVE_ON_EVENT)
+ * block marking as reviewed unless force=true is passed.
  */
 router.post("/:id/students/:studentId/review", (req, res) => {
   try {
     const { id, studentId } = req.params;
-    const { reviewedBy } = req.body;
+    const { reviewedBy, force } = req.body;
+
+    // Check for unresolved blocking-priority insights
+    // These types require educator action before review (matches frontend canonical config)
+    const BLOCKING_INSIGHT_TYPES = ["NEEDS_SUPPORT", "MISCONCEPTION_FLAG", "MOVE_ON_EVENT"];
+    const insights = getStudentAssignmentDerivedInsights(id, studentId, false);
+    const unresolvedBlocking = insights.filter(
+      (insight) => BLOCKING_INSIGHT_TYPES.includes(insight.type)
+    );
+
+    if (unresolvedBlocking.length > 0 && !force) {
+      return res.status(400).json({
+        error: "Cannot mark reviewed: unresolved blocking insights require action",
+        code: "BLOCKING_INSIGHTS_UNRESOLVED",
+        unresolvedInsights: unresolvedBlocking.map((i) => ({
+          type: i.type,
+          title: i.title,
+        })),
+        hint: "Take an action (note, todo, badge) before marking reviewed, or pass force=true to override",
+      });
+    }
 
     const success = studentAssignmentStore.markReviewed(id, studentId, reviewedBy);
     if (!success) {

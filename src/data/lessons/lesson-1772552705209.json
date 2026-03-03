@@ -1,0 +1,19 @@
+{
+  "id": "lesson-1772552705209",
+  "title": "Subtracting with Real-Life Examples",
+  "description": "Students will learn to subtract using real-life situations to understand the concept better.",
+  "difficulty": "intermediate",
+  "gradeLevel": "1",
+  "prompts": [
+    {
+      "id": "q1",
+      "type": "explain",
+      "input": "How would you use subtraction to find out how many apples are left if you have 5 apples and give away 2? Explain your thinking.",
+      "hints": [
+        "Think about what happens to the total when you give some away.",
+        "You can use drawings or objects to help visualize the problem."
+      ]
+    }
+  ],
+  "subject": "Math"
+}

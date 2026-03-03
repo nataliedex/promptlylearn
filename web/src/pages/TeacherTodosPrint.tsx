@@ -111,7 +111,7 @@ export default function TeacherTodosPrint() {
     return (
       <div className="print-page">
         <p style={{ color: "#d32f2f" }}>{error}</p>
-        <Link to="/educator" style={{ color: "#667eea" }}>
+        <Link to="/educator" style={{ color: "#3d5a80" }}>
           Back to Dashboard
         </Link>
       </div>
@@ -284,7 +284,7 @@ export default function TeacherTodosPrint() {
             <Link
               to="/educator"
               style={{
-                color: "#667eea",
+                color: "#3d5a80",
                 textDecoration: "none",
                 display: "flex",
                 alignItems: "center",
@@ -297,7 +297,7 @@ export default function TeacherTodosPrint() {
               onClick={handlePrint}
               style={{
                 padding: "8px 16px",
-                background: "#667eea",
+                background: "#3d5a80",
                 color: "white",
                 border: "none",
                 borderRadius: "6px",

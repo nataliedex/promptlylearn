@@ -181,7 +181,7 @@ function enrichTodos(todos: TeacherTodo[]): TeacherTodo[] {
 
 router.get("/", (req, res) => {
   try {
-    const { status, teacherId, classId, grouped } = req.query;
+    const { status, teacherId, classId, studentId, grouped } = req.query;
 
     let todos = teacherTodoStore.getAll();
 
@@ -203,6 +203,11 @@ router.get("/", (req, res) => {
     // Filter by class
     if (typeof classId === "string") {
       todos = todos.filter((t) => t.classId === classId);
+    }
+
+    // Filter by student
+    if (typeof studentId === "string") {
+      todos = todos.filter((t) => t.studentIds?.includes(studentId));
     }
 
     // Enrich todos with lesson data and category if missing

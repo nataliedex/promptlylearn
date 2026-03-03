@@ -254,4 +254,10 @@ router.post("/settings", async (req, res) => {
   }
 });
 
+// Log voice route availability at import time
+console.log(
+  `[voice] Routes registered — OPENAI_API_KEY=${process.env.OPENAI_API_KEY ? "set" : "MISSING"} ` +
+  `endpoints: /speak, /speak/stream, /transcribe, /status`
+);
+
 export default router;

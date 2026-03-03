@@ -1,0 +1,36 @@
+{
+  "id": "lesson-1772553329742",
+  "title": "Understanding Subtraction with Real-Life Examples",
+  "description": "Students will learn how to use subtraction in everyday situations and explain their reasoning.",
+  "difficulty": "intermediate",
+  "gradeLevel": "1",
+  "prompts": [
+    {
+      "id": "q1",
+      "type": "explain",
+      "input": "How would you explain why subtraction is important in daily life? Give an example.",
+      "hints": [
+        "Think about times when you might take things away.",
+        "Consider how you would share or divide something with friends."
+      ],
+      "assessment": {
+        "learningObjective": "Explain the importance of subtraction in daily life.",
+        "successCriteria": [
+          "Gives at least one real-life example of subtraction.",
+          "Describes how subtraction helps in decision-making or problem-solving."
+        ],
+        "misconceptions": [
+          "Subtraction is only used in math class and not in real life.",
+          "Subtraction is not as important as addition in daily activities.",
+          "Subtraction only means taking things away and does not involve comparisons."
+        ],
+        "evaluationFocus": [
+          "understanding",
+          "reasoning"
+        ]
+      }
+    }
+  ],
+  "subject": "Math",
+  "systemIndex": "Math 1.2"
+}

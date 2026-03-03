@@ -253,7 +253,6 @@ router.get("/:id/lessons", (req, res) => {
         difficulty: lesson.difficulty,
         gradeLevel: lesson.gradeLevel,
         promptCount: lesson.prompts.length,
-        standards: lesson.standards,
         subject: lesson.subject,
         attempts: attemptsMap[lesson.id] || 1,
         assignedAt: assignedAtMap[lesson.id],

@@ -447,7 +447,7 @@ export default function StudentProfileDrawer({
                     }}
                   >
                     <option value="no_preference">No preference</option>
-                    <option value="voice">Prefers voice</option>
+                    <option value="video">Prefers video</option>
                     <option value="typing">Prefers typing</option>
                   </select>
                 </div>

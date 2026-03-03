@@ -74,9 +74,9 @@ export default function ArchivedLessons() {
       {assignments.length === 0 ? (
         <div className="card">
           <div style={{ textAlign: "center", padding: "48px" }}>
-            <div style={{ fontSize: "1rem", marginBottom: "16px", opacity: 0.7, fontWeight: 500, color: "#666" }}>No items</div>
-            <h2 style={{ color: "#666", marginBottom: "8px" }}>No archived assignments</h2>
-            <p style={{ color: "#999" }}>
+            <div style={{ fontSize: "1rem", marginBottom: "16px", opacity: 0.7, fontWeight: 500, color: "var(--text-secondary)" }}>No items</div>
+            <h2 style={{ color: "var(--text-secondary)", marginBottom: "8px" }}>No archived assignments</h2>
+            <p style={{ color: "var(--text-muted)" }}>
               Resolved assignments are automatically archived after 7 days of inactivity.
               <br />
               You can also manually archive from the dashboard.
@@ -155,14 +155,14 @@ function ArchivedAssignmentCard({
         }}
       >
         <div style={{ flex: 1 }}>
-          <h3 style={{ margin: 0, color: "#667eea" }}>{title}</h3>
+          <h3 style={{ margin: 0, color: "#3d5a80" }}>{title}</h3>
           <div
             style={{
               display: "flex",
               gap: "16px",
               marginTop: "8px",
               flexWrap: "wrap",
-              color: "#666",
+              color: "var(--text-secondary)",
               fontSize: "0.9rem",
             }}
           >
@@ -170,7 +170,7 @@ function ArchivedAssignmentCard({
             <span>{averageScore}% avg score</span>
             <span>{completionRate}% completion</span>
             {archivedAt && (
-              <span style={{ color: "#999" }}>
+              <span style={{ color: "var(--text-muted)" }}>
                 Archived {new Date(archivedAt).toLocaleDateString()}
               </span>
             )}
@@ -187,7 +187,7 @@ function ArchivedAssignmentCard({
                 cursor: "pointer",
                 padding: "8px 16px",
                 borderRadius: "4px",
-                color: "#666",
+                color: "var(--text-secondary)",
                 fontSize: "0.9rem",
               }}
             >
@@ -259,7 +259,7 @@ function TeacherSummaryView({ summary }: TeacherSummaryViewProps) {
       {/* Learning Insights */}
       {(insights.commonStrengths.length > 0 || insights.commonChallenges.length > 0) && (
         <div style={{ marginBottom: "24px" }}>
-          <h5 style={{ margin: 0, marginBottom: "12px", color: "#666" }}>
+          <h5 style={{ margin: 0, marginBottom: "12px", color: "var(--text-secondary)" }}>
             Learning Insights
           </h5>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px" }}>
@@ -268,7 +268,7 @@ function TeacherSummaryView({ summary }: TeacherSummaryViewProps) {
                 <p style={{ margin: 0, marginBottom: "8px", fontSize: "0.85rem", color: "#2e7d32", fontWeight: 600 }}>
                   Strengths
                 </p>
-                <ul style={{ margin: 0, paddingLeft: "20px", color: "#666", fontSize: "0.9rem" }}>
+                <ul style={{ margin: 0, paddingLeft: "20px", color: "var(--text-secondary)", fontSize: "0.9rem" }}>
                   {insights.commonStrengths.map((s, i) => (
                     <li key={i}>{s}</li>
                   ))}
@@ -280,7 +280,7 @@ function TeacherSummaryView({ summary }: TeacherSummaryViewProps) {
                 <p style={{ margin: 0, marginBottom: "8px", fontSize: "0.85rem", color: "#d32f2f", fontWeight: 600 }}>
                   Challenges
                 </p>
-                <ul style={{ margin: 0, paddingLeft: "20px", color: "#666", fontSize: "0.9rem" }}>
+                <ul style={{ margin: 0, paddingLeft: "20px", color: "var(--text-secondary)", fontSize: "0.9rem" }}>
                   {insights.commonChallenges.map((c, i) => (
                     <li key={i}>{c}</li>
                   ))}
@@ -294,10 +294,10 @@ function TeacherSummaryView({ summary }: TeacherSummaryViewProps) {
       {/* Coach Usage */}
       {coachUsage.studentsWhoUsedHints > 0 && (
         <div style={{ marginBottom: "24px" }}>
-          <h5 style={{ margin: 0, marginBottom: "12px", color: "#666" }}>
+          <h5 style={{ margin: 0, marginBottom: "12px", color: "var(--text-secondary)" }}>
             Coach Usage
           </h5>
-          <p style={{ margin: 0, color: "#666", fontSize: "0.9rem" }}>
+          <p style={{ margin: 0, color: "var(--text-secondary)", fontSize: "0.9rem" }}>
             {coachUsage.studentsWhoUsedHints} students used hints
             ({coachUsage.averageHintsPerStudent} hints per student on average)
           </p>
@@ -306,7 +306,7 @@ function TeacherSummaryView({ summary }: TeacherSummaryViewProps) {
               <p style={{ margin: 0, fontSize: "0.85rem", color: "#ed6c02" }}>
                 Questions that may need more scaffolding:
               </p>
-              <ul style={{ margin: 0, paddingLeft: "20px", color: "#666", fontSize: "0.85rem" }}>
+              <ul style={{ margin: 0, paddingLeft: "20px", color: "var(--text-secondary)", fontSize: "0.85rem" }}>
                 {coachUsage.questionsNeedingMoreScaffolding.map((q, i) => (
                   <li key={i}>{q}</li>
                 ))}
@@ -321,7 +321,7 @@ function TeacherSummaryView({ summary }: TeacherSummaryViewProps) {
         studentHighlights.mayNeedFollowUp.length > 0 ||
         studentHighlights.exceededExpectations.length > 0) && (
         <div style={{ marginBottom: "24px" }}>
-          <h5 style={{ margin: 0, marginBottom: "12px", color: "#666" }}>
+          <h5 style={{ margin: 0, marginBottom: "12px", color: "var(--text-secondary)" }}>
             Student Highlights
           </h5>
           <div style={{ display: "flex", flexWrap: "wrap", gap: "16px" }}>
@@ -357,7 +357,7 @@ function TeacherSummaryView({ summary }: TeacherSummaryViewProps) {
           background: "#f5f5f5",
           borderRadius: "8px",
           fontSize: "0.85rem",
-          color: "#666",
+          color: "var(--text-secondary)",
         }}
       >
         <span style={{ marginRight: "16px" }}>
@@ -403,7 +403,7 @@ function StatBox({ label, value, color }: StatBoxProps) {
       >
         {value}
       </div>
-      <div style={{ fontSize: "0.75rem", color: "#666", marginTop: "4px" }}>
+      <div style={{ fontSize: "0.75rem", color: "var(--text-secondary)", marginTop: "4px" }}>
         {label}
       </div>
     </div>
@@ -422,7 +422,7 @@ function HighlightGroup({ label, students, color }: HighlightGroupProps) {
       <p style={{ margin: 0, marginBottom: "4px", fontSize: "0.8rem", color, fontWeight: 600 }}>
         {label}
       </p>
-      <p style={{ margin: 0, fontSize: "0.85rem", color: "#666" }}>
+      <p style={{ margin: 0, fontSize: "0.85rem", color: "var(--text-secondary)" }}>
         {students.join(", ")}
       </p>
     </div>

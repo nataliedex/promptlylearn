@@ -10,7 +10,7 @@
 import { useState, useEffect, useRef } from "react";
 import { useParams, Link, useNavigate, useLocation } from "react-router-dom";
 import EducatorAppHeader from "../components/EducatorAppHeader";
-import { getLesson, saveLesson, generateQuestion, getLessonAssignments, deleteLesson, type Lesson, type Prompt, type LessonAssignmentSummary } from "../services/api";
+import { getLesson, saveLesson, generateQuestion, generateAssessment, getLessonAssignments, deleteLesson, type Lesson, type Prompt, type PromptAssessment, type EvaluationFocusArea, type LessonAssignmentSummary } from "../services/api";
 import { useToast } from "../components/Toast";
 import { recordQuestionsEdited, recordHintPatterns } from "../utils/teacherPreferences";
 
@@ -361,7 +361,7 @@ export default function LessonEditor() {
               style={{
                 fontSize: "1.375rem",
                 fontWeight: 600,
-                border: "2px solid rgba(255,255,255,0.6)",
+                border: "2px solid #d1d5db",
                 borderRadius: "6px",
                 padding: "8px 12px",
                 width: "100%",
@@ -387,7 +387,7 @@ export default function LessonEditor() {
                 overflow: "hidden",
               }}
               onMouseEnter={(e) => {
-                e.currentTarget.style.background = "rgba(255,255,255,0.1)";
+                e.currentTarget.style.background = "rgba(0,0,0,0.04)";
                 const icon = e.currentTarget.querySelector('.edit-icon') as HTMLElement;
                 if (icon) icon.style.opacity = "1";
               }}
@@ -399,7 +399,7 @@ export default function LessonEditor() {
               title="Click to edit title"
             >
               {lesson.title}
-              <span className="edit-icon" style={{ marginLeft: "8px", fontSize: "0.8rem", color: "rgba(255,255,255,0.5)", opacity: 0, transition: "opacity 0.15s" }}>✎</span>
+              <span className="edit-icon" style={{ marginLeft: "8px", fontSize: "0.8rem", color: "var(--text-muted)", opacity: 0, transition: "opacity 0.15s" }}>✎</span>
             </h1>
           )}
 
@@ -418,7 +418,7 @@ export default function LessonEditor() {
                 style={{
                   fontSize: "0.75rem",
                   padding: "3px 8px",
-                  border: "1px solid rgba(255,255,255,0.4)",
+                  border: "1px solid #d1d5db",
                   borderRadius: "4px",
                   background: "white",
                   color: "var(--text-primary)",
@@ -435,18 +435,18 @@ export default function LessonEditor() {
                 style={{
                   fontSize: "0.75rem",
                   padding: "3px 10px",
-                  background: lesson.subject ? "rgba(255,255,255,0.2)" : "rgba(255,255,255,0.1)",
-                  color: lesson.subject ? "rgba(255,255,255,0.9)" : "rgba(255,255,255,0.5)",
+                  background: lesson.subject ? "rgba(0,0,0,0.06)" : "rgba(0,0,0,0.04)",
+                  color: lesson.subject ? "#1e293b" : "var(--text-muted)",
                   borderRadius: "4px",
                   border: "none",
                   cursor: "pointer",
                   transition: "all 0.15s",
                 }}
                 onMouseEnter={(e) => {
-                  e.currentTarget.style.background = "rgba(255,255,255,0.3)";
+                  e.currentTarget.style.background = "rgba(0,0,0,0.08)";
                 }}
                 onMouseLeave={(e) => {
-                  e.currentTarget.style.background = lesson.subject ? "rgba(255,255,255,0.2)" : "rgba(255,255,255,0.1)";
+                  e.currentTarget.style.background = lesson.subject ? "rgba(0,0,0,0.06)" : "rgba(0,0,0,0.04)";
                 }}
                 title="Click to edit subject"
               >
@@ -467,7 +467,7 @@ export default function LessonEditor() {
                 style={{
                   fontSize: "0.75rem",
                   padding: "3px 8px",
-                  border: "1px solid rgba(255,255,255,0.4)",
+                  border: "1px solid #d1d5db",
                   borderRadius: "4px",
                   background: "white",
                   color: "var(--text-primary)",
@@ -484,18 +484,18 @@ export default function LessonEditor() {
                 style={{
                   fontSize: "0.75rem",
                   padding: "3px 10px",
-                  background: lesson.gradeLevel ? "rgba(255,255,255,0.2)" : "rgba(255,255,255,0.1)",
-                  color: lesson.gradeLevel ? "rgba(255,255,255,0.9)" : "rgba(255,255,255,0.5)",
+                  background: lesson.gradeLevel ? "rgba(0,0,0,0.06)" : "rgba(0,0,0,0.04)",
+                  color: lesson.gradeLevel ? "#1e293b" : "var(--text-muted)",
                   borderRadius: "4px",
                   border: "none",
                   cursor: "pointer",
                   transition: "all 0.15s",
                 }}
                 onMouseEnter={(e) => {
-                  e.currentTarget.style.background = "rgba(255,255,255,0.3)";
+                  e.currentTarget.style.background = "rgba(0,0,0,0.08)";
                 }}
                 onMouseLeave={(e) => {
-                  e.currentTarget.style.background = lesson.gradeLevel ? "rgba(255,255,255,0.2)" : "rgba(255,255,255,0.1)";
+                  e.currentTarget.style.background = lesson.gradeLevel ? "rgba(0,0,0,0.06)" : "rgba(0,0,0,0.04)";
                 }}
                 title="Click to edit grade level"
               >
@@ -516,7 +516,7 @@ export default function LessonEditor() {
                 style={{
                   fontSize: "0.75rem",
                   padding: "3px 8px",
-                  border: "1px solid rgba(255,255,255,0.4)",
+                  border: "1px solid #d1d5db",
                   borderRadius: "4px",
                   background: "white",
                   color: "var(--text-primary)",
@@ -533,8 +533,8 @@ export default function LessonEditor() {
                 style={{
                   fontSize: "0.75rem",
                   padding: "3px 10px",
-                  background: "rgba(255,255,255,0.2)",
-                  color: "rgba(255,255,255,0.9)",
+                  background: "rgba(0,0,0,0.06)",
+                  color: "#1e293b",
                   borderRadius: "4px",
                   textTransform: "capitalize",
                   border: "none",
@@ -542,10 +542,10 @@ export default function LessonEditor() {
                   transition: "all 0.15s",
                 }}
                 onMouseEnter={(e) => {
-                  e.currentTarget.style.background = "rgba(255,255,255,0.3)";
+                  e.currentTarget.style.background = "rgba(0,0,0,0.08)";
                 }}
                 onMouseLeave={(e) => {
-                  e.currentTarget.style.background = "rgba(255,255,255,0.2)";
+                  e.currentTarget.style.background = "rgba(0,0,0,0.06)";
                 }}
                 title="Click to edit difficulty"
               >
@@ -566,8 +566,8 @@ export default function LessonEditor() {
               padding: "8px 14px",
               fontSize: "0.9rem",
               fontWeight: 500,
-              background: hasChanges ? "rgba(255, 255, 255, 0.95)" : "rgba(255, 255, 255, 0.4)",
-              color: hasChanges ? "#4a5568" : "rgba(255,255,255,0.7)",
+              background: hasChanges ? "#ffffff" : "#e5e7eb",
+              color: hasChanges ? "#4a5568" : "#64748b",
               border: "none",
               borderRadius: "6px",
               cursor: hasChanges ? "pointer" : "not-allowed",
@@ -582,7 +582,7 @@ export default function LessonEditor() {
             }}
             onMouseLeave={(e) => {
               if (hasChanges) {
-                e.currentTarget.style.background = "rgba(255, 255, 255, 0.95)";
+                e.currentTarget.style.background = "#ffffff";
                 e.currentTarget.style.boxShadow = "0 1px 3px rgba(0,0,0,0.1)";
               }
             }}
@@ -599,7 +599,7 @@ export default function LessonEditor() {
                 padding: "8px 14px",
                 fontSize: "0.9rem",
                 fontWeight: 500,
-                background: "rgba(255, 255, 255, 0.95)",
+                background: "#ffffff",
                 color: "#4a5568",
                 border: "none",
                 borderRadius: "6px",
@@ -612,7 +612,7 @@ export default function LessonEditor() {
                 e.currentTarget.style.boxShadow = "0 2px 4px rgba(0,0,0,0.15)";
               }}
               onMouseLeave={(e) => {
-                e.currentTarget.style.background = "rgba(255, 255, 255, 0.95)";
+                e.currentTarget.style.background = "#ffffff";
                 e.currentTarget.style.boxShadow = "0 1px 3px rgba(0,0,0,0.1)";
               }}
             >
@@ -629,7 +629,7 @@ export default function LessonEditor() {
                   padding: "8px 14px",
                   fontSize: "0.9rem",
                   fontWeight: 500,
-                  background: "rgba(255, 255, 255, 0.95)",
+                  background: "#ffffff",
                   color: "#4a5568",
                   border: "none",
                   borderRadius: "6px",
@@ -642,7 +642,7 @@ export default function LessonEditor() {
                   e.currentTarget.style.boxShadow = "0 2px 4px rgba(0,0,0,0.15)";
                 }}
                 onMouseLeave={(e) => {
-                  e.currentTarget.style.background = "rgba(255, 255, 255, 0.95)";
+                  e.currentTarget.style.background = "#ffffff";
                   e.currentTarget.style.boxShadow = "0 1px 3px rgba(0,0,0,0.1)";
                 }}
               >
@@ -657,9 +657,9 @@ export default function LessonEditor() {
                   padding: "8px 14px",
                   fontSize: "0.9rem",
                   fontWeight: 500,
-                  background: "rgba(255, 255, 255, 0.15)",
-                  color: "rgba(255, 255, 255, 0.8)",
-                  border: "1px solid rgba(255, 255, 255, 0.3)",
+                  background: "transparent",
+                  color: "#dc2626",
+                  border: "1px solid #fca5a5",
                   borderRadius: "6px",
                   cursor: "pointer",
                   transition: "all 0.15s",
@@ -670,9 +670,9 @@ export default function LessonEditor() {
                   e.currentTarget.style.borderColor = "transparent";
                 }}
                 onMouseLeave={(e) => {
-                  e.currentTarget.style.background = "rgba(255, 255, 255, 0.15)";
-                  e.currentTarget.style.color = "rgba(255, 255, 255, 0.8)";
-                  e.currentTarget.style.borderColor = "rgba(255, 255, 255, 0.3)";
+                  e.currentTarget.style.background = "transparent";
+                  e.currentTarget.style.color = "#dc2626";
+                  e.currentTarget.style.borderColor = "#fca5a5";
                 }}
                 title="Delete lesson"
               >
@@ -778,14 +778,14 @@ export default function LessonEditor() {
       <div style={{ marginTop: "16px" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px" }}>
           <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-            <span style={{ fontSize: "0.75rem", fontWeight: 500, color: "rgba(255,255,255,0.7)", textTransform: "uppercase", letterSpacing: "0.08em" }}>
+            <span style={{ fontSize: "0.75rem", fontWeight: 500, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.08em" }}>
               Questions
             </span>
             <span style={{
               fontSize: "0.75rem",
               fontWeight: 600,
-              color: "white",
-              background: "rgba(255,255,255,0.2)",
+              color: "#1e293b",
+              background: "rgba(0,0,0,0.06)",
               padding: "2px 8px",
               borderRadius: "10px",
             }}>
@@ -804,7 +804,7 @@ export default function LessonEditor() {
               padding: "8px 16px",
               fontSize: "0.85rem",
               fontWeight: 500,
-              background: "rgba(255, 255, 255, 0.95)",
+              background: "#ffffff",
               color: "#4a5568",
               border: "none",
               borderRadius: "6px",
@@ -817,7 +817,7 @@ export default function LessonEditor() {
               e.currentTarget.style.boxShadow = "0 2px 4px rgba(0,0,0,0.15)";
             }}
             onMouseLeave={(e) => {
-              e.currentTarget.style.background = "rgba(255, 255, 255, 0.95)";
+              e.currentTarget.style.background = "#ffffff";
               e.currentTarget.style.boxShadow = "0 1px 3px rgba(0,0,0,0.1)";
             }}
           >
@@ -834,6 +834,7 @@ export default function LessonEditor() {
               index={index}
               isExpanded={expandedQuestion === prompt.id}
               isAIGenerated={isAIGenerated}
+              lesson={lesson}
               onToggle={() =>
                 setExpandedQuestion(expandedQuestion === prompt.id ? null : prompt.id)
               }
@@ -1144,7 +1145,7 @@ export default function LessonEditor() {
                 style={{
                   padding: "8px 16px",
                   background: deleting ? "#e2e8f0" : "#dc2626",
-                  color: deleting ? "#94a3b8" : "white",
+                  color: deleting ? "var(--text-muted)" : "white",
                   border: "none",
                   borderRadius: "6px",
                   cursor: deleting ? "not-allowed" : "pointer",
@@ -1203,6 +1204,7 @@ interface QuestionEditorProps {
   index: number;
   isExpanded: boolean;
   isAIGenerated?: boolean;
+  lesson: Lesson | null;
   onToggle: () => void;
   onUpdateQuestion: (updates: Partial<Prompt>) => void;
   onUpdateHint: (hintIndex: number, newHint: string) => void;
@@ -1216,6 +1218,7 @@ function QuestionEditor({
   index,
   isExpanded,
   isAIGenerated,
+  lesson,
   onToggle,
   onUpdateQuestion,
   onUpdateHint,
@@ -1224,6 +1227,20 @@ function QuestionEditor({
   onRemove,
 }: QuestionEditorProps) {
   const [editingInput, setEditingInput] = useState(false);
+
+  // Track the question text at last assessment generation to detect outdated state
+  const lastGeneratedInputRef = useRef<string | null>(
+    prompt.assessment?.learningObjective ? prompt.input : null
+  );
+
+  // Derive whether assessment is outdated (question changed since generation)
+  const isOutdated = lastGeneratedInputRef.current !== null &&
+    lastGeneratedInputRef.current !== prompt.input &&
+    hasAssessmentContent(prompt.assessment);
+
+  const handleQuestionEdit = (value: string) => {
+    onUpdateQuestion({ input: value });
+  };
 
   return (
     <div
@@ -1303,6 +1320,37 @@ function QuestionEditor({
               </span>
             )}
           </div>
+          {/* Collapsed preview: objective + focus tags */}
+          {!isExpanded && prompt.assessment?.learningObjective && (
+            <div style={{ marginTop: "6px", display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+              <span style={{
+                fontSize: "0.75rem",
+                color: "var(--text-muted)",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+                maxWidth: "350px",
+              }}>
+                Objective: {prompt.assessment.learningObjective}
+              </span>
+              {prompt.assessment.evaluationFocus?.map((f) => (
+                <span
+                  key={f}
+                  style={{
+                    fontSize: "0.65rem",
+                    padding: "1px 6px",
+                    background: "#ede9fe",
+                    color: "#6d28d9",
+                    borderRadius: "3px",
+                    fontWeight: 500,
+                    textTransform: "capitalize",
+                  }}
+                >
+                  {f}
+                </span>
+              ))}
+            </div>
+          )}
         </div>
 
         <span
@@ -1337,7 +1385,7 @@ function QuestionEditor({
             {editingInput ? (
               <textarea
                 value={prompt.input}
-                onChange={(e) => onUpdateQuestion({ input: e.target.value })}
+                onChange={(e) => handleQuestionEdit(e.target.value)}
                 onBlur={() => setEditingInput(false)}
                 autoFocus
                 rows={3}
@@ -1425,6 +1473,18 @@ function QuestionEditor({
             </div>
           </div>
 
+          {/* Assessment & Mastery Settings — always visible, no nested accordion */}
+          <AssessmentPanel
+            assessment={prompt.assessment}
+            questionText={prompt.input}
+            lesson={lesson}
+            isOutdated={isOutdated}
+            onUpdate={(assessment) => onUpdateQuestion({ assessment })}
+            onGenerated={(inputAtGeneration) => {
+              lastGeneratedInputRef.current = inputAtGeneration;
+            }}
+          />
+
           {/* Delete Question */}
           <div style={{ marginTop: "20px", paddingTop: "16px", borderTop: "1px solid var(--border-muted)" }}>
             <button
@@ -1450,6 +1510,481 @@ function QuestionEditor({
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// ============================================
+// Assessment & Mastery Settings Panel
+// ============================================
+
+/** Check whether assessment has any populated content. */
+function hasAssessmentContent(assessment?: PromptAssessment): boolean {
+  if (!assessment) return false;
+  return !!(
+    assessment.learningObjective ||
+    (assessment.successCriteria && assessment.successCriteria.length > 0) ||
+    (assessment.misconceptions && assessment.misconceptions.length > 0) ||
+    (assessment.evaluationFocus && assessment.evaluationFocus.length > 0)
+  );
+}
+
+type AssessmentStatus = "draft" | "generating" | "ready" | "edited" | "error" | "outdated";
+
+const STATUS_BADGE: Record<AssessmentStatus, { label: string; color: string; bg: string }> = {
+  draft:      { label: "Draft",      color: "#64748b", bg: "#f1f5f9" },
+  generating: { label: "Generating", color: "#8b5cf6", bg: "#f3e8ff" },
+  ready:      { label: "Ready",      color: "#16a34a", bg: "#dcfce7" },
+  edited:     { label: "Reviewed",   color: "#0369a1", bg: "#e0f2fe" },
+  error:      { label: "Error",      color: "#dc2626", bg: "#fee2e2" },
+  outdated:   { label: "Outdated",   color: "#d97706", bg: "#fef3c7" },
+};
+
+const EVALUATION_FOCUS_OPTIONS: { value: EvaluationFocusArea; label: string; description: string }[] = [
+  { value: "understanding", label: "Understanding", description: "Shows grasp of core concepts" },
+  { value: "reasoning", label: "Reasoning", description: "Explains why or how" },
+  { value: "evidence", label: "Evidence", description: "Uses details or examples" },
+  { value: "clarity", label: "Clarity", description: "Communicates ideas clearly" },
+  { value: "creativity", label: "Creativity", description: "Shows original thinking" },
+];
+
+interface AssessmentPanelProps {
+  assessment?: PromptAssessment;
+  questionText: string;
+  lesson: Lesson | null;
+  isOutdated: boolean;
+  onUpdate: (assessment: PromptAssessment) => void;
+  /** Called after AI generation succeeds with the question text at generation time. */
+  onGenerated: (inputAtGeneration: string) => void;
+}
+
+function AssessmentPanel({ assessment, questionText, lesson, isOutdated, onUpdate, onGenerated }: AssessmentPanelProps) {
+  const [generating, setGenerating] = useState(false);
+  const [error, setError] = useState(false);
+  const [teacherEdited, setTeacherEdited] = useState(false);
+  const hasAutoGeneratedRef = useRef(false);
+
+  const current: PromptAssessment = assessment || {};
+  const hasContent = hasAssessmentContent(assessment);
+
+  // Derive status
+  let status: AssessmentStatus = "draft";
+  if (generating) status = "generating";
+  else if (error) status = "error";
+  else if (isOutdated) status = "outdated";
+  else if (teacherEdited) status = "edited";
+  else if (hasContent) status = "ready";
+
+  const badge = STATUS_BADGE[status];
+
+  const updateField = <K extends keyof PromptAssessment>(key: K, value: PromptAssessment[K]) => {
+    setTeacherEdited(true);
+    onUpdate({ ...current, [key]: value });
+  };
+
+  const doGenerate = async () => {
+    if (!lesson) return;
+    setGenerating(true);
+    setError(false);
+    try {
+      const generated = await generateAssessment(
+        questionText,
+        `${lesson.title}: ${lesson.description}`,
+        {
+          subject: lesson.subject,
+          gradeLevel: lesson.gradeLevel,
+          difficulty: lesson.difficulty,
+          lessonDescription: lesson.description,
+        }
+      );
+      onUpdate({ ...current, ...generated });
+      onGenerated(questionText);
+      setTeacherEdited(false);
+    } catch (err) {
+      console.error("Failed to generate assessment:", err);
+      setError(true);
+    } finally {
+      setGenerating(false);
+    }
+  };
+
+  const handleRegenerate = () => {
+    if (teacherEdited && !window.confirm("Regenerating will overwrite your edits. Continue?")) {
+      return;
+    }
+    doGenerate();
+  };
+
+  // Auto-generate on first mount if assessment is empty
+  useEffect(() => {
+    if (hasAutoGeneratedRef.current) return;
+    if (hasContent) return; // already has data
+    if (generating) return;
+    if (!lesson) return;
+    if (!questionText.trim()) return;
+    hasAutoGeneratedRef.current = true;
+    doGenerate();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  return (
+    <div style={{
+      marginTop: "16px",
+      padding: "16px",
+      background: "var(--surface-elevated)",
+      border: "1px solid var(--border-muted)",
+      borderRadius: "8px",
+    }}>
+      {/* Header row: title + status badge + regenerate */}
+      <div style={{
+        display: "flex",
+        alignItems: "center",
+        gap: "8px",
+        marginBottom: generating ? "12px" : hasContent || error ? "12px" : "0",
+      }}>
+        <span style={{ fontSize: "0.85rem", fontWeight: 500, color: "var(--text-secondary)" }}>
+          Assessment & Mastery
+        </span>
+        <span style={{
+          fontSize: "0.65rem",
+          fontWeight: 500,
+          color: badge.color,
+          background: badge.bg,
+          padding: "1px 7px",
+          borderRadius: "4px",
+        }}>
+          {badge.label}
+        </span>
+        <span style={{ flex: 1 }} />
+        {/* Regenerate / Update criteria button */}
+        {!generating && (
+          <button
+            onClick={handleRegenerate}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: "4px",
+              padding: "3px 10px",
+              background: "transparent",
+              color: isOutdated ? "#d97706" : "#8b5cf6",
+              border: `1px solid ${isOutdated ? "#fbbf24" : "#c4b5fd"}`,
+              borderRadius: "5px",
+              cursor: "pointer",
+              fontSize: "0.75rem",
+              fontWeight: 500,
+              transition: "all 0.15s",
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = isOutdated ? "#fef3c7" : "#f3e8ff";
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = "transparent";
+            }}
+            title={isOutdated ? "Question text changed — update assessment criteria" : "Regenerate assessment with AI"}
+          >
+            ↻ {isOutdated ? "Update criteria" : "Regenerate"}
+          </button>
+        )}
+      </div>
+
+      {/* Generating skeleton */}
+      {generating && (
+        <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+          {[120, 200, 160].map((w, i) => (
+            <div key={i} style={{
+              height: "14px",
+              width: `${w}px`,
+              maxWidth: "100%",
+              background: "linear-gradient(90deg, var(--border-muted) 25%, var(--surface-accent) 50%, var(--border-muted) 75%)",
+              backgroundSize: "200% 100%",
+              animation: "shimmer 1.5s infinite",
+              borderRadius: "4px",
+            }} />
+          ))}
+          <style>{`@keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }`}</style>
+          <span style={{ fontSize: "0.8rem", color: "var(--text-muted)" }}>Generating assessment...</span>
+        </div>
+      )}
+
+      {/* Error state with retry */}
+      {error && !generating && (
+        <div style={{
+          padding: "10px 12px",
+          background: "#fee2e2",
+          borderRadius: "6px",
+          fontSize: "0.8rem",
+          color: "#dc2626",
+          display: "flex",
+          alignItems: "center",
+          gap: "8px",
+        }}>
+          <span>Failed to generate assessment.</span>
+          <button
+            onClick={doGenerate}
+            style={{
+              padding: "2px 8px",
+              background: "transparent",
+              color: "#dc2626",
+              border: "1px solid #fca5a5",
+              borderRadius: "4px",
+              cursor: "pointer",
+              fontSize: "0.75rem",
+              fontWeight: 500,
+            }}
+          >
+            Retry
+          </button>
+        </div>
+      )}
+
+      {/* Fields — shown when not generating */}
+      {!generating && (hasContent || (!error && status === "draft")) && (
+        <div>
+          {/* Outdated banner */}
+          {isOutdated && (
+            <div style={{
+              padding: "8px 12px",
+              background: "#fef3c7",
+              borderRadius: "6px",
+              fontSize: "0.8rem",
+              color: "#92400e",
+              marginBottom: "12px",
+            }}>
+              Question text has changed since these criteria were generated. Click "Update criteria" to refresh.
+            </div>
+          )}
+
+          {/* Learning Objective */}
+          <div style={{ marginBottom: "14px" }}>
+            <label style={{
+              display: "block",
+              fontSize: "0.8rem",
+              fontWeight: 500,
+              color: "var(--text-muted)",
+              marginBottom: "4px",
+            }}>
+              Learning Objective
+            </label>
+            <textarea
+              value={current.learningObjective || ""}
+              onChange={(e) => updateField("learningObjective", e.target.value || undefined)}
+              placeholder="What should the student understand or be able to do?"
+              rows={2}
+              style={{
+                width: "100%",
+                padding: "8px 10px",
+                border: "1px solid var(--border-subtle)",
+                borderRadius: "6px",
+                fontSize: "0.85rem",
+                resize: "vertical",
+                fontFamily: "inherit",
+                boxSizing: "border-box",
+              }}
+            />
+          </div>
+
+          {/* Success Criteria */}
+          <div style={{ marginBottom: "14px" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" }}>
+              <label style={{ fontSize: "0.8rem", fontWeight: 500, color: "var(--text-muted)" }}>
+                Success Criteria
+              </label>
+              <button
+                onClick={() => updateField("successCriteria", [...(current.successCriteria || []), ""])}
+                style={{
+                  padding: "2px 8px",
+                  background: "var(--accent-primary)",
+                  color: "white",
+                  border: "none",
+                  borderRadius: "4px",
+                  cursor: "pointer",
+                  fontSize: "0.75rem",
+                }}
+              >
+                + Add
+              </button>
+            </div>
+            <BulletListEditor
+              items={current.successCriteria || []}
+              placeholder="e.g., Names at least 2 specific effects"
+              onChange={(items) => updateField("successCriteria", items.length > 0 ? items : undefined)}
+            />
+          </div>
+
+          {/* Misconceptions */}
+          <div style={{ marginBottom: "14px" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" }}>
+              <label style={{ fontSize: "0.8rem", fontWeight: 500, color: "var(--text-muted)" }}>
+                Common Misconceptions
+              </label>
+              <button
+                onClick={() => updateField("misconceptions", [...(current.misconceptions || []), ""])}
+                style={{
+                  padding: "2px 8px",
+                  background: "var(--accent-primary)",
+                  color: "white",
+                  border: "none",
+                  borderRadius: "4px",
+                  cursor: "pointer",
+                  fontSize: "0.75rem",
+                }}
+              >
+                + Add
+              </button>
+            </div>
+            <BulletListEditor
+              items={current.misconceptions || []}
+              placeholder="e.g., Thinks the sun moves around the Earth"
+              onChange={(items) => updateField("misconceptions", items.length > 0 ? items : undefined)}
+            />
+          </div>
+
+          {/* Evaluation Focus */}
+          <div>
+            <label style={{
+              display: "block",
+              fontSize: "0.8rem",
+              fontWeight: 500,
+              color: "var(--text-muted)",
+              marginBottom: "6px",
+            }}>
+              Evaluation Focus
+            </label>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
+              {EVALUATION_FOCUS_OPTIONS.map((opt) => {
+                const checked = (current.evaluationFocus || []).includes(opt.value);
+                return (
+                  <label
+                    key={opt.value}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "6px",
+                      padding: "6px 10px",
+                      background: checked ? "#ede9fe" : "var(--surface-elevated)",
+                      border: `1px solid ${checked ? "#8b5cf6" : "var(--border-muted)"}`,
+                      borderRadius: "6px",
+                      cursor: "pointer",
+                      fontSize: "0.8rem",
+                      color: checked ? "#6d28d9" : "var(--text-secondary)",
+                      fontWeight: checked ? 500 : 400,
+                      transition: "all 0.15s",
+                    }}
+                    title={opt.description}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => {
+                        const currentFocus = current.evaluationFocus || [];
+                        const updated = checked
+                          ? currentFocus.filter((f) => f !== opt.value)
+                          : [...currentFocus, opt.value];
+                        updateField("evaluationFocus", updated.length > 0 ? updated : undefined);
+                      }}
+                      style={{ display: "none" }}
+                    />
+                    <span style={{
+                      width: "14px",
+                      height: "14px",
+                      borderRadius: "3px",
+                      border: `1.5px solid ${checked ? "#8b5cf6" : "var(--border-muted)"}`,
+                      background: checked ? "#8b5cf6" : "transparent",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      flexShrink: 0,
+                    }}>
+                      {checked && (
+                        <span style={{ color: "white", fontSize: "0.6rem", fontWeight: 700 }}>✓</span>
+                      )}
+                    </span>
+                    {opt.label}
+                  </label>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ============================================
+// Bullet List Editor (for success criteria / misconceptions)
+// ============================================
+
+interface BulletListEditorProps {
+  items: string[];
+  placeholder: string;
+  onChange: (items: string[]) => void;
+}
+
+function BulletListEditor({ items, placeholder, onChange }: BulletListEditorProps) {
+  if (items.length === 0) {
+    return (
+      <p style={{ margin: 0, fontSize: "0.8rem", color: "var(--text-muted)", fontStyle: "italic" }}>
+        None yet. Click "+ Add" to add one.
+      </p>
+    );
+  }
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+      {items.map((item, i) => (
+        <div key={i} style={{ display: "flex", alignItems: "flex-start", gap: "6px" }}>
+          <span style={{
+            flexShrink: 0,
+            marginTop: "8px",
+            width: "5px",
+            height: "5px",
+            borderRadius: "50%",
+            background: "var(--text-muted)",
+          }} />
+          <input
+            type="text"
+            value={item}
+            onChange={(e) => {
+              const updated = [...items];
+              updated[i] = e.target.value;
+              onChange(updated);
+            }}
+            placeholder={placeholder}
+            style={{
+              flex: 1,
+              padding: "6px 8px",
+              border: "1px solid var(--border-subtle)",
+              borderRadius: "4px",
+              fontSize: "0.8rem",
+              boxSizing: "border-box",
+            }}
+          />
+          <button
+            onClick={() => onChange(items.filter((_, idx) => idx !== i))}
+            style={{
+              padding: "4px 6px",
+              background: "transparent",
+              color: "var(--text-muted)",
+              border: "none",
+              cursor: "pointer",
+              fontSize: "0.75rem",
+              borderRadius: "4px",
+              flexShrink: 0,
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.color = "var(--status-danger)";
+              e.currentTarget.style.background = "var(--status-danger-bg)";
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.color = "var(--text-muted)";
+              e.currentTarget.style.background = "transparent";
+            }}
+            title="Remove"
+          >
+            ✕
+          </button>
+        </div>
+      ))}
     </div>
   );
 }

@@ -63,12 +63,12 @@ export default function ArchivedRecommendationsPanel({
           style={{
             transform: expanded ? "rotate(90deg)" : "rotate(0deg)",
             transition: "transform 0.2s",
-            color: "#9e9e9e",
+            color: "var(--text-muted)",
           }}
         >
           ▶
         </span>
-        <h3 style={{ margin: 0, color: "#757575" }}>
+        <h3 style={{ margin: 0, color: "var(--text-secondary)" }}>
           Archived
         </h3>
         <span
@@ -135,7 +135,7 @@ function ArchivedItem({ recommendation }: ArchivedItemProps) {
     >
       {/* Content */}
       <div style={{ flex: 1 }}>
-        <div style={{ fontWeight: 500, color: "#666" }}>
+        <div style={{ fontWeight: 500, color: "var(--text-secondary)" }}>
           {recommendation.title || studentName}
         </div>
 
@@ -143,7 +143,7 @@ function ArchivedItem({ recommendation }: ArchivedItemProps) {
           style={{
             marginTop: "4px",
             fontSize: "0.85rem",
-            color: "#999",
+            color: "var(--text-muted)",
           }}
         >
           {recommendation.reason}
@@ -154,7 +154,7 @@ function ArchivedItem({ recommendation }: ArchivedItemProps) {
             style={{
               marginTop: "4px",
               fontSize: "0.8rem",
-              color: "#bbb",
+              color: "var(--text-muted)",
             }}
           >
             Dismissed {dismissedDate}

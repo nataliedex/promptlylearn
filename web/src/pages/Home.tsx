@@ -214,7 +214,7 @@ export default function Home() {
         )}
 
         <div style={{ textAlign: "center", marginTop: "24px" }}>
-          <p style={{ color: "#666", marginBottom: "12px" }}>or</p>
+          <p style={{ color: "var(--text-secondary)", marginBottom: "12px" }}>or</p>
           <button
             className="btn btn-secondary"
             onClick={handleEducatorLogin}

@@ -1047,25 +1047,24 @@ export default function EducatorDashboard() {
                   width: "100%",
                   padding: "5px 28px 5px 26px",
                   fontSize: "0.78rem",
-                  border: "1px solid rgba(255,255,255,0.18)",
+                  border: "1px solid var(--border-subtle)",
                   borderRadius: "6px",
-                  background: "rgba(255,255,255,0.08)",
-                  color: "rgba(255,255,255,0.9)",
+                  background: "transparent",
+                  color: "var(--text-secondary)",
                   outline: "none",
                   transition: "border-color 0.2s, box-shadow 0.2s, background 0.2s",
-                  boxShadow: searchFocused ? "0 0 0 2px rgba(255,255,255,0.1)" : "none",
-                  borderColor: searchFocused ? "rgba(255,255,255,0.3)" : "rgba(255,255,255,0.18)",
+                  boxShadow: searchFocused ? "0 0 0 2px rgba(61,90,128,0.1)" : "none",
+                  borderColor: searchFocused ? "var(--accent-primary)" : "var(--border-subtle)",
                 }}
                 onMouseEnter={(e) => {
                   if (!searchFocused) {
-                    e.currentTarget.style.background = "rgba(255,255,255,0.12)";
-                    e.currentTarget.style.borderColor = "rgba(255,255,255,0.22)";
+                    e.currentTarget.style.background = "var(--surface-accent)";
                   }
                 }}
                 onMouseLeave={(e) => {
                   if (!searchFocused) {
-                    e.currentTarget.style.background = "rgba(255,255,255,0.08)";
-                    e.currentTarget.style.borderColor = "rgba(255,255,255,0.18)";
+                    e.currentTarget.style.background = "transparent";
+                    e.currentTarget.style.borderColor = "var(--border-subtle)";
                   }
                 }}
               />
@@ -1078,7 +1077,7 @@ export default function EducatorDashboard() {
                   transform: "translateY(-50%)",
                   width: "12px",
                   height: "12px",
-                  color: "rgba(255,255,255,0.5)",
+                  color: "var(--text-secondary)",
                   pointerEvents: "none",
                 }}
                 fill="none"
@@ -1105,19 +1104,19 @@ export default function EducatorDashboard() {
                     background: "transparent",
                     border: "none",
                     cursor: "pointer",
-                    color: "rgba(255,255,255,0.5)",
+                    color: "var(--text-muted)",
                     display: "flex",
                     alignItems: "center",
                     justifyContent: "center",
                     borderRadius: "4px",
                   }}
                   onMouseEnter={(e) => {
-                    e.currentTarget.style.background = "rgba(255,255,255,0.15)";
-                    e.currentTarget.style.color = "rgba(255,255,255,0.8)";
+                    e.currentTarget.style.background = "var(--surface-accent)";
+                    e.currentTarget.style.color = "var(--text-primary)";
                   }}
                   onMouseLeave={(e) => {
                     e.currentTarget.style.background = "transparent";
-                    e.currentTarget.style.color = "rgba(255,255,255,0.5)";
+                    e.currentTarget.style.color = "var(--text-muted)";
                   }}
                 >
                   <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
@@ -1528,26 +1527,26 @@ export default function EducatorDashboard() {
               alignItems: "center",
               gap: "6px",
               padding: "6px 12px",
-              background: todoCounts.open > 0 ? "rgba(33,150,243,0.12)" : "rgba(255,255,255,0.08)",
-              border: "1px solid rgba(255,255,255,0.15)",
+              background: todoCounts.open > 0 ? "rgba(33,150,243,0.12)" : "rgba(0,0,0,0.04)",
+              border: "1px solid rgba(0,0,0,0.1)",
               borderRadius: "20px",
-              color: "rgba(255,255,255,0.9)",
+              color: "var(--text-primary)",
               fontSize: "0.8rem",
               cursor: "pointer",
               transition: "all 0.2s",
             }}
             onMouseEnter={(e) => {
-              e.currentTarget.style.background = "rgba(255,255,255,0.15)";
+              e.currentTarget.style.background = "rgba(0,0,0,0.06)";
             }}
             onMouseLeave={(e) => {
-              e.currentTarget.style.background = todoCounts.open > 0 ? "rgba(33,150,243,0.12)" : "rgba(255,255,255,0.08)";
+              e.currentTarget.style.background = todoCounts.open > 0 ? "rgba(33,150,243,0.12)" : "rgba(0,0,0,0.04)";
             }}
           >
             <span>To-Dos</span>
             <span
               style={{
-                background: todoCounts.open > 0 ? "var(--status-info)" : "rgba(255,255,255,0.25)",
-                color: todoCounts.open > 0 ? "white" : "rgba(255,255,255,0.7)",
+                background: todoCounts.open > 0 ? "var(--status-info)" : "rgba(0,0,0,0.08)",
+                color: todoCounts.open > 0 ? "white" : "var(--text-secondary)",
                 padding: "2px 7px",
                 borderRadius: "10px",
                 fontSize: "0.7rem",
@@ -1566,26 +1565,26 @@ export default function EducatorDashboard() {
               alignItems: "center",
               gap: "6px",
               padding: "6px 12px",
-              background: coachingActivity.length > 0 || coachingInvites.some(i => i.status !== "completed") ? "rgba(156,39,176,0.12)" : "rgba(255,255,255,0.08)",
-              border: "1px solid rgba(255,255,255,0.15)",
+              background: coachingActivity.length > 0 || coachingInvites.some(i => i.status !== "completed") ? "rgba(156,39,176,0.12)" : "rgba(0,0,0,0.04)",
+              border: "1px solid rgba(0,0,0,0.1)",
               borderRadius: "20px",
-              color: "rgba(255,255,255,0.9)",
+              color: "var(--text-primary)",
               fontSize: "0.8rem",
               cursor: "pointer",
               transition: "all 0.2s",
             }}
             onMouseEnter={(e) => {
-              e.currentTarget.style.background = "rgba(255,255,255,0.15)";
+              e.currentTarget.style.background = "rgba(0,0,0,0.06)";
             }}
             onMouseLeave={(e) => {
-              e.currentTarget.style.background = coachingActivity.length > 0 || coachingInvites.some(i => i.status !== "completed") ? "rgba(156,39,176,0.12)" : "rgba(255,255,255,0.08)";
+              e.currentTarget.style.background = coachingActivity.length > 0 || coachingInvites.some(i => i.status !== "completed") ? "rgba(156,39,176,0.12)" : "rgba(0,0,0,0.04)";
             }}
           >
             <span>Coach</span>
             <span
               style={{
-                background: coachingActivity.length > 0 || coachingInvites.some(i => i.status !== "completed") ? "var(--accent-secondary)" : "rgba(255,255,255,0.25)",
-                color: coachingActivity.length > 0 || coachingInvites.some(i => i.status !== "completed") ? "white" : "rgba(255,255,255,0.7)",
+                background: coachingActivity.length > 0 || coachingInvites.some(i => i.status !== "completed") ? "var(--accent-secondary)" : "rgba(0,0,0,0.08)",
+                color: coachingActivity.length > 0 || coachingInvites.some(i => i.status !== "completed") ? "white" : "var(--text-secondary)",
                 padding: "2px 7px",
                 borderRadius: "10px",
                 fontSize: "0.7rem",
@@ -1605,26 +1604,26 @@ export default function EducatorDashboard() {
                 alignItems: "center",
                 gap: "6px",
                 padding: "6px 12px",
-                background: prioritizedGroups.needsAttention.length > 0 ? "rgba(239,68,68,0.15)" : "rgba(255,255,255,0.08)",
-                border: "1px solid rgba(255,255,255,0.15)",
+                background: prioritizedGroups.needsAttention.length > 0 ? "rgba(239,68,68,0.15)" : "rgba(0,0,0,0.04)",
+                border: "1px solid rgba(0,0,0,0.1)",
                 borderRadius: "20px",
-                color: "rgba(255,255,255,0.9)",
+                color: "var(--text-primary)",
                 fontSize: "0.8rem",
                 cursor: "pointer",
                 transition: "all 0.2s",
               }}
               onMouseEnter={(e) => {
-                e.currentTarget.style.background = "rgba(255,255,255,0.15)";
+                e.currentTarget.style.background = "rgba(0,0,0,0.06)";
               }}
               onMouseLeave={(e) => {
-                e.currentTarget.style.background = prioritizedGroups.needsAttention.length > 0 ? "rgba(239,68,68,0.15)" : "rgba(255,255,255,0.08)";
+                e.currentTarget.style.background = prioritizedGroups.needsAttention.length > 0 ? "rgba(239,68,68,0.15)" : "rgba(0,0,0,0.04)";
               }}
             >
               <span>Assignments</span>
               <span
                 style={{
-                  background: prioritizedGroups.needsAttention.length > 0 ? "var(--status-danger)" : "rgba(255,255,255,0.25)",
-                  color: prioritizedGroups.needsAttention.length > 0 ? "white" : "rgba(255,255,255,0.7)",
+                  background: prioritizedGroups.needsAttention.length > 0 ? "var(--status-danger)" : "rgba(0,0,0,0.08)",
+                  color: prioritizedGroups.needsAttention.length > 0 ? "white" : "var(--text-secondary)",
                   padding: "2px 7px",
                   borderRadius: "10px",
                   fontSize: "0.7rem",
@@ -1646,15 +1645,15 @@ export default function EducatorDashboard() {
                 gap: "6px",
                 padding: "6px 12px",
                 background: "rgba(33,150,243,0.12)",
-                border: "1px solid rgba(255,255,255,0.15)",
+                border: "1px solid rgba(0,0,0,0.1)",
                 borderRadius: "20px",
-                color: "rgba(255,255,255,0.9)",
+                color: "var(--text-primary)",
                 fontSize: "0.8rem",
                 cursor: "pointer",
                 transition: "all 0.2s",
               }}
               onMouseEnter={(e) => {
-                e.currentTarget.style.background = "rgba(255,255,255,0.15)";
+                e.currentTarget.style.background = "rgba(0,0,0,0.06)";
               }}
               onMouseLeave={(e) => {
                 e.currentTarget.style.background = "rgba(33,150,243,0.12)";
@@ -1702,7 +1701,7 @@ export default function EducatorDashboard() {
             alignItems: "center",
             gap: "10px",
             padding: "14px 18px",
-            background: "rgba(255, 255, 255, 0.95)",
+            background: "#ffffff",
             borderRadius: "10px",
             color: "var(--status-success-text)",
             fontSize: "0.9rem",
@@ -1960,6 +1959,38 @@ export default function EducatorDashboard() {
         onClose={() => setProfileDrawerOpen(false)}
         onProfileUpdated={(updated) => setTeacherProfile(updated)}
       />
+
+      {/* Recommendations Debug Row (dev only) */}
+      {process.env.NODE_ENV === "development" && (() => {
+        const singleRecs = recommendations.filter(r => r.studentIds.length === 1);
+        const groupRecs = recommendations.filter(r => r.studentIds.length > 1);
+        return (
+          <div
+            style={{
+              position: "fixed",
+              bottom: 0,
+              left: 0,
+              right: 0,
+              padding: "8px 16px",
+              background: "#1e293b",
+              color: "var(--text-muted)",
+              fontSize: "0.75rem",
+              fontFamily: "monospace",
+              display: "flex",
+              gap: "24px",
+              zIndex: 9999,
+            }}
+          >
+            <span style={{ color: "#f1f5f9", fontWeight: 600 }}>Recommendations Debug</span>
+            <span>Total: {recommendations.length}</span>
+            <span>Single: {singleRecs.length}</span>
+            <span>Group: {groupRecs.length}</span>
+            <span>
+              IDs: {recommendations.slice(0, 3).map(r => `${r.id.slice(0, 6)}${r.studentIds.length > 1 ? `(${r.studentIds.length})` : ""}`).join(", ") || "(none)"}
+            </span>
+          </div>
+        );
+      })()}
     </div>
   );
 }
@@ -2000,7 +2031,7 @@ function NeedsAttentionSection({ students, onNavigate }: NeedsAttentionSectionPr
         <h3 style={{ margin: 0, color: "var(--status-pending-text)" }}>
           {uniqueStudents.length} student{uniqueStudents.length !== 1 ? "s" : ""} need attention today
         </h3>
-        <p style={{ margin: 0, color: "#666", marginTop: "4px" }}>
+        <p style={{ margin: 0, color: "var(--text-secondary)", marginTop: "4px" }}>
           Students who may need a check-in or additional support
         </p>
       </div>
@@ -2033,7 +2064,7 @@ function NeedsAttentionSection({ students, onNavigate }: NeedsAttentionSectionPr
               <span style={{ fontWeight: 600, color: "#333", flexShrink: 0 }}>{student.studentName}</span>
               {student.assignmentTitle && (
                 <span style={{
-                  color: "#666",
+                  color: "var(--text-secondary)",
                   fontSize: "0.9rem",
                   whiteSpace: "nowrap",
                   overflow: "hidden",
@@ -2168,7 +2199,7 @@ function AssignmentListRow({ item, onNavigate }: AssignmentListRowProps) {
         alignItems: "center",
         gap: "16px",
         padding: "16px 20px",
-        background: "rgba(255, 255, 255, 0.95)",
+        background: "#ffffff",
         borderBottom: "1px solid rgba(0, 0, 0, 0.06)",
         cursor: "pointer",
         transition: "background 0.15s",
@@ -2176,10 +2207,10 @@ function AssignmentListRow({ item, onNavigate }: AssignmentListRowProps) {
         boxSizing: "border-box",
       }}
       onMouseEnter={(e) => {
-        e.currentTarget.style.background = "rgba(255, 255, 255, 1)";
+        e.currentTarget.style.background = "#ffffff";
       }}
       onMouseLeave={(e) => {
-        e.currentTarget.style.background = "rgba(255, 255, 255, 0.95)";
+        e.currentTarget.style.background = "#ffffff";
       }}
     >
       {/* Status dot - visual indicator only */}
@@ -2234,8 +2265,8 @@ function AssignmentListRow({ item, onNavigate }: AssignmentListRowProps) {
         style={{
           flex: "0 0 auto",
           padding: "8px 20px",
-          background: priority === "needs-attention" ? "#667eea" : "transparent",
-          color: priority === "needs-attention" ? "white" : "#667eea",
+          background: priority === "needs-attention" ? "#3d5a80" : "transparent",
+          color: priority === "needs-attention" ? "white" : "#3d5a80",
           border: priority === "needs-attention" ? "none" : "1px solid #cbd5e1",
           borderRadius: "6px",
           fontSize: "0.875rem",
@@ -2247,7 +2278,7 @@ function AssignmentListRow({ item, onNavigate }: AssignmentListRowProps) {
         onMouseEnter={(e) => {
           if (priority !== "needs-attention") {
             e.currentTarget.style.background = "#f8fafc";
-            e.currentTarget.style.borderColor = "#667eea";
+            e.currentTarget.style.borderColor = "#3d5a80";
           }
         }}
         onMouseLeave={(e) => {
@@ -2298,7 +2329,7 @@ function _AssignmentListSection({
         {isCollapsible && (
           <span
             style={{
-              color: "rgba(255,255,255,0.6)",
+              color: "var(--text-muted)",
               fontSize: "0.8rem",
               transform: isExpanded ? "rotate(90deg)" : "rotate(0deg)",
               transition: "transform 0.2s",
@@ -2310,7 +2341,7 @@ function _AssignmentListSection({
         <h3
           style={{
             margin: 0,
-            color: "rgba(255,255,255,0.9)",
+            color: "var(--text-primary)",
             fontSize: "1rem",
             fontWeight: 600,
           }}
@@ -2319,7 +2350,7 @@ function _AssignmentListSection({
         </h3>
         <span
           style={{
-            color: "rgba(255,255,255,0.5)",
+            color: "var(--text-secondary)",
             fontSize: "0.85rem",
           }}
         >
@@ -2386,7 +2417,7 @@ function _CoachingActivitySection({ activities, onNavigate }: CoachingActivitySe
         <h3 style={{ margin: 0, color: "var(--accent-secondary)" }}>
           Coach Activity
         </h3>
-        <p style={{ margin: 0, color: "#666", marginTop: "4px" }}>
+        <p style={{ margin: 0, color: "var(--text-secondary)", marginTop: "4px" }}>
           Students who have been using Ask Coach
         </p>
       </div>
@@ -2438,7 +2469,7 @@ function _CoachingActivitySection({ activities, onNavigate }: CoachingActivitySe
                       ? "var(--status-pending-text)"
                       : activity.insight.intentLabel === "enrichment-seeking"
                       ? "var(--status-success-text)"
-                      : "#666",
+                      : "var(--text-secondary)",
                 }}
               >
                 {activity.insight.intentLabel === "support-seeking"
@@ -2483,7 +2514,7 @@ function _CoachingActivitySection({ activities, onNavigate }: CoachingActivitySe
       )}
 
       {displayActivities.length > 0 && displayActivities.some((a) => a.insight.recentTopics.length > 0) && (
-        <div style={{ marginTop: "12px", fontSize: "0.85rem", color: "#666" }}>
+        <div style={{ marginTop: "12px", fontSize: "0.85rem", color: "var(--text-secondary)" }}>
           Recent topics: {[...new Set(displayActivities.flatMap((a) => a.insight.recentTopics))].slice(0, 5).join(", ")}
         </div>
       )}
@@ -2627,21 +2658,21 @@ function AddStudentModal({
               border: "none",
               fontSize: "1.5rem",
               cursor: "pointer",
-              color: "#999",
+              color: "var(--text-muted)",
             }}
           >
             ×
           </button>
         </div>
 
-        <p style={{ color: "#666", marginBottom: "16px" }}>
+        <p style={{ color: "var(--text-secondary)", marginBottom: "16px" }}>
           Add students to <strong>{assignmentTitle}</strong>
         </p>
 
         {loading ? (
-          <p style={{ color: "#666" }}>Loading...</p>
+          <p style={{ color: "var(--text-secondary)" }}>Loading...</p>
         ) : unassignedByClass.length === 0 ? (
-          <p style={{ color: "#666" }}>All students are already assigned to this lesson.</p>
+          <p style={{ color: "var(--text-secondary)" }}>All students are already assigned to this lesson.</p>
         ) : (
           <>
             {unassignedByClass.map((cls) => (
@@ -2746,7 +2777,7 @@ function _UnassignedLessonsSection({ lessons, availableSubjects, onAssign, onArc
         <h3 style={{ margin: 0, color: "var(--status-info-text)" }}>
           Unassigned Lessons ({lessons.length})
         </h3>
-        <p style={{ margin: 0, color: "#666", marginTop: "4px" }}>
+        <p style={{ margin: 0, color: "var(--text-secondary)", marginTop: "4px" }}>
           Lessons created but not yet assigned to any class
         </p>
       </div>
@@ -2783,7 +2814,7 @@ function _UnassignedLessonsSection({ lessons, availableSubjects, onAssign, onArc
                   {lesson.difficulty}
                 </span>
               </div>
-              <p style={{ margin: 0, marginTop: "4px", color: "#666", fontSize: "0.85rem" }}>
+              <p style={{ margin: 0, marginTop: "4px", color: "var(--text-secondary)", fontSize: "0.85rem" }}>
                 {lesson.promptCount} question{lesson.promptCount !== 1 ? "s" : ""}
                 {lesson.gradeLevel && ` • ${lesson.gradeLevel}`}
               </p>
@@ -2829,7 +2860,7 @@ function _UnassignedLessonsSection({ lessons, availableSubjects, onAssign, onArc
                   style={{
                     padding: "4px 10px",
                     background: lesson.subject ? "var(--status-info-bg)" : "transparent",
-                    color: lesson.subject ? "var(--status-info-text)" : "#999",
+                    color: lesson.subject ? "var(--status-info-text)" : "var(--text-muted)",
                     border: "1px dashed var(--status-info)",
                     borderRadius: "4px",
                     cursor: "pointer",
@@ -2879,7 +2910,7 @@ function _UnassignedLessonsSection({ lessons, availableSubjects, onAssign, onArc
                 style={{
                   padding: "6px 12px",
                   background: "transparent",
-                  color: "#999",
+                  color: "var(--text-muted)",
                   border: "1px solid #ddd",
                   borderRadius: "6px",
                   cursor: "pointer",
@@ -2887,11 +2918,11 @@ function _UnassignedLessonsSection({ lessons, availableSubjects, onAssign, onArc
                   transition: "color 0.2s, border-color 0.2s",
                 }}
                 onMouseEnter={(e) => {
-                  e.currentTarget.style.color = "#666";
+                  e.currentTarget.style.color = "var(--text-secondary)";
                   e.currentTarget.style.borderColor = "#bbb";
                 }}
                 onMouseLeave={(e) => {
-                  e.currentTarget.style.color = "#999";
+                  e.currentTarget.style.color = "var(--text-muted)";
                   e.currentTarget.style.borderColor = "#ddd";
                 }}
               >
@@ -2969,7 +3000,7 @@ function UnassignedLessonsDrawerContent({
 
   if (lessons.length === 0 && drafts.length === 0) {
     return (
-      <div style={{ textAlign: "center", padding: "32px 16px", color: "#666" }}>
+      <div style={{ textAlign: "center", padding: "32px 16px", color: "var(--text-secondary)" }}>
         {/* Empty state indicator */}
         <p style={{ margin: 0, fontWeight: 500 }}>No unassigned lessons or drafts</p>
         <p style={{ margin: "8px 0 0 0", fontSize: "0.9rem" }}>
@@ -3009,7 +3040,7 @@ function UnassignedLessonsDrawerContent({
                         .filter(Boolean)
                         .join(" · ") || "No subject set"}
                     </div>
-                    <div style={{ fontSize: "0.75rem", color: "#94a3b8", marginTop: "4px" }}>
+                    <div style={{ fontSize: "0.75rem", color: "var(--text-muted)", marginTop: "4px" }}>
                       Last edited {new Date(draft.updatedAt).toLocaleDateString()}
                     </div>
                   </div>
@@ -3069,7 +3100,7 @@ function UnassignedLessonsDrawerContent({
                           padding: "6px 10px",
                           fontSize: "0.8rem",
                           background: "transparent",
-                          color: "#94a3b8",
+                          color: "var(--text-muted)",
                           border: "1px solid #e5e7eb",
                           borderRadius: "6px",
                           cursor: "pointer",
@@ -3142,7 +3173,7 @@ function UnassignedLessonsDrawerContent({
                     {lesson.difficulty}
                   </span>
                 </div>
-                <p style={{ margin: "4px 0 0 0", color: "#888", fontSize: "0.85rem" }}>
+                <p style={{ margin: "4px 0 0 0", color: "var(--text-muted)", fontSize: "0.85rem" }}>
                   {lesson.promptCount} question{lesson.promptCount !== 1 ? "s" : ""}
                   {lesson.gradeLevel && ` · ${lesson.gradeLevel}`}
                 </p>
@@ -3190,7 +3221,7 @@ function UnassignedLessonsDrawerContent({
                   style={{
                     padding: "4px 8px",
                     background: lesson.subject ? "var(--status-info-bg)" : "transparent",
-                    color: lesson.subject ? "var(--status-info-text)" : "#999",
+                    color: lesson.subject ? "var(--status-info-text)" : "var(--text-muted)",
                     border: "1px dashed var(--status-info)",
                     borderRadius: "4px",
                     cursor: "pointer",
@@ -3222,7 +3253,7 @@ function UnassignedLessonsDrawerContent({
                     border: "none",
                     borderRadius: "4px",
                     cursor: "pointer",
-                    color: "#999",
+                    color: "var(--text-muted)",
                     fontSize: "1rem",
                   }}
                   title="Lesson options"
@@ -3700,7 +3731,7 @@ function AssignmentsDrawerContent({ prioritizedGroups, onNavigate, archivedCount
 
   if (totalCount === 0) {
     return (
-      <div style={{ textAlign: "center", padding: "32px 16px", color: "#666" }}>
+      <div style={{ textAlign: "center", padding: "32px 16px", color: "var(--text-secondary)" }}>
         <p style={{ margin: 0, fontWeight: 500 }}>No assignments yet</p>
         <p style={{ margin: "8px 0 0 0", fontSize: "0.9rem" }}>
           Create and assign a lesson to get started.
@@ -3820,7 +3851,7 @@ function AssignmentsDrawerContent({ prioritizedGroups, onNavigate, archivedCount
             }}>
               {items.length}
             </span>
-            <span style={{ color: "#666", fontSize: "0.8rem" }}>
+            <span style={{ color: "var(--text-secondary)", fontSize: "0.8rem" }}>
               {isExpanded ? "▼" : "▶"}
             </span>
           </span>
@@ -3847,11 +3878,11 @@ function AssignmentsDrawerContent({ prioritizedGroups, onNavigate, archivedCount
                     <div style={{ fontSize: "0.8rem", color: "#64748b", marginTop: "4px" }}>
                       {item.className}
                       {showSubjectOnCards && item.subject && (
-                        <span style={{ color: "#94a3b8" }}> · {item.subject}</span>
+                        <span style={{ color: "var(--text-muted)" }}> · {item.subject}</span>
                       )}
                     </div>
                     {item.assignment.assignedAt && (
-                      <div style={{ fontSize: "0.75rem", color: "#94a3b8", marginTop: "4px" }}>
+                      <div style={{ fontSize: "0.75rem", color: "var(--text-muted)", marginTop: "4px" }}>
                         Assigned {formatDate(item.assignment.assignedAt)}
                       </div>
                     )}
@@ -4099,7 +4130,7 @@ function AssignmentsDrawerContent({ prioritizedGroups, onNavigate, archivedCount
 
       {/* Empty state when filters have no matches */}
       {hasActiveFilters && filteredCount === 0 && (
-        <div style={{ textAlign: "center", padding: "32px 16px", color: "#666" }}>
+        <div style={{ textAlign: "center", padding: "32px 16px", color: "var(--text-secondary)" }}>
           <p style={{ margin: 0, fontWeight: 500 }}>No matching assignments</p>
           <p style={{ margin: "8px 0 0 0", fontSize: "0.9rem" }}>
             Try adjusting your filters or{" "}
@@ -4187,7 +4218,7 @@ function AssignmentsDrawerContent({ prioritizedGroups, onNavigate, archivedCount
               }}>
                 {archivedCount}
               </span>
-              <span style={{ color: "#666", fontSize: "0.8rem" }}>
+              <span style={{ color: "var(--text-secondary)", fontSize: "0.8rem" }}>
                 {expandedSections.archived ? "▼" : "▶"}
               </span>
             </span>
@@ -4290,7 +4321,7 @@ function CoachingActivityDrawerContent({ activities, coachingInvites, allStudent
 
   if (activities.length === 0 && coachingInvites.length === 0) {
     return (
-      <div style={{ textAlign: "center", padding: "32px 16px", color: "#666" }}>
+      <div style={{ textAlign: "center", padding: "32px 16px", color: "var(--text-secondary)" }}>
         <p style={{ margin: 0 }}>No coaching activity yet</p>
         <p style={{ margin: "8px 0 0 0", fontSize: "0.9rem" }}>
           When students use Ask Coach or you assign coaching sessions, activity will appear here.
@@ -4361,7 +4392,7 @@ function CoachingActivityDrawerContent({ activities, coachingInvites, allStudent
                       border: "none",
                       padding: "2px 6px",
                       fontSize: "0.75rem",
-                      color: "#888",
+                      color: "var(--text-muted)",
                       cursor: "pointer",
                       borderRadius: "4px",
                       transition: "color 0.15s, background 0.15s",
@@ -4371,7 +4402,7 @@ function CoachingActivityDrawerContent({ activities, coachingInvites, allStudent
                       e.currentTarget.style.background = "var(--surface-accent-tint)";
                     }}
                     onMouseLeave={(e) => {
-                      e.currentTarget.style.color = "#888";
+                      e.currentTarget.style.color = "var(--text-muted)";
                       e.currentTarget.style.background = "none";
                     }}
                   >
@@ -4381,10 +4412,10 @@ function CoachingActivityDrawerContent({ activities, coachingInvites, allStudent
               </div>
 
               {/* Info row: Request count and last active */}
-              <div style={{ marginTop: "4px", fontSize: "0.8rem", color: "#777" }}>
+              <div style={{ marginTop: "4px", fontSize: "0.8rem", color: "var(--text-secondary)" }}>
                 {formatRequestCount(activity.insight.totalCoachRequests)}
                 {activity.insight.lastCoachSessionAt && (
-                  <span style={{ marginLeft: "8px", color: "#999" }}>
+                  <span style={{ marginLeft: "8px", color: "var(--text-muted)" }}>
                     • Last: {formatLastActive(activity.insight.lastCoachSessionAt)}
                   </span>
                 )}
@@ -4396,7 +4427,7 @@ function CoachingActivityDrawerContent({ activities, coachingInvites, allStudent
                   style={{
                     marginTop: "4px",
                     fontSize: "0.75rem",
-                    color: "#999",
+                    color: "var(--text-muted)",
                     whiteSpace: "nowrap",
                     overflow: "hidden",
                     textOverflow: "ellipsis",
@@ -4419,7 +4450,7 @@ function CoachingActivityDrawerContent({ activities, coachingInvites, allStudent
         style={{
           margin: "0 0 20px 0",
           fontSize: "0.85rem",
-          color: "#888",
+          color: "var(--text-muted)",
           lineHeight: 1.4,
         }}
       >
@@ -4480,7 +4511,7 @@ function CoachingActivityDrawerContent({ activities, coachingInvites, allStudent
                       <p style={{ margin: "0 0 4px 0", fontSize: "0.85rem", fontWeight: 500, color: "#333" }}>
                         Remove session?
                       </p>
-                      <p style={{ margin: "0 0 10px 0", fontSize: "0.8rem", color: "#666", lineHeight: 1.4 }}>
+                      <p style={{ margin: "0 0 10px 0", fontSize: "0.8rem", color: "var(--text-secondary)", lineHeight: 1.4 }}>
                         This will remove the session invitation for this student. The student will no longer see it.
                       </p>
                       <div style={{ display: "flex", gap: "8px" }}>
@@ -4535,7 +4566,7 @@ function CoachingActivityDrawerContent({ activities, coachingInvites, allStudent
                                 border: "none",
                                 padding: "2px 6px",
                                 fontSize: "0.75rem",
-                                color: "#888",
+                                color: "var(--text-muted)",
                                 cursor: "pointer",
                                 borderRadius: "4px",
                                 transition: "color 0.15s, background 0.15s",
@@ -4545,7 +4576,7 @@ function CoachingActivityDrawerContent({ activities, coachingInvites, allStudent
                                 e.currentTarget.style.background = "var(--surface-accent-tint)";
                               }}
                               onMouseLeave={(e) => {
-                                e.currentTarget.style.color = "#888";
+                                e.currentTarget.style.color = "var(--text-muted)";
                                 e.currentTarget.style.background = "none";
                               }}
                             >
@@ -4561,7 +4592,7 @@ function CoachingActivityDrawerContent({ activities, coachingInvites, allStudent
                                 border: "none",
                                 padding: "2px 5px",
                                 fontSize: "0.75rem",
-                                color: "#bbb",
+                                color: "var(--text-muted)",
                                 cursor: "pointer",
                                 borderRadius: "4px",
                                 lineHeight: 1,
@@ -4572,7 +4603,7 @@ function CoachingActivityDrawerContent({ activities, coachingInvites, allStudent
                                 e.currentTarget.style.background = "#fef2f2";
                               }}
                               onMouseLeave={(e) => {
-                                e.currentTarget.style.color = "#bbb";
+                                e.currentTarget.style.color = "var(--text-muted)";
                                 e.currentTarget.style.background = "none";
                               }}
                             >
@@ -4584,7 +4615,7 @@ function CoachingActivityDrawerContent({ activities, coachingInvites, allStudent
 
                       {/* Bottom row: Title + Status badge */}
                       <div style={{ marginTop: "4px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                        <span style={{ fontSize: "0.8rem", color: "#777" }}>
+                        <span style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}>
                           {invite.title || invite.assignmentTitle || "Coaching session"}
                         </span>
                         <span
@@ -4770,7 +4801,7 @@ function ClassListView({
 
   if (classes.length === 0) {
     return (
-      <div style={{ textAlign: "center", padding: "32px 16px", color: "#666" }}>
+      <div style={{ textAlign: "center", padding: "32px 16px", color: "var(--text-secondary)" }}>
         {/* Empty state indicator */}
         <p style={{ margin: 0, fontWeight: 500 }}>No classes yet</p>
         <p style={{ margin: "8px 0 16px 0", fontSize: "0.9rem" }}>
@@ -4786,7 +4817,7 @@ function ClassListView({
   return (
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px" }}>
-        <p style={{ margin: 0, fontSize: "0.85rem", color: "#888" }}>
+        <p style={{ margin: 0, fontSize: "0.85rem", color: "var(--text-muted)" }}>
           Quick access to your classes
         </p>
         <button
@@ -4839,11 +4870,11 @@ function ClassListView({
               >
                 <div style={{ flex: 1 }}>
                   <div style={{ fontWeight: 600, color: "#333", fontSize: "0.95rem" }}>{cls.name}</div>
-                  <div style={{ marginTop: "4px", fontSize: "0.8rem", color: "#888" }}>
+                  <div style={{ marginTop: "4px", fontSize: "0.8rem", color: "var(--text-muted)" }}>
                     {cls.gradeLevel && <span style={{ marginRight: "8px" }}>{cls.gradeLevel}</span>}
                     {cls.studentCount} student{cls.studentCount !== 1 ? "s" : ""}
                     {cls.subjects && cls.subjects.length > 0 && (
-                      <span style={{ marginLeft: "8px", color: "#aaa" }}>
+                      <span style={{ marginLeft: "8px", color: "var(--text-muted)" }}>
                         • {cls.subjects.slice(0, 2).join(", ")}
                         {cls.subjects.length > 2 && ` +${cls.subjects.length - 2}`}
                       </span>
@@ -4870,7 +4901,7 @@ function ClassListView({
                   border: "none",
                   borderRadius: "4px",
                   cursor: "pointer",
-                  color: "#999",
+                  color: "var(--text-muted)",
                   fontSize: "1rem",
                 }}
                 title="Class options"
@@ -5074,7 +5105,7 @@ function CreateClassView({ onBack, onClassCreated }: CreateClassViewProps) {
 
         <div style={{ marginBottom: "16px" }}>
           <label style={{ display: "block", fontSize: "0.8rem", fontWeight: 600, color: "#374151", marginBottom: "6px" }}>
-            Period <span style={{ fontWeight: 400, color: "#94a3b8" }}>(optional)</span>
+            Period <span style={{ fontWeight: 400, color: "var(--text-muted)" }}>(optional)</span>
           </label>
           <input
             type="text"
@@ -5094,7 +5125,7 @@ function CreateClassView({ onBack, onClassCreated }: CreateClassViewProps) {
 
         <div style={{ marginBottom: "16px" }}>
           <label style={{ display: "block", fontSize: "0.8rem", fontWeight: 600, color: "#374151", marginBottom: "6px" }}>
-            Section <span style={{ fontWeight: 400, color: "#94a3b8" }}>(optional)</span>
+            Section <span style={{ fontWeight: 400, color: "var(--text-muted)" }}>(optional)</span>
           </label>
           <input
             type="text"
@@ -5138,8 +5169,8 @@ function CreateClassView({ onBack, onClassCreated }: CreateClassViewProps) {
               padding: "10px 16px",
               fontSize: "0.85rem",
               fontWeight: 600,
-              background: !name.trim() || isCreating ? "#e2e8f0" : "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
-              color: !name.trim() || isCreating ? "#94a3b8" : "white",
+              background: !name.trim() || isCreating ? "#e2e8f0" : "#3d5a80",
+              color: !name.trim() || isCreating ? "var(--text-muted)" : "white",
               border: "none",
               borderRadius: "6px",
               cursor: !name.trim() || isCreating ? "not-allowed" : "pointer",
@@ -5280,7 +5311,7 @@ function ClassDetailDrawerView({
               border: "none",
               borderRadius: "4px",
               cursor: "pointer",
-              color: "#666",
+              color: "var(--text-secondary)",
               fontSize: "1rem",
             }}
           >
@@ -5451,7 +5482,7 @@ function ClassDetailDrawerView({
                   fontSize: "0.8rem",
                   fontWeight: 500,
                   background: !studentNames.trim() || addingStudents ? "#e2e8f0" : "var(--accent-primary)",
-                  color: !studentNames.trim() || addingStudents ? "#94a3b8" : "white",
+                  color: !studentNames.trim() || addingStudents ? "var(--text-muted)" : "white",
                   border: "none",
                   borderRadius: "4px",
                   cursor: !studentNames.trim() || addingStudents ? "not-allowed" : "pointer",
@@ -5500,9 +5531,9 @@ function ClassDetailDrawerView({
                   </button>
                   <button
                     onClick={() => handleRemoveStudent(student.id, student.name)}
-                    style={{ background: "transparent", border: "none", cursor: "pointer", color: "#999", fontSize: "0.75rem" }}
+                    style={{ background: "transparent", border: "none", cursor: "pointer", color: "var(--text-muted)", fontSize: "0.75rem" }}
                     onMouseEnter={(e) => e.currentTarget.style.color = "#dc2626"}
-                    onMouseLeave={(e) => e.currentTarget.style.color = "#999"}
+                    onMouseLeave={(e) => e.currentTarget.style.color = "var(--text-muted)"}
                   >
                     Remove
                   </button>
@@ -5833,7 +5864,7 @@ function CreateLessonDrawerContent({
                 marginBottom: "6px",
               }}
             >
-              Grade Level <span style={{ fontWeight: 400, color: "#94a3b8" }}>(optional)</span>
+              Grade Level <span style={{ fontWeight: 400, color: "var(--text-muted)" }}>(optional)</span>
             </label>
             <select
               value={gradeLevel}
@@ -5897,7 +5928,7 @@ function CreateLessonDrawerContent({
               marginBottom: "6px",
             }}
           >
-            What will students learn? <span style={{ fontWeight: 400, color: "#94a3b8" }}>(optional)</span>
+            What will students learn? <span style={{ fontWeight: 400, color: "var(--text-muted)" }}>(optional)</span>
           </label>
           <textarea
             value={description}
@@ -5950,7 +5981,7 @@ function CreateLessonDrawerContent({
             alignItems: "center",
             gap: "12px",
           }}>
-            <span style={{ fontSize: "0.75rem", color: "#94a3b8", minWidth: "16px" }}>1</span>
+            <span style={{ fontSize: "0.75rem", color: "var(--text-muted)", minWidth: "16px" }}>1</span>
             <input
               type="range"
               min={1}
@@ -5966,7 +5997,7 @@ function CreateLessonDrawerContent({
                 cursor: "pointer",
               }}
             />
-            <span style={{ fontSize: "0.75rem", color: "#94a3b8", minWidth: "16px" }}>10</span>
+            <span style={{ fontSize: "0.75rem", color: "var(--text-muted)", minWidth: "16px" }}>10</span>
           </div>
         </div>
 
@@ -5982,7 +6013,7 @@ function CreateLessonDrawerContent({
                 marginBottom: "6px",
               }}
             >
-              Assign to class <span style={{ fontWeight: 400, color: "#94a3b8" }}>(optional)</span>
+              Assign to class <span style={{ fontWeight: 400, color: "var(--text-muted)" }}>(optional)</span>
             </label>
             <select
               value={assignToClassId}
@@ -6052,8 +6083,8 @@ function CreateLessonDrawerContent({
             fontWeight: 600,
             background: !isValid
               ? "#e2e8f0"
-              : "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
-            color: !isValid ? "#94a3b8" : "white",
+              : "#3d5a80",
+            color: !isValid ? "var(--text-muted)" : "white",
             border: "none",
             borderRadius: "8px",
             cursor: !isValid ? "not-allowed" : "pointer",
@@ -6256,7 +6287,7 @@ function AssignLessonDrawerContent({
 
           {classes.length === 0 ? (
             <div style={{ padding: "16px", background: "#f9fafb", borderRadius: "8px", textAlign: "center" }}>
-              <p style={{ color: "#666", margin: "0 0 12px 0", fontSize: "0.9rem" }}>
+              <p style={{ color: "var(--text-secondary)", margin: "0 0 12px 0", fontSize: "0.9rem" }}>
                 No classes yet. Create a class first to assign lessons.
               </p>
             </div>
@@ -6428,7 +6459,7 @@ function AssignLessonDrawerContent({
                 marginBottom: "8px",
               }}
             >
-              3. Due Date <span style={{ fontWeight: 400, color: "#94a3b8" }}>(optional)</span>
+              3. Due Date <span style={{ fontWeight: 400, color: "var(--text-muted)" }}>(optional)</span>
             </label>
 
             <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
@@ -6496,7 +6527,7 @@ function AssignLessonDrawerContent({
             padding: "12px",
             fontSize: "0.9rem",
             background: canAssign && !assigning ? "var(--accent-primary)" : "#e2e8f0",
-            color: canAssign && !assigning ? "white" : "#94a3b8",
+            color: canAssign && !assigning ? "white" : "var(--text-muted)",
             border: "none",
             borderRadius: "8px",
             cursor: canAssign && !assigning ? "pointer" : "not-allowed",

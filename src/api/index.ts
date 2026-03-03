@@ -1,6 +1,7 @@
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
+import path from "path";
 
 import studentsRouter from "./routes/students";
 import sessionsRouter from "./routes/sessions";
@@ -10,7 +11,6 @@ import assignmentsRouter from "./routes/assignments";
 import evaluateRouter from "./routes/evaluate";
 import analyticsRouter from "./routes/analytics";
 import voiceRouter from "./routes/voice";
-import standardsRouter from "./routes/standards";
 import coachRouter from "./routes/coach";
 import coachSessionsRouter from "./routes/coachSessions";
 import recommendationsRouter from "./routes/recommendations";
@@ -19,6 +19,10 @@ import attentionRouter from "./routes/attention";
 import coachingInvitesRouter from "./routes/coachingInvites";
 import educatorProfileRouter from "./routes/educatorProfile";
 import lessonDraftsRouter from "./routes/lessonDrafts";
+import uploadsRouter from "./routes/uploads";
+import coachAnalyticsRouter from "./routes/coachAnalytics";
+import devRouter from "./routes/dev";
+import { getUploadsBaseDir } from "../services/videoStorage";
 
 dotenv.config();
 
@@ -41,7 +45,6 @@ app.use("/api/assignments", assignmentsRouter);
 app.use("/api/evaluate", evaluateRouter);
 app.use("/api/analytics", analyticsRouter);
 app.use("/api/voice", voiceRouter);
-app.use("/api/standards", standardsRouter);
 app.use("/api/coach", coachRouter);
 app.use("/api/coach-sessions", coachSessionsRouter);
 app.use("/api/recommendations", recommendationsRouter);
@@ -50,6 +53,31 @@ app.use("/api/attention", attentionRouter);
 app.use("/api/coaching-invites", coachingInvitesRouter);
 app.use("/api/educator", educatorProfileRouter);
 app.use("/api/educator/lesson-drafts", lessonDraftsRouter);
+app.use("/api/educator", coachAnalyticsRouter);
+app.use("/api/uploads", uploadsRouter);
+
+// Static file serving for uploaded videos
+// Serves files from /uploads/videos/* with security checks
+app.use("/uploads/videos", (req, res, next) => {
+  // Prevent directory traversal by checking for .. in path
+  if (req.path.includes("..")) {
+    return res.status(403).json({ error: "Forbidden" });
+  }
+  next();
+}, express.static(getUploadsBaseDir(), {
+  // Set appropriate headers for video files
+  setHeaders: (res, filePath) => {
+    // Allow video to be played in browser
+    res.set("Accept-Ranges", "bytes");
+    // Cache for 1 hour (local dev only; adjust for production)
+    res.set("Cache-Control", "public, max-age=3600");
+  },
+}));
+
+// Dev-only routes (seed data, reset)
+if (process.env.NODE_ENV !== "production") {
+  app.use("/api/dev", devRouter);
+}
 
 // Health check
 app.get("/api/health", (req, res) => {

@@ -10,7 +10,7 @@
  *
  * Card structure:
  * - Category badge (EXTEND LEARNING, NEEDS SUPPORT, CHECK IN)
- * - Title: "{Student name} may benefit from {focus area}"
+ * - Title: Student name (just the name - no vague phrases)
  * - Supporting evidence (max 3 bullets)
  * - Scope context (Assignment name, Class name)
  * - Dismiss (subtle text action)
@@ -64,31 +64,26 @@ export default function InsightCard({
 
   const displayStudentName = getStudentDisplayName();
 
-  // Build focus area from recommendation data
-  const getFocusArea = (): string => {
-    if (recommendation.summary) {
-      const match = recommendation.summary.match(/may benefit from (.+)/i);
-      if (match) return match[1];
-    }
-
+  // Build action phrase based on category - concrete, no vague language
+  const getActionPhrase = (): string => {
     const categoryKey = getCategoryKey(recommendation);
     switch (categoryKey) {
       case "challenge-opportunity":
+        return "ready for extension";
       case "celebrate-progress":
-        return "enrichment activities";
-      case "needs-support":
+        return "showed progress";
       case "group-review":
-        return "additional support";
+        return "for group review";
       case "check-in-suggested":
       case "developing":
-        return "a check-in";
+        return "needs a quick check-in";
       default:
-        return "teacher attention";
+        return "needs attention";
     }
   };
 
-  // Build title
-  const displayTitle = `${displayStudentName} may benefit from ${getFocusArea()}`;
+  // Build title - just the student name (the "Why" provides detail)
+  const displayTitle = displayStudentName;
 
   // Get supporting evidence (max 3 bullets)
   const evidenceBullets = useMemo(() => {
@@ -250,7 +245,7 @@ export default function InsightCard({
         <div
           style={{
             fontSize: "0.8rem",
-            color: "#94a3b8",
+            color: "var(--text-muted)",
             marginBottom: isActive && onDismiss ? "10px" : "0",
           }}
         >
@@ -267,7 +262,7 @@ export default function InsightCard({
               padding: "4px 8px",
               fontSize: "0.75rem",
               background: "transparent",
-              color: "#94a3b8",
+              color: "var(--text-muted)",
               border: "none",
               cursor: "pointer",
               fontWeight: 500,
@@ -276,7 +271,7 @@ export default function InsightCard({
               e.currentTarget.style.color = "#64748b";
             }}
             onMouseLeave={(e) => {
-              e.currentTarget.style.color = "#94a3b8";
+              e.currentTarget.style.color = "var(--text-muted)";
             }}
           >
             Dismiss

@@ -105,7 +105,7 @@ export default function TeacherProfileDrawer({
   const helperStyle: React.CSSProperties = {
     margin: "4px 0 0 0",
     fontSize: "0.75rem",
-    color: "#94a3b8",
+    color: "var(--text-muted)",
   };
 
   const sectionStyle: React.CSSProperties = {
@@ -125,13 +125,13 @@ export default function TeacherProfileDrawer({
               width: "32px",
               height: "32px",
               border: "3px solid #e2e8f0",
-              borderTopColor: "#667eea",
+              borderTopColor: "#3d5a80",
               borderRadius: "50%",
               animation: "spin 0.8s linear infinite",
               margin: "0 auto 12px auto",
             }}
           />
-          <p style={{ color: "#94a3b8", margin: 0 }}>Loading profile...</p>
+          <p style={{ color: "var(--text-muted)", margin: 0 }}>Loading profile...</p>
           <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
         </div>
       ) : (
@@ -248,7 +248,7 @@ export default function TeacherProfileDrawer({
                       borderRadius: "8px",
                       border:
                         coachTone === option.value
-                          ? "2px solid #667eea"
+                          ? "2px solid #3d5a80"
                           : "1px solid #e2e8f0",
                       background: coachTone === option.value ? "#f0f4ff" : "#fff",
                       cursor: "pointer",
@@ -267,7 +267,7 @@ export default function TeacherProfileDrawer({
                       <span style={{ fontWeight: 500, color: "#2d3748", fontSize: "0.9rem" }}>
                         {option.label}
                       </span>
-                      <p style={{ margin: "2px 0 0 0", fontSize: "0.75rem", color: "#94a3b8" }}>
+                      <p style={{ margin: "2px 0 0 0", fontSize: "0.75rem", color: "var(--text-muted)" }}>
                         {option.desc}
                       </p>
                     </div>
@@ -284,7 +284,7 @@ export default function TeacherProfileDrawer({
             style={{
               width: "100%",
               padding: "12px 20px",
-              background: saving ? "#94a3b8" : "#667eea",
+              background: saving ? "#94a3b8" : "#3d5a80",
               color: "#fff",
               border: "none",
               borderRadius: "8px",
@@ -297,7 +297,7 @@ export default function TeacherProfileDrawer({
               if (!saving) e.currentTarget.style.background = "#5a67d8";
             }}
             onMouseLeave={(e) => {
-              if (!saving) e.currentTarget.style.background = "#667eea";
+              if (!saving) e.currentTarget.style.background = "#3d5a80";
             }}
           >
             {saving ? "Saving..." : "Save Changes"}

@@ -74,13 +74,13 @@ export interface HeaderProps {
   onOpenTodos?: () => void;
 }
 
-// Shared button styles
+// Shared button styles — light theme
 const buttonBase: React.CSSProperties = {
   display: "inline-flex",
   alignItems: "center",
   gap: "5px",
   padding: "5px 12px",
-  border: "1px solid rgba(255,255,255,0.18)",
+  border: "1px solid var(--border-subtle)",
   borderRadius: "6px",
   fontSize: "0.78rem",
   fontWeight: 500,
@@ -91,15 +91,14 @@ const buttonBase: React.CSSProperties = {
 
 const workflowButtonStyle: React.CSSProperties = {
   ...buttonBase,
-  background: "rgba(255,255,255,0.12)",
-  color: "rgba(255,255,255,0.85)",
+  background: "var(--surface-accent)",
+  color: "var(--text-secondary)",
 };
 
 const headerButtonStyle: React.CSSProperties = {
   ...buttonBase,
-  background: "rgba(255,255,255,0.08)",
-  color: "rgba(255,255,255,0.85)",
-  border: "1px solid rgba(255,255,255,0.15)",
+  background: "transparent",
+  color: "var(--text-secondary)",
 };
 
 function HeaderButton({
@@ -118,12 +117,12 @@ function HeaderButton({
       onClick={onClick}
       style={style}
       onMouseEnter={(e) => {
-        e.currentTarget.style.background = variant === "workflow" ? "rgba(255,255,255,0.2)" : "rgba(255,255,255,0.18)";
-        e.currentTarget.style.color = "white";
+        e.currentTarget.style.background = "var(--surface-accent)";
+        e.currentTarget.style.color = "var(--text-primary)";
       }}
       onMouseLeave={(e) => {
-        e.currentTarget.style.background = variant === "workflow" ? "rgba(255,255,255,0.12)" : "rgba(255,255,255,0.08)";
-        e.currentTarget.style.color = "rgba(255,255,255,0.85)";
+        e.currentTarget.style.background = variant === "workflow" ? "var(--surface-accent)" : "transparent";
+        e.currentTarget.style.color = "var(--text-secondary)";
       }}
     >
       {children}
@@ -157,7 +156,7 @@ function Breadcrumbs({ items, homeLink }: { items: BreadcrumbItem[]; homeLink: s
               <span
                 style={{
                   margin: "0 8px",
-                  color: "rgba(255,255,255,0.45)",
+                  color: "var(--text-muted)",
                   fontSize: "0.75rem",
                   userSelect: "none",
                 }}
@@ -170,7 +169,7 @@ function Breadcrumbs({ items, homeLink }: { items: BreadcrumbItem[]; homeLink: s
                 to={crumb.to}
                 state={crumb.state}
                 style={{
-                  color: isLast ? "rgba(255,255,255,0.95)" : "rgba(255,255,255,0.75)",
+                  color: isLast ? "var(--text-primary)" : "var(--text-secondary)",
                   textDecoration: "none",
                   fontWeight: isLast || isHome ? 500 : 400,
                   borderRadius: "4px",
@@ -183,11 +182,11 @@ function Breadcrumbs({ items, homeLink }: { items: BreadcrumbItem[]; homeLink: s
                   maxWidth: isLast ? "300px" : undefined,
                 }}
                 onMouseEnter={(e) => {
-                  e.currentTarget.style.color = "rgba(255,255,255,0.95)";
-                  e.currentTarget.style.background = "rgba(255,255,255,0.1)";
+                  e.currentTarget.style.color = "var(--text-primary)";
+                  e.currentTarget.style.background = "var(--surface-accent)";
                 }}
                 onMouseLeave={(e) => {
-                  e.currentTarget.style.color = isLast ? "rgba(255,255,255,0.95)" : "rgba(255,255,255,0.75)";
+                  e.currentTarget.style.color = isLast ? "var(--text-primary)" : "var(--text-secondary)";
                   e.currentTarget.style.background = "transparent";
                 }}
               >
@@ -196,7 +195,7 @@ function Breadcrumbs({ items, homeLink }: { items: BreadcrumbItem[]; homeLink: s
             ) : (
               <span
                 style={{
-                  color: "rgba(255,255,255,0.95)",
+                  color: "var(--text-primary)",
                   fontWeight: 500,
                   overflow: "hidden",
                   textOverflow: "ellipsis",
@@ -216,10 +215,10 @@ function Breadcrumbs({ items, homeLink }: { items: BreadcrumbItem[]; homeLink: s
 
 function StatusPillButton({ pill }: { pill: StatusPill }) {
   const variantColors: Record<string, { bg: string; text: string; border: string }> = {
-    default: { bg: "rgba(255,255,255,0.1)", text: "rgba(255,255,255,0.85)", border: "rgba(255,255,255,0.2)" },
-    warning: { bg: "rgba(251,191,36,0.15)", text: "#fbbf24", border: "rgba(251,191,36,0.3)" },
-    success: { bg: "rgba(34,197,94,0.15)", text: "#22c55e", border: "rgba(34,197,94,0.3)" },
-    info: { bg: "rgba(59,130,246,0.15)", text: "#3b82f6", border: "rgba(59,130,246,0.3)" },
+    default: { bg: "var(--surface-accent)", text: "var(--text-secondary)", border: "var(--border-subtle)" },
+    warning: { bg: "var(--status-warning-bg)", text: "var(--status-warning-text)", border: "rgba(245,158,11,0.3)" },
+    success: { bg: "var(--status-success-bg)", text: "var(--status-success-text)", border: "rgba(16,185,129,0.3)" },
+    info: { bg: "var(--status-info-bg)", text: "var(--status-info-text)", border: "rgba(59,130,246,0.3)" },
   };
 
   const colors = variantColors[pill.variant || "default"];
@@ -254,7 +253,7 @@ function StatusPillButton({ pill }: { pill: StatusPill }) {
         <span
           style={{
             background: colors.text,
-            color: "#1a1a2e",
+            color: "white",
             borderRadius: "10px",
             padding: "0 6px",
             fontSize: "0.7rem",
@@ -275,14 +274,14 @@ function ProgressIndicator({ current, total }: { current: number; total: number 
 
   return (
     <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-      <span style={{ color: "rgba(255,255,255,0.7)", fontSize: "0.8rem" }}>
+      <span style={{ color: "var(--text-muted)", fontSize: "0.8rem" }}>
         {current} of {total}
       </span>
       <div
         style={{
           width: "80px",
           height: "4px",
-          background: "rgba(255,255,255,0.2)",
+          background: "var(--border-subtle)",
           borderRadius: "2px",
           overflow: "hidden",
         }}
@@ -291,7 +290,7 @@ function ProgressIndicator({ current, total }: { current: number; total: number 
           style={{
             width: `${percentage}%`,
             height: "100%",
-            background: "var(--accent-primary, #6366f1)",
+            background: "var(--accent-primary)",
             borderRadius: "2px",
             transition: "width 0.3s ease",
           }}
@@ -373,7 +372,7 @@ export default function Header(props: HeaderProps) {
     },
   }[mode];
 
-  // Header container styles based on visual emphasis
+  // Header container styles — light, minimal
   const containerStyle: React.CSSProperties = {
     display: "flex",
     alignItems: "center",
@@ -383,6 +382,9 @@ export default function Header(props: HeaderProps) {
     minHeight: mode === "focus" || mode === "session" || mode === "completion" ? "32px" : "36px",
     flexWrap: "wrap",
     opacity: mode === "completion" ? 0.8 : 1,
+    background: "transparent",
+    padding: "10px 0",
+    borderBottom: "1px solid var(--border-subtle)",
   };
 
   // Render based on mode
@@ -395,7 +397,7 @@ export default function Header(props: HeaderProps) {
             <Link
               to={backLink}
               style={{
-                color: "rgba(255,255,255,0.7)",
+                color: "var(--text-muted)",
                 textDecoration: "none",
                 fontSize: "0.85rem",
                 display: "flex",
@@ -409,7 +411,7 @@ export default function Header(props: HeaderProps) {
           {title && (
             <span
               style={{
-                color: "rgba(255,255,255,0.95)",
+                color: "var(--text-primary)",
                 fontWeight: 500,
                 fontSize: "0.9rem",
                 overflow: "hidden",
@@ -438,7 +440,7 @@ export default function Header(props: HeaderProps) {
           {title && (
             <span
               style={{
-                color: "rgba(255,255,255,0.8)",
+                color: "var(--text-secondary)",
                 fontWeight: 500,
                 fontSize: "0.9rem",
               }}
@@ -451,7 +453,7 @@ export default function Header(props: HeaderProps) {
           <Link
             to={backLink}
             style={{
-              color: "rgba(255,255,255,0.6)",
+              color: "var(--text-muted)",
               textDecoration: "none",
               fontSize: "0.8rem",
             }}
@@ -472,7 +474,7 @@ export default function Header(props: HeaderProps) {
             <Link
               to={backLink}
               style={{
-                color: "rgba(255,255,255,0.75)",
+                color: "var(--text-muted)",
                 textDecoration: "none",
                 fontSize: "0.85rem",
                 display: "flex",
@@ -486,7 +488,7 @@ export default function Header(props: HeaderProps) {
             <Link
               to={homeLink}
               style={{
-                color: "rgba(255,255,255,0.75)",
+                color: "var(--text-muted)",
                 textDecoration: "none",
                 fontSize: "0.85rem",
               }}
@@ -496,10 +498,10 @@ export default function Header(props: HeaderProps) {
           )}
           {title && (
             <>
-              <span style={{ color: "rgba(255,255,255,0.4)", fontSize: "0.8rem" }}>/</span>
+              <span style={{ color: "var(--text-muted)", fontSize: "0.8rem" }}>/</span>
               <span
                 style={{
-                  color: "rgba(255,255,255,0.95)",
+                  color: "var(--text-primary)",
                   fontWeight: 500,
                   fontSize: "0.9rem",
                 }}
@@ -530,7 +532,7 @@ export default function Header(props: HeaderProps) {
       ) : (
         <div style={{ flex: 1 }}>
           {title && (
-            <span style={{ color: "rgba(255,255,255,0.95)", fontWeight: 500, fontSize: "1rem" }}>
+            <span style={{ color: "var(--text-primary)", fontWeight: 500, fontSize: "1rem" }}>
               {title}
             </span>
           )}
@@ -560,7 +562,7 @@ export default function Header(props: HeaderProps) {
               style={{
                 width: "1px",
                 height: "20px",
-                background: "rgba(255,255,255,0.2)",
+                background: "var(--border-subtle)",
                 marginLeft: "4px",
                 marginRight: "4px",
               }}
@@ -596,7 +598,7 @@ export default function Header(props: HeaderProps) {
             style={{
               width: "1px",
               height: "20px",
-              background: "rgba(255,255,255,0.2)",
+              background: "var(--border-subtle)",
               marginLeft: "4px",
               marginRight: "4px",
             }}

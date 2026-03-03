@@ -86,7 +86,36 @@ export function deriveCoachSupport(
 // ============================================
 
 /**
+ * Threshold for considering a response "correct" / "succeeded".
+ * Used for both "demonstrated" and "with-support" outcomes.
+ */
+const CORRECT_THRESHOLD = 80;
+
+/**
+ * Normalize hint usage check to handle both typed mode (hintUsed boolean)
+ * and talk/video mode (hintCountUsed number).
+ */
+export function wasHintUsed(response: PromptResponse): boolean {
+  return response.hintUsed || (response.hintCountUsed ?? 0) > 0;
+}
+
+/**
  * Determine the outcome of a question response.
+ *
+ * Outcomes:
+ * - "demonstrated": Score >= 80 AND no hint used (independent success)
+ * - "with-support": Score >= 80 AND hint was used (succeeded with help)
+ * - "developing": Score < 80 (still working on understanding)
+ * - "needs-review": Has response but no score yet (teacher must evaluate)
+ * - "not-attempted": Empty or no response
+ *
+ * Test cases:
+ * - score 85 + no hint => "demonstrated"
+ * - score 85 + hintUsed => "with-support"
+ * - score 60 + hintUsed => "developing" (not with-support, didn't succeed)
+ * - score 60 + no hint => "developing"
+ * - score undefined => "needs-review"
+ * - empty response => "not-attempted"
  */
 export function calculateQuestionOutcome(
   response: PromptResponse,
@@ -97,20 +126,29 @@ export function calculateQuestionOutcome(
     return "not-attempted";
   }
 
-  // Use score if available, otherwise estimate
-  const effectiveScore = score ?? (response.hintUsed ? 60 : 80);
+  // CRITICAL: If no score is available, we cannot determine understanding.
+  // Return "needs-review" to signal teacher must evaluate this response.
+  // DO NOT default to a passing grade - this was the bug that showed
+  // nonsense answers as "Demonstrated Understanding".
+  if (score === undefined || score === null) {
+    return "needs-review";
+  }
 
-  // Strong response without much help
-  if (effectiveScore >= 80 && !response.hintUsed) {
+  // Normalize hint usage (handles both hintUsed boolean and hintCountUsed number)
+  const hintUsed = wasHintUsed(response);
+
+  // Strong response without any help (score >= 80 and no hint)
+  if (score >= CORRECT_THRESHOLD && !hintUsed) {
     return "demonstrated";
   }
 
-  // Got there with support
-  if (effectiveScore >= 50) {
+  // Succeeded WITH support (score >= 80 AND hint was used)
+  // Key fix: "with-support" REQUIRES hint usage - it means "got there with help"
+  if (score >= CORRECT_THRESHOLD && hintUsed) {
     return "with-support";
   }
 
-  // Still developing
+  // Still developing (score < 80, regardless of hint usage)
   return "developing";
 }
 
@@ -143,7 +181,7 @@ export function determineAttentionNeeded(
 
   // Check for inconsistency
   const hasStrong = questions.some((q) => q.outcome === "demonstrated");
-  const hasStruggling = questions.some((q) => q.outcome === "developing");
+  const hasStruggling = questions.some((q) => q.outcome === "developing" || q.outcome === "needs-review");
   if (hasStrong && hasStruggling && questions.length >= 3) {
     reasons.push("inconsistent-understanding");
   }
@@ -234,6 +272,8 @@ export function getQuestionOutcomeLabel(outcome: QuestionOutcome): string {
       return "Succeeded with Support";
     case "developing":
       return "Still Developing";
+    case "needs-review":
+      return "Needs Review";
     case "not-attempted":
       return "Not Attempted";
   }
@@ -270,10 +310,25 @@ export function buildQuestionSummary(
   response: PromptResponse,
   index: number,
   prompt: { id: string; input: string; hints: string[] },
-  score?: number
+  score?: number,
+  sessionId?: string
 ): QuestionSummary {
   const outcome = calculateQuestionOutcome(response, score);
-  const usedHint = response.hintUsed ?? false;
+  const usedHint = wasHintUsed(response);
+
+  // DEV LOGGING: Log badge derivation for debugging scoring issues
+  if (process.env.NODE_ENV === "development") {
+    console.log("[QuestionOutcome]", {
+      questionId: response.promptId,
+      promptText: prompt.input.substring(0, 50) + (prompt.input.length > 50 ? "..." : ""),
+      studentResponseSnippet: (response.response || "").substring(0, 40) + ((response.response || "").length > 40 ? "..." : ""),
+      derivedStatus: outcome,
+      scoreSource: score !== undefined ? "criteriaScores" : "none",
+      scoreValue: score ?? null,
+      criterionFound: score !== undefined,
+      sessionId: sessionId ?? "unknown",
+    });
+  }
 
   return {
     questionId: response.promptId,
@@ -353,7 +408,8 @@ export function buildStudentRow(
       response,
       index,
       prompt || { id: response.promptId, input: "", hints: [] },
-      criteriaScore?.score
+      criteriaScore?.score,
+      session.id
     );
   });
 
@@ -362,7 +418,7 @@ export function buildStudentRow(
   const understanding = deriveUnderstanding(score);
 
   // Derive coach support
-  const hintsUsed = session.submission.responses.filter((r) => r.hintUsed).length;
+  const hintsUsed = session.submission.responses.filter((r) => wasHintUsed(r)).length;
   const coachSupport = deriveCoachSupport(hintsUsed, questionsAnswered);
 
   // Determine attention needed
@@ -408,7 +464,8 @@ export function buildStudentDrilldown(
       response,
       index,
       prompt || { id: response.promptId, input: "", hints: [] },
-      criteriaScore?.score
+      criteriaScore?.score,
+      session.id
     );
   });
 
@@ -417,7 +474,7 @@ export function buildStudentDrilldown(
   const understanding = deriveUnderstanding(score);
 
   // Derive coach support
-  const hintsUsed = session.submission.responses.filter((r) => r.hintUsed).length;
+  const hintsUsed = session.submission.responses.filter((r) => wasHintUsed(r)).length;
   const coachSupport = deriveCoachSupport(hintsUsed, questions.length);
 
   // Determine attention needed
@@ -683,7 +740,7 @@ function buildSimplifiedStudentRow(
   const understanding = deriveUnderstanding(score);
 
   // Derive coach support
-  const hintsUsed = session.submission.responses.filter((r) => r.hintUsed).length;
+  const hintsUsed = session.submission.responses.filter((r) => wasHintUsed(r)).length;
   const coachSupport = deriveCoachSupport(hintsUsed, questionsAnswered);
 
   // Simplified attention check (without full question analysis)

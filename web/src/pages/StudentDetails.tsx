@@ -26,6 +26,7 @@ import {
   getChecklistActionsForCategory,
   getTeacherTodos,
   completeTeacherTodo,
+  getStudentProfileFull,
   CHECKLIST_ACTIONS,
   type Student,
   type CoachingInsight,
@@ -35,11 +36,13 @@ import {
   type ChecklistActionKey,
   type TeacherTodo,
   type ReviewState,
+  type StudentProfileFull,
 } from "../services/api";
 import {
   deriveUnderstanding,
   deriveCoachSupport,
   getUnderstandingLabel,
+  wasHintUsed,
 } from "../utils/teacherDashboardUtils";
 import type { UnderstandingLevel, CoachSupportLevel } from "../types/teacherDashboard";
 
@@ -75,6 +78,8 @@ export default function StudentDetails() {
   const fromAssignmentTitle = navigationState?.assignmentTitle;
 
   const [student, setStudent] = useState<Student | null>(null);
+  const [studentProfile, setStudentProfile] = useState<StudentProfileFull | null>(null);
+  const [studentCode, setStudentCode] = useState<string | undefined>();
   const [assignments, setAssignments] = useState<StudentAssignment[]>([]);
   const [coachingInsights, setCoachingInsights] = useState<CoachingInsight | null>(null);
   const [recommendations, setRecommendations] = useState<Recommendation[]>([]);
@@ -90,7 +95,7 @@ export default function StudentDetails() {
 
     async function loadData() {
       try {
-        const [studentData, sessions, lessons, insights, recsResponse, badgesResponse, todosResponse, assignmentsResponse] = await Promise.all([
+        const [studentData, sessions, lessons, insights, recsResponse, badgesResponse, todosResponse, assignmentsResponse, profileResponse] = await Promise.all([
           getStudent(studentId!),
           getSessions(studentId, "completed"),
           getLessons(),
@@ -99,9 +104,12 @@ export default function StudentDetails() {
           getBadgeTypes(),
           getTeacherTodos({ studentId: studentId!, status: "open" }),
           getStudentAssignments(studentId!),
+          getStudentProfileFull(studentId!),
         ]);
 
         setStudent(studentData);
+        setStudentProfile(profileResponse.profile);
+        setStudentCode(profileResponse.student.studentCode);
         setCoachingInsights(insights);
         setRecommendations(recsResponse.recommendations);
         setBadgeTypes(badgesResponse.badgeTypes);
@@ -124,7 +132,7 @@ export default function StudentDetails() {
             // Student has attempted this assignment
             const score = session.evaluation?.totalScore ?? 0;
             const understanding = deriveUnderstanding(score);
-            const hintsUsed = session.submission.responses.filter((r) => r.hintUsed).length;
+            const hintsUsed = session.submission.responses.filter((r) => wasHintUsed(r)).length;
             const coachSupport = deriveCoachSupport(hintsUsed, session.submission.responses.length);
 
             assignmentList.push({
@@ -378,29 +386,23 @@ export default function StudentDetails() {
           <button
             onClick={() => setShowProfileDrawer(true)}
             style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: "6px",
-              padding: "6px 14px",
-              background: "rgba(255,255,255,0.12)",
-              color: "rgba(255,255,255,0.9)",
-              border: "1px solid rgba(255,255,255,0.18)",
-              borderRadius: "6px",
+              padding: "6px 12px",
               fontSize: "0.8rem",
-              fontWeight: 500,
+              background: "rgba(255,255,255,0.15)",
+              color: "white",
+              border: "1px solid rgba(255,255,255,0.3)",
+              borderRadius: "6px",
               cursor: "pointer",
-              transition: "background 0.15s, color 0.15s",
+              fontWeight: 500,
             }}
             onMouseEnter={(e) => {
-              e.currentTarget.style.background = "rgba(255,255,255,0.2)";
-              e.currentTarget.style.color = "white";
+              e.currentTarget.style.background = "rgba(255,255,255,0.25)";
             }}
             onMouseLeave={(e) => {
-              e.currentTarget.style.background = "rgba(255,255,255,0.12)";
-              e.currentTarget.style.color = "rgba(255,255,255,0.9)";
+              e.currentTarget.style.background = "rgba(255,255,255,0.15)";
             }}
           >
-            Profile
+            Edit Profile
           </button>
         }
       />
@@ -414,16 +416,16 @@ export default function StudentDetails() {
             alignItems: "center",
             gap: "6px",
             fontSize: "0.85rem",
-            color: "rgba(255,255,255,0.75)",
+            color: "var(--text-secondary)",
             textDecoration: "none",
             marginBottom: "12px",
             transition: "color 0.15s",
           }}
           onMouseEnter={(e) => {
-            e.currentTarget.style.color = "rgba(255,255,255,0.95)";
+            e.currentTarget.style.color = "var(--text-primary)";
           }}
           onMouseLeave={(e) => {
-            e.currentTarget.style.color = "rgba(255,255,255,0.75)";
+            e.currentTarget.style.color = "var(--text-secondary)";
           }}
         >
           <span style={{ fontSize: "0.8rem" }}>←</span>
@@ -433,9 +435,73 @@ export default function StudentDetails() {
 
       {/* Header */}
       <div className="header">
-        <h1>{student.name}</h1>
-        <p>Joined {new Date(student.createdAt).toLocaleDateString()}</p>
+        <h1 style={{ marginBottom: "4px" }}>{student.name}</h1>
+        {studentProfile?.preferredName && studentProfile.preferredName !== student.name && (
+          <p style={{ margin: "0 0 4px 0", fontSize: "0.95rem", color: "var(--text-secondary)" }}>
+            Goes by <strong>{studentProfile.preferredName}</strong>
+            {studentProfile.pronouns && ` (${studentProfile.pronouns})`}
+          </p>
+        )}
+        {!studentProfile?.preferredName && studentProfile?.pronouns && (
+          <p style={{ margin: "0 0 4px 0", fontSize: "0.95rem", color: "var(--text-secondary)" }}>
+            {studentProfile.pronouns}
+          </p>
+        )}
+        <p style={{ margin: 0, fontSize: "0.85rem", color: "var(--text-muted)" }}>
+          {studentCode && <span>ID: {studentCode} · </span>}
+          Joined {new Date(student.createdAt).toLocaleDateString()}
+        </p>
       </div>
+
+      {/* Learning Preferences */}
+      {studentProfile && (
+        <div
+          style={{
+            display: "flex",
+            gap: "12px",
+            flexWrap: "wrap",
+            marginBottom: "16px",
+            padding: "12px 16px",
+            background: "#f8fafc",
+            borderRadius: "8px",
+            border: "1px solid #e2e8f0",
+          }}
+        >
+          {studentProfile.gradeLevel && (
+            <div style={{ fontSize: "0.85rem", color: "#64748b" }}>
+              <span style={{ fontWeight: 500, color: "#475569" }}>Grade:</span> {studentProfile.gradeLevel}
+            </div>
+          )}
+          {studentProfile.inputPreference && studentProfile.inputPreference !== "no_preference" && (
+            <div style={{ fontSize: "0.85rem", color: "#64748b" }}>
+              <span style={{ fontWeight: 500, color: "#475569" }}>Input:</span>{" "}
+              {studentProfile.inputPreference === "typing" ? "Typing" : studentProfile.inputPreference === "voice" ? "Voice" : "No preference"}
+            </div>
+          )}
+          {studentProfile.pacePreference && (
+            <div style={{ fontSize: "0.85rem", color: "#64748b" }}>
+              <span style={{ fontWeight: 500, color: "#475569" }}>Pace:</span>{" "}
+              {studentProfile.pacePreference === "take_my_time" ? "Takes their time" : "Works quickly"}
+            </div>
+          )}
+          {studentProfile.coachHelpStyle && (
+            <div style={{ fontSize: "0.85rem", color: "#64748b" }}>
+              <span style={{ fontWeight: 500, color: "#475569" }}>Coach style:</span>{" "}
+              {studentProfile.coachHelpStyle === "hints_first" ? "Hints first" : studentProfile.coachHelpStyle === "direct_help" ? "Direct help" : "Encouraging"}
+            </div>
+          )}
+          {studentProfile.accommodations && (studentProfile.accommodations.extraTime || studentProfile.accommodations.readAloud || studentProfile.accommodations.reducedDistractions) && (
+            <div style={{ fontSize: "0.85rem", color: "#64748b" }}>
+              <span style={{ fontWeight: 500, color: "#475569" }}>Accommodations:</span>{" "}
+              {[
+                studentProfile.accommodations.extraTime && "Extra time",
+                studentProfile.accommodations.readAloud && "Read aloud",
+                studentProfile.accommodations.reducedDistractions && "Reduced distractions",
+              ].filter(Boolean).join(", ")}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Student Learning Snapshot */}
       <StudentLearningSnapshot snapshot={snapshot} />
@@ -480,7 +546,7 @@ export default function StudentDetails() {
             </span>
             <div>
               <h3 style={{ margin: 0, color: "#333" }}>Coaching Insights</h3>
-              <p style={{ margin: 0, fontSize: "0.9rem", color: "#666" }}>
+              <p style={{ margin: 0, fontSize: "0.9rem", color: "var(--text-secondary)" }}>
                 <span style={{
                   fontWeight: 500,
                   color: coachingInsights.intentLabel === "support-seeking"
@@ -499,12 +565,12 @@ export default function StudentDetails() {
             </div>
           </div>
           {coachingInsights.recentTopics.length > 0 && (
-            <p style={{ margin: 0, fontSize: "0.9rem", color: "#666" }}>
+            <p style={{ margin: 0, fontSize: "0.9rem", color: "var(--text-secondary)" }}>
               Recent topics: {coachingInsights.recentTopics.join(", ")}
             </p>
           )}
           {coachingInsights.lastCoachSessionAt && (
-            <p style={{ margin: "4px 0 0 0", fontSize: "0.85rem", color: "#999" }}>
+            <p style={{ margin: "4px 0 0 0", fontSize: "0.85rem", color: "var(--text-muted)" }}>
               Last session: {new Date(coachingInsights.lastCoachSessionAt).toLocaleDateString()}
             </p>
           )}
@@ -515,10 +581,10 @@ export default function StudentDetails() {
       {openAssignments.length > 0 && (
         <div style={{ marginTop: "32px", marginBottom: "24px" }}>
           <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "8px" }}>
-            <h3 style={{ margin: 0, color: "rgba(255,255,255,0.9)", fontSize: "1rem", fontWeight: 600 }}>
+            <h3 style={{ margin: 0, color: "var(--text-primary)", fontSize: "1rem", fontWeight: 600 }}>
               Open Assignments
             </h3>
-            <span style={{ color: "rgba(255,255,255,0.5)", fontSize: "0.85rem" }}>
+            <span style={{ color: "var(--text-secondary)", fontSize: "0.85rem" }}>
               ({openAssignments.length})
             </span>
           </div>
@@ -543,10 +609,10 @@ export default function StudentDetails() {
       {notStartedAssignments.length > 0 && (
         <div style={{ marginBottom: "24px" }}>
           <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "8px" }}>
-            <h3 style={{ margin: 0, color: "rgba(255,255,255,0.9)", fontSize: "1rem", fontWeight: 600 }}>
+            <h3 style={{ margin: 0, color: "var(--text-primary)", fontSize: "1rem", fontWeight: 600 }}>
               Awaiting Submissions
             </h3>
-            <span style={{ color: "rgba(255,255,255,0.5)", fontSize: "0.85rem" }}>
+            <span style={{ color: "var(--text-secondary)", fontSize: "0.85rem" }}>
               ({notStartedAssignments.length})
             </span>
           </div>
@@ -576,7 +642,7 @@ export default function StudentDetails() {
           >
             <span
               style={{
-                color: "rgba(255,255,255,0.6)",
+                color: "var(--text-muted)",
                 fontSize: "0.8rem",
                 transform: showCompleted ? "rotate(90deg)" : "rotate(0deg)",
                 transition: "transform 0.2s",
@@ -584,10 +650,10 @@ export default function StudentDetails() {
             >
               ▶
             </span>
-            <h3 style={{ margin: 0, color: "rgba(255,255,255,0.9)", fontSize: "1rem", fontWeight: 600 }}>
+            <h3 style={{ margin: 0, color: "var(--text-primary)", fontSize: "1rem", fontWeight: 600 }}>
               Completed & Reviewed
             </h3>
-            <span style={{ color: "rgba(255,255,255,0.5)", fontSize: "0.85rem" }}>
+            <span style={{ color: "var(--text-secondary)", fontSize: "0.85rem" }}>
               ({reviewedAssignments.length})
             </span>
           </div>
@@ -613,7 +679,7 @@ export default function StudentDetails() {
       {/* Empty State */}
       {assignments.length === 0 && (
         <div className="card" style={{ textAlign: "center", padding: "32px", marginTop: "16px" }}>
-          <p style={{ color: "#666" }}>No assignments found for this student.</p>
+          <p style={{ color: "var(--text-secondary)" }}>No assignments found for this student.</p>
         </div>
       )}
 
@@ -709,7 +775,7 @@ function StudentAssignmentRow({ assignment, priority, onNavigate }: StudentAssig
         alignItems: "center",
         gap: "16px",
         padding: "16px 20px",
-        background: "rgba(255, 255, 255, 0.95)",
+        background: "#ffffff",
         borderBottom: "1px solid rgba(0, 0, 0, 0.06)",
         cursor: "pointer",
         transition: "background 0.15s",
@@ -717,10 +783,10 @@ function StudentAssignmentRow({ assignment, priority, onNavigate }: StudentAssig
         boxSizing: "border-box",
       }}
       onMouseEnter={(e) => {
-        e.currentTarget.style.background = "rgba(255, 255, 255, 1)";
+        e.currentTarget.style.background = "#ffffff";
       }}
       onMouseLeave={(e) => {
-        e.currentTarget.style.background = "rgba(255, 255, 255, 0.95)";
+        e.currentTarget.style.background = "#ffffff";
       }}
     >
       {/* Status dot */}
@@ -773,8 +839,8 @@ function StudentAssignmentRow({ assignment, priority, onNavigate }: StudentAssig
         style={{
           flex: "0 0 auto",
           padding: "8px 20px",
-          background: priority === "needs-attention" ? "#667eea" : "transparent",
-          color: priority === "needs-attention" ? "white" : "#667eea",
+          background: priority === "needs-attention" ? "#3d5a80" : "transparent",
+          color: priority === "needs-attention" ? "white" : "#3d5a80",
           border: priority === "needs-attention" ? "none" : "1px solid #cbd5e1",
           borderRadius: "6px",
           fontSize: "0.875rem",
@@ -786,7 +852,7 @@ function StudentAssignmentRow({ assignment, priority, onNavigate }: StudentAssig
         onMouseEnter={(e) => {
           if (priority !== "needs-attention") {
             e.currentTarget.style.background = "#f8fafc";
-            e.currentTarget.style.borderColor = "#667eea";
+            e.currentTarget.style.borderColor = "#3d5a80";
           }
         }}
         onMouseLeave={(e) => {
@@ -992,7 +1058,7 @@ function computeStudentSnapshot(assignments: StudentAssignment[]): StudentSnapsh
       if (recentAvg > olderAvg + 0.3) {
         momentum = "Improving over recent assignments.";
       } else if (recentAvg < olderAvg - 0.3) {
-        momentum = "Recent work shows a dip — may benefit from check-in.";
+        momentum = "Recent work shows a dip — consider a quick check-in.";
       } else {
         // Mixed or stable
         const hasStrong = scores.includes(3);
@@ -1423,7 +1489,7 @@ function StudentTodoCard({ todo, onComplete }: StudentTodoCardProps) {
           )}
         </div>
         {contextLine && (
-          <div style={{ fontSize: "0.75rem", color: "#94a3b8", marginTop: "3px" }}>
+          <div style={{ fontSize: "0.75rem", color: "var(--text-muted)", marginTop: "3px" }}>
             {contextLine}
           </div>
         )}
@@ -1431,7 +1497,7 @@ function StudentTodoCard({ todo, onComplete }: StudentTodoCardProps) {
 
       {/* Navigation indicator */}
       {canNavigate && (
-        <span style={{ color: "#94a3b8", fontSize: "0.85rem", marginTop: "2px", flexShrink: 0 }}>→</span>
+        <span style={{ color: "var(--text-muted)", fontSize: "0.85rem", marginTop: "2px", flexShrink: 0 }}>→</span>
       )}
     </div>
   );
@@ -1648,7 +1714,7 @@ function StudentRecommendationCard({
           padding: "12px",
         }}
       >
-        <div style={{ fontSize: "0.8rem", fontWeight: 600, color: "#7c8fce", marginBottom: "8px" }}>
+        <div style={{ fontSize: "0.8rem", fontWeight: 600, color: "#3d5a80", marginBottom: "8px" }}>
           Select actions to take:
         </div>
 
@@ -1838,8 +1904,8 @@ function StudentRecommendationCard({
                   padding: "7px 14px",
                   fontSize: "0.8rem",
                   fontWeight: 600,
-                  background: isSubmitDisabled ? "#e2e8f0" : "linear-gradient(135deg, #7c8fce 0%, #9178a8 100%)",
-                  color: isSubmitDisabled ? "#94a3b8" : "white",
+                  background: isSubmitDisabled ? "#e2e8f0" : "linear-gradient(135deg, #3d5a80 0%, #4a6b8a 100%)",
+                  color: isSubmitDisabled ? "var(--text-muted)" : "white",
                   border: "none",
                   borderRadius: "6px",
                   cursor: isSubmitDisabled ? "not-allowed" : "pointer",
@@ -1891,7 +1957,7 @@ function StudentRecommendationCard({
             padding: "4px 10px",
             fontSize: "0.75rem",
             background: "transparent",
-            color: "#94a3b8",
+            color: "var(--text-muted)",
             border: "none",
             cursor: "pointer",
             marginLeft: "auto",

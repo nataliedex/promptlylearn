@@ -1,13 +1,7 @@
 import OpenAI from "openai";
 import { Lesson } from "./lesson";
-import { Prompt } from "./prompt";
+import { Prompt, PromptAssessment } from "./prompt";
 import { getUniqueLessonId } from "../stores/lessonStore";
-import {
-  getReadingStandards,
-  formatStandardsForPrompt,
-  normalizeGradeLevel,
-  type Standard,
-} from "./standards";
 
 export type CreationMode = "book-title" | "book-excerpt" | "pasted-text" | "topic" | "guided";
 
@@ -33,11 +27,7 @@ function getClient(): OpenAI | null {
   return openaiClient;
 }
 
-function getSystemPrompt(gradeLevel: string, standards: Standard[]): string {
-  const standardsText = standards.length > 0
-    ? `\n\nAlign your questions with these Ohio Learning Standards for ${gradeLevel}:\n${formatStandardsForPrompt(standards, 8)}`
-    : "";
-
+function getSystemPrompt(gradeLevel: string): string {
   return `You are an expert education curriculum designer creating lessons for ${gradeLevel} students.
 
 Your lessons should:
@@ -46,20 +36,25 @@ Your lessons should:
 - Include helpful hints that guide without giving away answers
 - Ask "why" and "how" questions, not just "what" questions
 - Create questions that encourage students to explain their thinking
-- Align with grade-level learning standards${standardsText}
+
+IMPORTANT - Lesson Title Guidelines:
+- Keep titles SHORT: 6-10 words maximum
+- Be specific but concise (NOT generic like "Subtraction" or "Math")
+- Avoid filler phrases like "Using Strategies", "An Introduction to", "Learning About"
+- Write in natural teacher language that students can understand
+- Examples of GOOD titles: "Subtracting Within 10", "Daily Life in Ancient Egypt", "How Plants Make Food"
+- Examples of BAD titles: "Subtraction", "Ancient Egypt", "Learning About Subtraction Using Strategies"
 
 You MUST respond with valid JSON matching this exact structure:
 {
   "title": "Lesson Title",
   "description": "A brief, engaging description of what students will learn",
-  "standards": ["RL.2.1", "RL.2.3"],
   "prompts": [
     {
       "id": "q1",
       "type": "explain",
       "input": "The question text that students will see and answer",
-      "hints": ["First helpful hint", "Second helpful hint"],
-      "standards": ["RL.2.1"]
+      "hints": ["First helpful hint", "Second helpful hint"]
     }
   ]
 }
@@ -68,9 +63,7 @@ Important:
 - Each prompt must have exactly 2 hints
 - The "type" should always be "explain"
 - Questions should ask students to explain their thinking, not just give answers
-- Make hints helpful but don't give away the answer
-- Include relevant standard codes (like RL.2.1, RI.2.2) for each question based on what skill it assesses
-- The lesson-level "standards" array should list all standards covered in the lesson`;
+- Make hints helpful but don't give away the answer`;
 }
 
 function buildUserPrompt(params: LessonParams): string {
@@ -136,6 +129,12 @@ Focus on:
 - Real-world applications and examples
 - Encouraging curiosity and exploration
 
+IMPORTANT for the title:
+- Keep it SHORT (6-10 words) but specific
+- Don't just use the topic name - describe what students will learn
+- Avoid filler phrases like "Using Strategies" or "Learning About"
+- Example: Topic "Subtraction" with objective "practice subtracting within 10" → Title: "Subtracting Within 10"
+
 Difficulty level: ${difficulty}
 Generate exactly ${questionCount} questions with 2 hints each.
 
@@ -147,6 +146,11 @@ Remember: Ask questions that require students to explain their thinking, like "W
 "${content}"
 
 Create an age-appropriate lesson for 2nd graders that addresses what the educator described.
+
+IMPORTANT for the title:
+- Keep it SHORT (6-10 words) but specific
+- Describe what students will actually learn or do
+- Avoid filler phrases like "Using Strategies" or "An Introduction to"
 
 Difficulty level: ${difficulty}
 Generate exactly ${questionCount} questions with 2 hints each.
@@ -161,13 +165,11 @@ Remember: Ask questions that require students to explain their thinking.`;
 interface GeneratedLesson {
   title: string;
   description: string;
-  standards?: string[];
   prompts: {
     id: string;
     type: string;
     input: string;
     hints: string[];
-    standards?: string[];
   }[];
 }
 
@@ -184,14 +186,11 @@ export async function generateLesson(params: LessonParams): Promise<Lesson | nul
 
   const gradeLevel = params.gradeLevel || "2nd grade";
 
-  // Get relevant standards for the grade level
-  const standards = getReadingStandards(gradeLevel);
-
   try {
     const completion = await client.chat.completions.create({
       model: "gpt-4o-mini",
       messages: [
-        { role: "system", content: getSystemPrompt(gradeLevel, standards) },
+        { role: "system", content: getSystemPrompt(gradeLevel) },
         { role: "user", content: buildUserPrompt(params) }
       ],
       temperature: 0.7,
@@ -220,13 +219,11 @@ export async function generateLesson(params: LessonParams): Promise<Lesson | nul
       description: generated.description,
       difficulty: params.difficulty,
       gradeLevel,
-      standards: generated.standards || [],
       prompts: generated.prompts.map((p, index): Prompt => ({
         id: p.id || `q${index + 1}`,
         type: "explain",
         input: p.input,
-        hints: p.hints || [],
-        standards: p.standards || []
+        hints: p.hints || []
       }))
     };
 
@@ -305,6 +302,177 @@ Respond with JSON:
     };
   } catch (error) {
     console.error("Error generating question:", error);
+    return null;
+  }
+}
+
+/**
+ * Parse a grade-level string to a numeric value for tiered rubric rules.
+ * "K" → 0, "1st" → 1, "2nd" → 2, ..., "8th" → 8
+ * Falls back to 2 if unparseable (safe default for elementary).
+ */
+function parseGradeNumber(gradeLevel?: string): number {
+  if (!gradeLevel) return 2;
+  const normalized = gradeLevel.toLowerCase().trim();
+  if (normalized === "k" || normalized === "kindergarten") return 0;
+  const match = normalized.match(/^(\d+)/);
+  if (match) return parseInt(match[1], 10);
+  // Try "2nd grade", "grade 3" patterns
+  const gradeMatch = normalized.match(/grade\s*(\d+)/);
+  if (gradeMatch) return parseInt(gradeMatch[1], 10);
+  return 2; // Safe elementary default
+}
+
+/**
+ * Build grade-tiered rubric guidelines for the assessment prompt.
+ */
+function buildGradeGuidelines(gradeNum: number): string {
+  if (gradeNum <= 2) {
+    return `=== GRADE LEVEL: K-2 (EARLY ELEMENTARY) ===
+
+LANGUAGE RULES (MANDATORY):
+- Use simple, concrete language a ${gradeNum === 0 ? "kindergartner" : `${gradeNum}nd grader`} would understand
+- AVOID abstract academic terms: "decision-making", "problem-solving", "analysis", "evaluate", "demonstrate understanding"
+- Focus on: identifying the concept, giving a real-life example, basic explanation in own words
+- Success criteria must be simple and directly observable in student speech
+- Use verbs like: "say", "name", "tell", "show", "give an example", "explain in own words"
+- BAD criterion: "Demonstrates understanding of subtraction's role in decision-making"
+- GOOD criterion: "Gives a real-life example of when you take something away"
+- BAD criterion: "Articulates the relationship between addition and subtraction"
+- GOOD criterion: "Says that subtraction means taking away or removing"`;
+  }
+
+  if (gradeNum <= 5) {
+    return `=== GRADE LEVEL: 3-5 (UPPER ELEMENTARY) ===
+
+LANGUAGE RULES:
+- Include reasoning clarity — students should explain "why" and "how"
+- May include subject vocabulary (e.g., "numerator", "habitat", "main idea")
+- Still avoid overly abstract phrasing ("metacognitive awareness", "synthesize perspectives")
+- Success criteria can include: comparing, explaining steps, giving reasons, using vocabulary
+- Use verbs like: "explain why", "compare", "describe how", "use the word ___ correctly", "give a reason"`;
+  }
+
+  // Grade 6+
+  return `=== GRADE LEVEL: 6+ (MIDDLE SCHOOL) ===
+
+LANGUAGE RULES:
+- Can include abstraction, strategy comparison, multi-step reasoning, generalization
+- May reference academic skills: "analyze", "evaluate", "compare strategies", "generalize"
+- Success criteria can include: identifying patterns, defending a position, connecting concepts
+- Use verbs like: "analyze", "compare and contrast", "justify", "generalize", "evaluate"`;
+}
+
+/**
+ * Generate assessment & mastery metadata for a single question.
+ *
+ * Implements grade-tiered rubric rules:
+ * - K-2: Simple, concrete, observable
+ * - 3-5: Reasoning clarity, subject vocabulary
+ * - 6+: Abstraction, strategy comparison, generalization
+ */
+export async function generateAssessmentData(
+  questionText: string,
+  lessonContext: string,
+  options?: {
+    subject?: string;
+    gradeLevel?: string;
+    difficulty?: string;
+    lessonDescription?: string;
+  }
+): Promise<PromptAssessment | null> {
+  const client = getClient();
+  if (!client) return null;
+
+  const gradeNum = parseGradeNumber(options?.gradeLevel);
+  const gradeGuidelines = buildGradeGuidelines(gradeNum);
+
+  const metaLines = [
+    options?.subject ? `Subject: ${options.subject}` : "",
+    options?.gradeLevel ? `Grade level: ${options.gradeLevel}` : "",
+    options?.difficulty ? `Difficulty: ${options.difficulty}` : "",
+    options?.lessonDescription ? `Lesson description: ${options.lessonDescription}` : "",
+  ].filter(Boolean).join("\n");
+
+  const systemPrompt = `You are an expert K-8 curriculum assessment designer specializing in developmentally appropriate rubrics.
+
+Your rubrics will be used by an AI coach to evaluate student video responses in real-time. Criteria must be observable in spoken student answers — not written work, not tests.
+
+${gradeGuidelines}
+
+=== UNIVERSAL RULES (ALL GRADE LEVELS) ===
+
+1. learningObjective: One concise sentence starting with a verb. Must match the grade level's language tier.
+2. successCriteria: 3-5 bullets. Each must be:
+   - Directly aligned to the wording of the question prompt (do NOT introduce requirements not implied in the prompt)
+   - Measurable and observable in student speech (a coach listening can determine yes/no)
+   - Concise (one clear expectation per bullet)
+3. misconceptions: 1-3 realistic wrong ideas students at THIS grade level actually hold about this topic.
+   - Must be specific to the content, not generic ("doesn't understand" is not a misconception)
+4. evaluationFocus: Pick 1-3 from: "understanding", "reasoning", "evidence", "clarity", "creativity"
+   - Match to what the prompt actually asks for
+   - K-2 prompts rarely need "reasoning" or "evidence" — prefer "understanding" and "clarity"
+   - Only include "creativity" if the prompt explicitly invites creative thinking
+
+=== CRITICAL CONSTRAINT ===
+
+Do NOT inflate the rubric beyond what the question asks. If the prompt says "What is subtraction?", do NOT add criteria about "real-world applications" or "multiple strategies" unless the prompt mentions those.
+
+Respond ONLY with valid JSON.`;
+
+  const userPrompt = `Generate assessment metadata for this question:
+
+${metaLines ? `${metaLines}\n` : ""}Lesson context: ${lessonContext}
+
+Question: "${questionText}"
+
+Output JSON:
+{
+  "learningObjective": "One sentence: what the student should understand or demonstrate",
+  "successCriteria": ["3-5 observable indicators, aligned to the prompt"],
+  "misconceptions": ["1-3 realistic wrong ideas for this grade level"],
+  "evaluationFocus": ["pick 1-3 from: understanding, reasoning, evidence, clarity, creativity"]
+}`;
+
+  try {
+    const completion = await client.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt }
+      ],
+      temperature: 0.4,
+      response_format: { type: "json_object" }
+    });
+
+    const content = completion.choices[0]?.message?.content;
+    if (!content) return null;
+
+    const generated = JSON.parse(content);
+
+    // Validate and clamp successCriteria to 3-5
+    let criteria = generated.successCriteria;
+    if (Array.isArray(criteria)) {
+      if (criteria.length > 5) criteria = criteria.slice(0, 5);
+      if (criteria.length < 1) criteria = undefined;
+    }
+
+    // Validate evaluationFocus values
+    const validFocus = ["understanding", "reasoning", "evidence", "clarity", "creativity"];
+    let focus = generated.evaluationFocus;
+    if (Array.isArray(focus)) {
+      focus = focus.filter((f: string) => validFocus.includes(f));
+      if (focus.length === 0) focus = undefined;
+    }
+
+    return {
+      learningObjective: generated.learningObjective || undefined,
+      successCriteria: criteria?.length ? criteria : undefined,
+      misconceptions: generated.misconceptions?.length ? generated.misconceptions : undefined,
+      evaluationFocus: focus?.length ? focus : undefined,
+    };
+  } catch (error) {
+    console.error("Error generating assessment data:", error);
     return null;
   }
 }

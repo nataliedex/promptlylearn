@@ -191,7 +191,7 @@ export default function TeacherTodosPanel({
   if (embedded) {
     if (openTodos.length === 0) {
       return (
-        <div style={{ textAlign: "center", padding: "32px 16px", color: "#666" }}>
+        <div style={{ textAlign: "center", padding: "32px 16px", color: "var(--text-secondary)" }}>
           <span style={{ fontSize: "1rem", display: "block", marginBottom: "12px", fontWeight: 600, color: "#16a34a" }}>Done</span>
           <p style={{ margin: 0, fontWeight: 500 }}>All to-dos completed</p>
           <p style={{ margin: "8px 0 0 0", fontSize: "0.9rem" }}>
@@ -205,7 +205,7 @@ export default function TeacherTodosPanel({
       <div>
         {/* Subtitle */}
         {openTodos.length > 0 && (
-          <p style={{ margin: "0 0 16px 0", color: "#666", fontSize: "0.9rem" }}>
+          <p style={{ margin: "0 0 16px 0", color: "var(--text-secondary)", fontSize: "0.9rem" }}>
             {counts.open} task{counts.open !== 1 ? "s" : ""} to complete
           </p>
         )}
@@ -241,7 +241,7 @@ export default function TeacherTodosPanel({
       style={{
         marginTop: "16px",
         background: "#f5f5f5",
-        borderLeft: "4px solid #7c8fce",
+        borderLeft: "4px solid #3d5a80",
       }}
     >
       {/* Header - Always visible */}
@@ -264,17 +264,17 @@ export default function TeacherTodosPanel({
             style={{
               transform: expanded ? "rotate(90deg)" : "rotate(0deg)",
               transition: "transform 0.2s",
-              color: "#7c8fce",
+              color: "#3d5a80",
             }}
           >
             ▶
           </span>
-          <h3 style={{ margin: 0, color: "#7c8fce" }}>
+          <h3 style={{ margin: 0, color: "#3d5a80" }}>
             Teacher To-Dos
           </h3>
           <span
             style={{
-              background: counts.open > 0 ? "#7c8fce" : "#9e9e9e",
+              background: counts.open > 0 ? "#3d5a80" : "#9e9e9e",
               color: "white",
               padding: "2px 8px",
               borderRadius: "12px",
@@ -295,8 +295,8 @@ export default function TeacherTodosPanel({
           style={{
             padding: "4px 12px",
             background: "transparent",
-            color: "#7c8fce",
-            border: "1px solid #7c8fce",
+            color: "#3d5a80",
+            border: "1px solid #3d5a80",
             borderRadius: "4px",
             cursor: "pointer",
             fontSize: "0.85rem",
@@ -313,7 +313,7 @@ export default function TeacherTodosPanel({
       {expanded && (
         <div style={{ marginTop: "16px" }}>
           {openTodos.length === 0 ? (
-            <p style={{ color: "#666", fontStyle: "italic", margin: 0 }}>
+            <p style={{ color: "var(--text-secondary)", fontStyle: "italic", margin: 0 }}>
               All to-dos completed. No pending actions.
             </p>
           ) : (
@@ -395,8 +395,8 @@ function StudentTodoGroup({
             transition: "border-color 0.15s",
           }}
           onMouseEnter={(e) => {
-            e.currentTarget.style.borderBottomColor = "#7c8fce";
-            e.currentTarget.style.color = "#7c8fce";
+            e.currentTarget.style.borderBottomColor = "#3d5a80";
+            e.currentTarget.style.color = "#3d5a80";
           }}
           onMouseLeave={(e) => {
             e.currentTarget.style.borderBottomColor = "transparent";
@@ -500,7 +500,7 @@ function TodoItem({
           height: "14px",
           marginTop: "3px",
           cursor: loading ? "wait" : "pointer",
-          accentColor: "#7c8fce",
+          accentColor: "#3d5a80",
           flexShrink: 0,
         }}
       />
@@ -512,7 +512,7 @@ function TodoItem({
           <div
             style={{
               fontSize: "0.85rem",
-              color: isDone ? "#999" : "#333",
+              color: isDone ? "var(--text-muted)" : "#333",
               fontWeight: 500,
               textDecoration: isDone ? "line-through" : "none",
             }}
@@ -533,7 +533,7 @@ function TodoItem({
         >
           <span
             style={{
-              color: isDone ? "#aaa" : "#666",
+              color: isDone ? "var(--text-muted)" : "var(--text-secondary)",
               textDecoration: isDone ? "line-through" : "none",
               fontWeight: 400,
               fontSize: "0.8rem",
@@ -545,7 +545,7 @@ function TodoItem({
             <span
               style={{
                 fontSize: "0.7rem",
-                color: "#777",
+                color: "var(--text-secondary)",
                 background: "#ebebeb",
                 padding: "1px 5px",
                 borderRadius: "3px",
@@ -558,7 +558,7 @@ function TodoItem({
 
         {/* Completion timestamp */}
         {isDone && todo.doneAt && (
-          <div style={{ marginTop: "3px", fontSize: "0.7rem", color: "#aaa" }}>
+          <div style={{ marginTop: "3px", fontSize: "0.7rem", color: "var(--text-muted)" }}>
             Completed {new Date(todo.doneAt).toLocaleDateString()}
           </div>
         )}
@@ -568,7 +568,7 @@ function TodoItem({
       {canNavigate && !menuOpen && (
         <span
           style={{
-            color: "#bbb",
+            color: "var(--text-muted)",
             fontSize: "0.75rem",
             flexShrink: 0,
             marginTop: "3px",
@@ -590,7 +590,7 @@ function TodoItem({
               border: "none",
               padding: "4px 6px",
               cursor: loading ? "wait" : "pointer",
-              color: "#999",
+              color: "var(--text-muted)",
               fontSize: "1rem",
               lineHeight: 1,
               borderRadius: "4px",

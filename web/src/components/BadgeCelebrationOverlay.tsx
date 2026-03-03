@@ -179,7 +179,7 @@ export default function BadgeCelebrationOverlay({
               background: "none",
               border: "none",
               fontSize: "1.5rem",
-              color: "#999",
+              color: "var(--text-muted)",
               cursor: "pointer",
               padding: "4px 8px",
               lineHeight: 1,
@@ -235,7 +235,7 @@ export default function BadgeCelebrationOverlay({
             <p
               style={{
                 margin: "0 0 20px 0",
-                color: "#666",
+                color: "var(--text-secondary)",
                 fontSize: "0.95rem",
               }}
             >

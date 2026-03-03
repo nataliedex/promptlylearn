@@ -23,6 +23,7 @@ import {
   type StudentAssignmentRecord,
   type ReviewState,
 } from "../services/api";
+import { wasHintUsed } from "../utils/teacherDashboardUtils";
 import BadgeDetailModal from "../components/BadgeDetailModal";
 import BadgeCelebrationOverlay from "../components/BadgeCelebrationOverlay";
 import AskCoachDrawer from "../components/AskCoachDrawer";
@@ -112,6 +113,9 @@ export default function StudentDashboard() {
   // Badge celebration state
   const [celebrationBadge, setCelebrationBadge] = useState<StudentBadge | null>(null);
   const celebrationChecked = useRef(false); // Prevent multiple celebration checks per mount
+
+  // "Ask Coach" gating: show "New" badge briefly after first submission
+  const [showCoachNewBadge, setShowCoachNewBadge] = useState(false);
 
   // Just-completed lesson animation state
   const [justCompletedLesson, setJustCompletedLesson] = useState<StudentLessonSummary | null>(null);
@@ -336,6 +340,10 @@ export default function StudentDashboard() {
     // Start the animation sequence
     setJustCompletedLesson(syntheticLesson);
     setCompletionAnimationPhase("success");
+
+    // Show "New" badge on Ask Coach button after submission, clear after 3s
+    setShowCoachNewBadge(true);
+    setTimeout(() => setShowCoachNewBadge(false), 3000);
 
     // Store timers in refs so they survive effect re-runs
     animationTimerRefs.current.animateOut = setTimeout(() => {
@@ -688,6 +696,13 @@ export default function StudentDashboard() {
               box-shadow: 0 4px 8px rgba(46,125,50,0.4);
             }
           }
+          /* Flutter animation for Ask Coach button appearing after submission */
+          @keyframes coachButtonFlutter {
+            0% { opacity: 0; transform: scale(0.8) translateY(-8px); }
+            40% { opacity: 1; transform: scale(1.08) translateY(2px); }
+            70% { transform: scale(0.97) translateY(-1px); }
+            100% { transform: scale(1) translateY(0); }
+          }
           /* Slide-down animation for transitioning completed card to Completed Work section */
           @keyframes slideDownFade {
             0% {
@@ -725,45 +740,71 @@ export default function StudentDashboard() {
         />
 
       <div className="header" style={{ position: "relative" }}>
-        {/* Ask Coach button - positioned top-right as utility action */}
-        <button
-          className={`btn btn-coach${coachingInvites.length > 0 ? " btn-coach--has-invite" : ""}`}
-          onClick={() => setShowCoachTopicDrawer(true)}
-          style={{
-            position: "absolute",
-            top: 0,
-            right: 0,
-            display: "flex",
-            alignItems: "center",
-            gap: "10px",
-            padding: "14px 24px",
-            fontSize: "1rem",
-          }}
-        >
-          <span style={{ fontWeight: 600 }}>Ask Coach</span>
-          {/* Coaching invite badge */}
-          {coachingInvites.length > 0 && (
-            <span
-              style={{
-                position: "absolute",
-                top: "-8px",
-                right: "-8px",
-                background: "linear-gradient(135deg, var(--status-success-text), var(--status-success))",
-                color: "white",
-                borderRadius: "12px",
-                padding: "3px 10px",
-                fontSize: "0.75rem",
-                fontWeight: 700,
-                minWidth: "20px",
-                textAlign: "center",
-                boxShadow: "0 2px 6px rgba(34, 197, 94, 0.3)",
-                animation: "badgePulse 2s ease-in-out infinite",
-              }}
-            >
-              {coachingInvites.length}
-            </span>
-          )}
-        </button>
+        {/* Ask Coach button - gated: only visible after student has submitted at least one assignment */}
+        {sessions.length > 0 && (
+          <button
+            className={`btn btn-coach${coachingInvites.length > 0 ? " btn-coach--has-invite" : ""}`}
+            onClick={() => setShowCoachTopicDrawer(true)}
+            style={{
+              position: "absolute",
+              top: 0,
+              right: 0,
+              zIndex: 10, // Prevent clicks falling through to the profile h1 below
+              display: "flex",
+              alignItems: "center",
+              gap: "10px",
+              padding: "14px 24px",
+              fontSize: "1rem",
+              // Flutter animation when button first appears after submission
+              animation: showCoachNewBadge ? "coachButtonFlutter 0.6s ease-out" : undefined,
+            }}
+          >
+            <span style={{ fontWeight: 600 }}>Ask Coach</span>
+            {/* "New" badge — shown briefly after first submission, then fades */}
+            {showCoachNewBadge && (
+              <span
+                style={{
+                  position: "absolute",
+                  top: "-8px",
+                  right: "-8px",
+                  background: "linear-gradient(135deg, #3b82f6, #2563eb)",
+                  color: "white",
+                  borderRadius: "12px",
+                  padding: "3px 10px",
+                  fontSize: "0.75rem",
+                  fontWeight: 700,
+                  textAlign: "center",
+                  boxShadow: "0 2px 6px rgba(59, 130, 246, 0.4)",
+                  animation: "badgePulse 1s ease-in-out infinite",
+                }}
+              >
+                New
+              </span>
+            )}
+            {/* Coaching invite badge (shown when teacher sends invites, after "New" clears) */}
+            {!showCoachNewBadge && coachingInvites.length > 0 && (
+              <span
+                style={{
+                  position: "absolute",
+                  top: "-8px",
+                  right: "-8px",
+                  background: "linear-gradient(135deg, var(--status-success-text), var(--status-success))",
+                  color: "white",
+                  borderRadius: "12px",
+                  padding: "3px 10px",
+                  fontSize: "0.75rem",
+                  fontWeight: 700,
+                  minWidth: "20px",
+                  textAlign: "center",
+                  boxShadow: "0 2px 6px rgba(34, 197, 94, 0.3)",
+                  animation: "badgePulse 2s ease-in-out infinite",
+                }}
+              >
+                {coachingInvites.length}
+              </span>
+            )}
+          </button>
+        )}
 
         {/* Centered greeting hero */}
         <div
@@ -789,7 +830,7 @@ export default function StudentDashboard() {
           <p
             style={{
               margin: 0,
-              color: "rgba(255, 255, 255, 0.9)",
+              color: "var(--text-secondary)",
               fontSize: "1.05rem",
               fontWeight: 400,
               letterSpacing: "0.01em",
@@ -843,7 +884,7 @@ export default function StudentDashboard() {
       />
 
       {/* Lessons */}
-      <h2 style={{ color: "white", marginBottom: "16px" }}>Your Assignments</h2>
+      <h2 style={{ color: "var(--text-primary)", marginBottom: "16px" }}>Your Assignments</h2>
       {lessons.length === 0 && !justCompletedLesson ? (
         <div className="card" style={{ textAlign: "center", padding: "48px" }}>
           <h3 style={{ margin: 0, marginBottom: "8px" }}>No assignments yet</h3>
@@ -1120,7 +1161,7 @@ export default function StudentDashboard() {
               gap: "8px",
               background: "none",
               border: "none",
-              color: "white",
+              color: "var(--text-primary)",
               cursor: "pointer",
               padding: "0",
               marginTop: "32px",
@@ -1628,7 +1669,7 @@ export default function StudentDashboard() {
                                                                 >
                                                                   <span
                                                                     style={{
-                                                                      background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
+                                                                      background: "#3d5a80",
                                                                       color: "white",
                                                                       padding: "3px 8px",
                                                                       borderRadius: "10px",
@@ -1658,7 +1699,7 @@ export default function StudentDashboard() {
                                                                         style={{
                                                                           fontSize: "0.7rem",
                                                                           fontWeight: 600,
-                                                                          color: turn.role === "coach" ? "#667eea" : "var(--status-success-text)",
+                                                                          color: turn.role === "coach" ? "#3d5a80" : "var(--status-success-text)",
                                                                           minWidth: "40px",
                                                                           flexShrink: 0,
                                                                         }}
@@ -1754,7 +1795,7 @@ export default function StudentDashboard() {
                                                         )}
 
                                                         {/* Hint indicator */}
-                                                        {response.hintUsed && (
+                                                        {wasHintUsed(response) && (
                                                           <p style={{ margin: "6px 0 0 0", color: "var(--text-muted)", fontSize: "0.75rem" }}>
                                                             Used a hint
                                                           </p>

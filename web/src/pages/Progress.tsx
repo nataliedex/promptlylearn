@@ -221,7 +221,7 @@ export default function Progress() {
           </div>
         )}
         {analytics.sessionCount === 0 && (
-          <p style={{ color: "#666" }}>
+          <p style={{ color: "var(--text-secondary)" }}>
             Complete lessons to earn achievements!
           </p>
         )}

@@ -293,7 +293,7 @@ export default function LessonBuilder() {
               onChange={(e) => setQuestionCount(Number(e.target.value))}
               style={{ width: "100%" }}
             />
-            <div style={{ display: "flex", justifyContent: "space-between", color: "#666", fontSize: "0.9rem" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", color: "var(--text-secondary)", fontSize: "0.9rem" }}>
               <span>2 (quick)</span>
               <span>5 (comprehensive)</span>
             </div>
@@ -313,9 +313,9 @@ export default function LessonBuilder() {
       {/* Step 4: Generating */}
       {step === "generating" && (
         <div className="card" style={{ textAlign: "center", padding: "48px" }}>
-          <div className="loading-spinner" style={{ borderTopColor: "#667eea", borderColor: "#e0e0e0" }}></div>
+          <div className="loading-spinner" style={{ borderTopColor: "#3d5a80", borderColor: "#e0e0e0" }}></div>
           <h2 style={{ marginTop: "16px" }}>Generating your lesson...</h2>
-          <p style={{ color: "#666" }}>This may take a few seconds</p>
+          <p style={{ color: "var(--text-secondary)" }}>This may take a few seconds</p>
         </div>
       )}
 
@@ -324,12 +324,12 @@ export default function LessonBuilder() {
         <>
           <div className="card">
             <h2>{lesson.title}</h2>
-            <p style={{ color: "#666" }}>{lesson.description}</p>
+            <p style={{ color: "var(--text-secondary)" }}>{lesson.description}</p>
             <div style={{ display: "flex", gap: "8px", marginTop: "12px", flexWrap: "wrap", alignItems: "center" }}>
               <span className={`difficulty-badge difficulty-${lesson.difficulty}`}>
                 {lesson.difficulty}
               </span>
-              <span style={{ color: "#666" }}>{lesson.gradeLevel}</span>
+              <span style={{ color: "var(--text-secondary)" }}>{lesson.gradeLevel}</span>
             </div>
           </div>
 
@@ -384,7 +384,7 @@ export default function LessonBuilder() {
                 onClick={() => setEditingQuestion(currentPrompt.input)}
               >
                 <p style={{ margin: 0 }}>{currentPrompt.input}</p>
-                <p style={{ color: "#667eea", fontSize: "0.8rem", margin: "8px 0 0 0" }}>
+                <p style={{ color: "#3d5a80", fontSize: "0.8rem", margin: "8px 0 0 0" }}>
                   Click to edit
                 </p>
               </div>
@@ -445,7 +445,7 @@ export default function LessonBuilder() {
                 className="btn btn-secondary"
                 onClick={handleDeleteQuestion}
                 disabled={lesson.prompts.length <= 1}
-                style={{ color: lesson.prompts.length <= 1 ? "#999" : "#f44336" }}
+                style={{ color: lesson.prompts.length <= 1 ? "var(--text-muted)" : "#f44336" }}
               >
                 Delete Question
               </button>
@@ -466,7 +466,7 @@ export default function LessonBuilder() {
       {/* Step 6: Saving */}
       {step === "saving" && (
         <div className="card" style={{ textAlign: "center", padding: "48px" }}>
-          <div className="loading-spinner" style={{ borderTopColor: "#667eea", borderColor: "#e0e0e0" }}></div>
+          <div className="loading-spinner" style={{ borderTopColor: "#3d5a80", borderColor: "#e0e0e0" }}></div>
           <h2 style={{ marginTop: "16px" }}>Saving your lesson...</h2>
         </div>
       )}
@@ -476,13 +476,13 @@ export default function LessonBuilder() {
         <div className="card" style={{ textAlign: "center", padding: "48px" }}>
           <div style={{ fontSize: "1rem", marginBottom: "16px", fontWeight: 600, color: "#2e7d32" }}>Saved</div>
           <h2 style={{ marginBottom: "8px", color: "#2e7d32" }}>Lesson Saved</h2>
-          <p style={{ color: "#666", marginBottom: "32px" }}>
+          <p style={{ color: "var(--text-secondary)", marginBottom: "32px" }}>
             "{lesson.title}" has been created with {lesson.prompts.length} question{lesson.prompts.length !== 1 ? "s" : ""}.
           </p>
 
           <div style={{ marginBottom: "24px" }}>
             <h3 style={{ marginBottom: "12px" }}>What would you like to do next?</h3>
-            <p style={{ color: "#666", fontSize: "0.9rem" }}>
+            <p style={{ color: "var(--text-secondary)", fontSize: "0.9rem" }}>
               Assign this lesson to a class so students can start working on it.
             </p>
           </div>
@@ -504,7 +504,7 @@ export default function LessonBuilder() {
             </button>
           </div>
 
-          <p style={{ marginTop: "24px", color: "#999", fontSize: "0.85rem" }}>
+          <p style={{ marginTop: "24px", color: "var(--text-muted)", fontSize: "0.85rem" }}>
             You can also assign this lesson later from the My Classes page.
           </p>
         </div>

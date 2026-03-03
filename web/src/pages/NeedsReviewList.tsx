@@ -135,7 +135,7 @@ export default function NeedsReviewList() {
             <h2 style={{ marginBottom: "8px", color: "#2e7d32" }}>
               No students flagged for review
             </h2>
-            <p style={{ color: "#666" }}>
+            <p style={{ color: "var(--text-secondary)" }}>
               All students appear to be progressing well on this assignment.
             </p>
           </div>
@@ -157,7 +157,7 @@ export default function NeedsReviewList() {
       {/* Quick actions */}
       {students.length > 0 && (
         <div style={{ marginTop: "32px", textAlign: "center" }}>
-          <p style={{ color: "#666", marginBottom: "16px" }}>
+          <p style={{ color: "var(--text-secondary)", marginBottom: "16px" }}>
             Click on any student to see their detailed work and add notes.
           </p>
         </div>
@@ -205,7 +205,7 @@ function StudentReviewCard({ student, onNavigate }: StudentReviewCardProps) {
         {/* Left: Student info */}
         <div style={{ flex: 1 }}>
           <div style={{ display: "flex", alignItems: "center", gap: "12px", marginBottom: "12px" }}>
-            <h3 style={{ margin: 0, color: "#667eea" }}>{student.studentName}</h3>
+            <h3 style={{ margin: 0, color: "#3d5a80" }}>{student.studentName}</h3>
             <span
               style={{
                 display: "inline-block",
@@ -222,7 +222,7 @@ function StudentReviewCard({ student, onNavigate }: StudentReviewCardProps) {
           </div>
 
           {/* Progress info */}
-          <div style={{ display: "flex", gap: "24px", marginBottom: "12px", color: "#666", fontSize: "0.9rem" }}>
+          <div style={{ display: "flex", gap: "24px", marginBottom: "12px", color: "var(--text-secondary)", fontSize: "0.9rem" }}>
             <span>
               <strong>Progress:</strong>{" "}
               {student.isComplete ? (
@@ -279,7 +279,7 @@ function StudentReviewCard({ student, onNavigate }: StudentReviewCardProps) {
 
         {/* Right: Arrow */}
         <div style={{ display: "flex", alignItems: "center", paddingLeft: "16px" }}>
-          <span style={{ fontSize: "1.5rem", color: "#667eea" }}>→</span>
+          <span style={{ fontSize: "1.5rem", color: "#3d5a80" }}>→</span>
         </div>
       </div>
 
@@ -292,7 +292,7 @@ function StudentReviewCard({ student, onNavigate }: StudentReviewCardProps) {
             background: "#f5f5f5",
             borderRadius: "8px",
             fontSize: "0.85rem",
-            color: "#666",
+            color: "var(--text-secondary)",
           }}
         >
           Has teacher notes

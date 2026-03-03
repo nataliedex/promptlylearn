@@ -547,7 +547,7 @@ export default function AssignmentReview() {
         <EducatorAppHeader mode="slim" breadcrumbs={breadcrumbs} />
         <div className="card" style={{ background: "#ffebee", borderLeft: "4px solid #d32f2f" }}>
           <h3 style={{ color: "#d32f2f", margin: "0 0 8px 0" }}>Error Loading Assignment</h3>
-          <p style={{ color: "#666", margin: 0 }}>{error}</p>
+          <p style={{ color: "var(--text-secondary)", margin: 0 }}>{error}</p>
           <button
             onClick={() => {
               setError(null);
@@ -589,7 +589,7 @@ export default function AssignmentReview() {
           <div>
             <h1>{reviewData.title}</h1>
             {(reviewData.assignedAt || reviewData.dueDate) && (
-              <p style={{ color: "rgba(255,255,255,0.7)", margin: "4px 0 0 0", fontSize: "0.9rem" }}>
+              <p style={{ color: "var(--text-muted)", margin: "4px 0 0 0", fontSize: "0.9rem" }}>
                 {[formatAssignedDate(reviewData.assignedAt), formatDueDate(reviewData.dueDate)].filter(Boolean).join(" · ")}
               </p>
             )}
@@ -637,7 +637,7 @@ export default function AssignmentReview() {
 
         <div className="card" style={{ textAlign: "center", padding: "48px" }}>
           <h3 style={{ margin: 0, marginBottom: "8px" }}>No students assigned yet</h3>
-          <p style={{ color: "#666", margin: 0 }}>
+          <p style={{ color: "var(--text-secondary)", margin: 0 }}>
             Students will appear here once they are assigned to this lesson.
           </p>
         </div>
@@ -664,7 +664,7 @@ export default function AssignmentReview() {
           <h1>{reviewData.title}</h1>
           {/* Lesson metadata line: "Math 1.3 · Grade 1 · Beginner" */}
           {lesson && (lesson.systemIndex || lesson.gradeLevel || lesson.difficulty) && (
-            <p style={{ color: "rgba(255,255,255,0.8)", margin: "4px 0 0 0", fontSize: "0.9rem" }}>
+            <p style={{ color: "var(--text-secondary)", margin: "4px 0 0 0", fontSize: "0.9rem" }}>
               {[
                 lesson.systemIndex,
                 lesson.gradeLevel ? `Grade ${lesson.gradeLevel}` : null,
@@ -673,7 +673,7 @@ export default function AssignmentReview() {
             </p>
           )}
           {(reviewData.assignedAt || reviewData.dueDate) && (
-            <p style={{ color: "rgba(255,255,255,0.7)", margin: "4px 0 0 0", fontSize: "0.85rem" }}>
+            <p style={{ color: "var(--text-muted)", margin: "4px 0 0 0", fontSize: "0.85rem" }}>
               {[formatAssignedDate(reviewData.assignedAt), formatDueDate(reviewData.dueDate)].filter(Boolean).join(" · ")}
             </p>
           )}
@@ -932,8 +932,8 @@ export default function AssignmentReview() {
           }}
         >
           <div style={{ flex: 1 }}>
-            <div style={{ fontWeight: 500, color: "#555", fontSize: "1rem" }}>No submissions yet</div>
-            <div style={{ fontSize: "0.85rem", color: "#888", marginTop: "4px" }}>
+            <div style={{ fontWeight: 500, color: "var(--text-secondary)", fontSize: "1rem" }}>No submissions yet</div>
+            <div style={{ fontSize: "0.85rem", color: "var(--text-muted)", marginTop: "4px" }}>
               {stats.inProgress > 0 ? `${stats.inProgress} in progress` : "Waiting for students to start"}
             </div>
           </div>
@@ -959,7 +959,7 @@ export default function AssignmentReview() {
             <div style={{ fontWeight: 600, color: "#c2410c", marginBottom: "4px", fontSize: "1rem" }}>
               {pendingReviewCount} submission{pendingReviewCount !== 1 ? "s" : ""} awaiting review
             </div>
-            <div style={{ fontSize: "0.85rem", color: "#666", lineHeight: 1.4 }}>
+            <div style={{ fontSize: "0.85rem", color: "var(--text-secondary)", lineHeight: 1.4 }}>
               {distribution.needsSupport > 0 && distribution.developing > 0 ? (
                 <>
                   {distribution.needsSupport} struggling with concepts · {distribution.developing} still developing understanding
@@ -1012,7 +1012,7 @@ export default function AssignmentReview() {
                 ? `All reviewed · ${followupCount} follow-up${followupCount !== 1 ? "s" : ""} scheduled`
                 : "All submissions reviewed"}
             </div>
-            <div style={{ fontSize: "0.85rem", color: "#666", marginTop: "4px" }}>
+            <div style={{ fontSize: "0.85rem", color: "var(--text-secondary)", marginTop: "4px" }}>
               {stats.completed} submission{stats.completed !== 1 ? "s" : ""} reviewed
             </div>
           </div>
@@ -1102,7 +1102,7 @@ export default function AssignmentReview() {
                 </button>
               </div>
             ) : (
-              <p style={{ color: "#888", margin: 0 }}>No submissions to display.</p>
+              <p style={{ color: "var(--text-muted)", margin: 0 }}>No submissions to display.</p>
             )}
           </div>
         ) : (
@@ -1159,7 +1159,7 @@ export default function AssignmentReview() {
                   currentDirection={sortDirection}
                   onSort={handleSort}
                 />
-                <th style={{ textAlign: "center", padding: "10px 16px", fontWeight: 500, color: "#888", fontSize: "0.8rem", textTransform: "uppercase", letterSpacing: "0.03em" }}>
+                <th style={{ textAlign: "center", padding: "10px 16px", fontWeight: 500, color: "var(--text-muted)", fontSize: "0.8rem", textTransform: "uppercase", letterSpacing: "0.03em" }}>
                   Action
                 </th>
               </tr>
@@ -1355,7 +1355,7 @@ function AssignmentActions({
                 style={{
                   padding: "10px 16px",
                   fontSize: "0.85rem",
-                  color: "#94a3b8",
+                  color: "var(--text-muted)",
                   cursor: "not-allowed",
                   borderBottom: "1px solid #f1f5f9",
                 }}
@@ -1397,7 +1397,7 @@ function AssignmentActions({
                 style={{
                   padding: "10px 16px",
                   fontSize: "0.85rem",
-                  color: "#94a3b8",
+                  color: "var(--text-muted)",
                   cursor: "not-allowed",
                 }}
               >
@@ -1629,7 +1629,7 @@ function EditLessonModal({
                 background: "none",
                 border: "none",
                 fontSize: "1.3rem",
-                color: "#94a3b8",
+                color: "var(--text-muted)",
                 cursor: "pointer",
                 padding: "4px 8px",
                 lineHeight: 1,
@@ -1640,7 +1640,7 @@ function EditLessonModal({
                 e.currentTarget.style.background = "#e2e8f0";
               }}
               onMouseLeave={(e) => {
-                e.currentTarget.style.color = "#94a3b8";
+                e.currentTarget.style.color = "var(--text-muted)";
                 e.currentTarget.style.background = "none";
               }}
             >
@@ -1875,14 +1875,14 @@ function EditLessonModal({
                           style={{
                             background: "none",
                             border: "none",
-                            color: "#94a3b8",
+                            color: "var(--text-muted)",
                             cursor: "pointer",
                             fontSize: "1rem",
                             padding: "2px 4px",
                             lineHeight: 1,
                           }}
                           onMouseEnter={(e) => e.currentTarget.style.color = "#ef4444"}
-                          onMouseLeave={(e) => e.currentTarget.style.color = "#94a3b8"}
+                          onMouseLeave={(e) => e.currentTarget.style.color = "var(--text-muted)"}
                           title="Remove hint"
                         >
                           ×
@@ -1973,7 +1973,7 @@ function EditLessonModal({
                       background: "none",
                       border: "none",
                       fontSize: "1.1rem",
-                      color: "#94a3b8",
+                      color: "var(--text-muted)",
                       cursor: "pointer",
                       padding: "2px 6px",
                       lineHeight: 1,
@@ -2006,7 +2006,7 @@ function EditLessonModal({
                             boxSizing: "border-box",
                           }}
                         />
-                        <p style={{ margin: "4px 0 0 0", fontSize: "0.78rem", color: "#94a3b8" }}>
+                        <p style={{ margin: "4px 0 0 0", fontSize: "0.78rem", color: "var(--text-muted)" }}>
                           Optional — leave blank to let the AI choose
                         </p>
                       </div>
@@ -2093,7 +2093,7 @@ function EditLessonModal({
                                 gap: "6px",
                               }}
                             >
-                              <span style={{ fontSize: "0.75rem", color: "#94a3b8", fontWeight: 600, minWidth: "18px" }}>
+                              <span style={{ fontSize: "0.75rem", color: "var(--text-muted)", fontWeight: 600, minWidth: "18px" }}>
                                 {hintIndex + 1}.
                               </span>
                               <input
@@ -2114,14 +2114,14 @@ function EditLessonModal({
                                 style={{
                                   background: "none",
                                   border: "none",
-                                  color: "#94a3b8",
+                                  color: "var(--text-muted)",
                                   cursor: "pointer",
                                   fontSize: "0.85rem",
                                   padding: "2px 4px",
                                   lineHeight: 1,
                                 }}
                                 onMouseEnter={(e) => e.currentTarget.style.color = "#ef4444"}
-                                onMouseLeave={(e) => e.currentTarget.style.color = "#94a3b8"}
+                                onMouseLeave={(e) => e.currentTarget.style.color = "var(--text-muted)"}
                                 title="Remove hint"
                               >
                                 ✕
@@ -2206,17 +2206,17 @@ function StatusTile({
         style={{
           fontSize: "1.25rem",
           fontWeight: 600,
-          color: color || "#555",
+          color: color || "var(--text-secondary)",
           lineHeight: 1.2,
         }}
       >
         {value}
       </div>
-      <div style={{ fontSize: "0.75rem", color: "#999", marginTop: "3px", textTransform: "uppercase", letterSpacing: "0.02em" }}>
+      <div style={{ fontSize: "0.75rem", color: "var(--text-muted)", marginTop: "3px", textTransform: "uppercase", letterSpacing: "0.02em" }}>
         {label}
       </div>
       {sublabel && (
-        <div style={{ fontSize: "0.7rem", color: "#bbb", marginTop: "2px" }}>
+        <div style={{ fontSize: "0.7rem", color: "var(--text-muted)", marginTop: "2px" }}>
           {sublabel}
         </div>
       )}
@@ -2249,7 +2249,7 @@ function TabButton({
         borderBottom: active ? "2px solid #667eea" : "2px solid #e2e8f0",
         cursor: "pointer",
         fontWeight: active ? 600 : 500,
-        color: active ? "#1e293b" : hasItems ? "#475569" : "#94a3b8",
+        color: active ? "#1e293b" : hasItems ? "#475569" : "var(--text-muted)",
         fontSize: "0.9rem",
         marginBottom: "-1px",
         transition: "all 0.15s ease",
@@ -2264,7 +2264,7 @@ function TabButton({
       onMouseLeave={(e) => {
         if (!active) {
           e.currentTarget.style.background = "#f8fafc";
-          e.currentTarget.style.color = hasItems ? "#475569" : "#94a3b8";
+          e.currentTarget.style.color = hasItems ? "#475569" : "var(--text-muted)";
         }
       }}
     >
@@ -2305,7 +2305,7 @@ function SortableHeader({
         textAlign: align,
         padding: align === "left" ? "10px 16px" : "10px 8px",
         fontWeight: 500,
-        color: isActive ? "#667eea" : "#888",
+        color: isActive ? "#667eea" : "var(--text-muted)",
         fontSize: "0.8rem",
         textTransform: "uppercase",
         letterSpacing: "0.03em",
@@ -2314,10 +2314,10 @@ function SortableHeader({
         transition: "color 0.15s",
       }}
       onMouseEnter={(e) => {
-        if (!isActive) e.currentTarget.style.color = "#666";
+        if (!isActive) e.currentTarget.style.color = "var(--text-secondary)";
       }}
       onMouseLeave={(e) => {
-        if (!isActive) e.currentTarget.style.color = "#888";
+        if (!isActive) e.currentTarget.style.color = "var(--text-muted)";
       }}
     >
       <span style={{ display: "inline-flex", alignItems: "center", gap: "4px" }}>
@@ -2443,7 +2443,7 @@ function StudentRow({ student, onReview, onViewStudent, showReviewButton, recomm
           <span
             style={{
               fontSize: "0.85rem",
-              color: student.coachSupport === "significant" ? "#e65100" : "#888",
+              color: student.coachSupport === "significant" ? "#e65100" : "var(--text-muted)",
             }}
           >
             {getCoachSupportLabel(student.coachSupport)}
@@ -2470,7 +2470,7 @@ function StudentRow({ student, onReview, onViewStudent, showReviewButton, recomm
             {student.attempts}
           </span>
         ) : (
-          <span style={{ color: "#888", fontSize: "0.85rem" }}>{student.attempts}</span>
+          <span style={{ color: "var(--text-muted)", fontSize: "0.85rem" }}>{student.attempts}</span>
         )}
       </td>
 
@@ -2506,7 +2506,7 @@ function StudentRow({ student, onReview, onViewStudent, showReviewButton, recomm
                   fontSize: "0.72rem",
                   fontWeight: 500,
                   background: topCategory?.bgColor || "#f5f5f5",
-                  color: topCategory?.color || "#666",
+                  color: topCategory?.color || "var(--text-secondary)",
                   border: `1px solid ${topCategory?.color || "#ccc"}`,
                   cursor: "pointer",
                   transition: "transform 0.1s",
@@ -2695,7 +2695,7 @@ interface TeacherStatusStyle {
 
 // Unified workflow status labels and colors (consistent across all educator surfaces)
 const TEACHER_STATUS_CONFIG: Record<TeacherStatusValue, TeacherStatusStyle> = {
-  "not-started": { bg: "#f8fafc", color: "#94a3b8", label: "\u2014", icon: "" }, // em-dash for NO_ACTION
+  "not-started": { bg: "#f8fafc", color: "var(--text-muted)", label: "\u2014", icon: "" }, // em-dash for NO_ACTION
   "pending-review": { bg: "#fffbeb", color: "#d97706", label: "Needs review", icon: "" },
   "reviewed": { bg: "#ecfdf5", color: "#059669", label: "Resolved", icon: "" },
   "followup-scheduled": { bg: "#f5f3ff", color: "#7c3aed", label: "Follow-up scheduled", icon: "" },

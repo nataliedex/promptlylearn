@@ -1,0 +1,28 @@
+{
+  "id": "demo-science-plants",
+  "title": "How Plants Grow",
+  "description": "Understanding what plants need to grow and stay healthy.",
+  "subject": "Science",
+  "gradeLevel": "2nd Grade",
+  "difficulty": "beginner",
+  "prompts": [
+    {
+      "id": "q1",
+      "type": "explain",
+      "input": "What do plants need to grow? List at least three things.",
+      "hints": [
+        "Think about what you give a plant to take care of it.",
+        "What does a plant get from the sun?"
+      ]
+    },
+    {
+      "id": "q2",
+      "type": "explain",
+      "input": "Why do you think plants are important for people and animals?",
+      "hints": [
+        "What do plants make that we breathe?",
+        "What do some animals eat?"
+      ]
+    }
+  ]
+}

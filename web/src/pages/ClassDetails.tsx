@@ -291,22 +291,22 @@ export default function ClassDetails() {
           <div>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
               <div>
-                <h1 style={{ margin: 0, color: "#667eea" }}>{classData.name}</h1>
+                <h1 style={{ margin: 0, color: "#3d5a80" }}>{classData.name}</h1>
                 <div style={{ display: "flex", gap: "16px", marginTop: "8px", flexWrap: "wrap", alignItems: "center" }}>
                   {classData.gradeLevel && (
-                    <span style={{ color: "#666" }}>{classData.gradeLevel}</span>
+                    <span style={{ color: "var(--text-secondary)" }}>{classData.gradeLevel}</span>
                   )}
                   {classData.period && (
-                    <span style={{ color: "#666" }}>{classData.period}</span>
+                    <span style={{ color: "var(--text-secondary)" }}>{classData.period}</span>
                   )}
                   {classData.sectionLabel && (
-                    <span style={{ color: "#666" }}>Section {classData.sectionLabel}</span>
+                    <span style={{ color: "var(--text-secondary)" }}>Section {classData.sectionLabel}</span>
                   )}
                 </div>
                 {classData.description && (
-                  <p style={{ marginTop: "8px", marginBottom: 0, color: "#666", fontSize: "0.9rem" }}>{classData.description}</p>
+                  <p style={{ marginTop: "8px", marginBottom: 0, color: "var(--text-secondary)", fontSize: "0.9rem" }}>{classData.description}</p>
                 )}
-                <p style={{ marginTop: "8px", marginBottom: 0, color: "#999", fontSize: "0.85rem" }}>
+                <p style={{ marginTop: "8px", marginBottom: 0, color: "var(--text-muted)", fontSize: "0.85rem" }}>
                   Manage students and subject participation for this class.
                 </p>
               </div>
@@ -324,9 +324,9 @@ export default function ClassDetails() {
 
       {/* Roster & Participation — Single Combined Section */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px", flexWrap: "wrap", gap: "8px" }}>
-        <h2 style={{ color: "white", margin: 0 }}>
+        <h2 style={{ color: "var(--text-primary)", margin: 0 }}>
           Roster & Participation
-          <span style={{ fontSize: "0.85rem", fontWeight: "normal", marginLeft: "8px", color: "rgba(255,255,255,0.6)" }}>
+          <span style={{ fontSize: "0.85rem", fontWeight: "normal", marginLeft: "8px", color: "var(--text-secondary)" }}>
             ({classData.students.length} student{classData.students.length !== 1 ? "s" : ""})
           </span>
         </h2>
@@ -352,7 +352,7 @@ export default function ClassDetails() {
       {showAddStudents && (
         <div className="card" style={{ marginBottom: "16px" }}>
           <h3 style={{ margin: 0, marginBottom: "12px" }}>Add Students</h3>
-          <p style={{ color: "#666", marginBottom: "12px", fontSize: "0.9rem" }}>
+          <p style={{ color: "var(--text-secondary)", marginBottom: "12px", fontSize: "0.9rem" }}>
             Enter student names separated by commas or one per line. New students will be created automatically.
           </p>
           <form onSubmit={handleAddStudents}>
@@ -453,7 +453,7 @@ export default function ClassDetails() {
       {/* Empty state: no students at all */}
       {!hasStudents ? (
         <div className="card" style={{ textAlign: "center", padding: "48px" }}>
-          <p style={{ color: "#666", marginBottom: "16px" }}>
+          <p style={{ color: "var(--text-secondary)", marginBottom: "16px" }}>
             No students in this class yet. Add students to get started.
           </p>
           <button
@@ -467,7 +467,7 @@ export default function ClassDetails() {
         /* Unified Roster & Participation Grid */
         <div className="card" style={{ padding: 0, overflow: "hidden" }}>
           {hasSubjects && (
-            <p style={{ color: "#666", fontSize: "0.85rem", margin: 0, padding: "14px 16px 0 16px" }}>
+            <p style={{ color: "var(--text-secondary)", fontSize: "0.85rem", margin: 0, padding: "14px 16px 0 16px" }}>
               Toggle which subjects each student receives assignments for.
             </p>
           )}
@@ -510,13 +510,13 @@ export default function ClassDetails() {
                             background: "none",
                             border: "none",
                             cursor: "pointer",
-                            color: "#bbb",
+                            color: "var(--text-muted)",
                             fontSize: "0.65rem",
                             padding: "1px 4px",
                             lineHeight: 1.3,
                           }}
                           onMouseEnter={(e) => { e.currentTarget.style.color = "#d32f2f"; }}
-                          onMouseLeave={(e) => { e.currentTarget.style.color = "#bbb"; }}
+                          onMouseLeave={(e) => { e.currentTarget.style.color = "var(--text-muted)"; }}
                           title={`Remove ${subject}`}
                         >
                           ✕ remove
@@ -563,7 +563,7 @@ export default function ClassDetails() {
                             transition: "color 0.15s",
                           }}
                           onMouseEnter={(e) => {
-                            e.currentTarget.style.color = "#667eea";
+                            e.currentTarget.style.color = "#3d5a80";
                             e.currentTarget.style.textDecoration = "underline";
                           }}
                           onMouseLeave={(e) => {
@@ -605,7 +605,7 @@ export default function ClassDetails() {
                                 width: "18px",
                                 height: "18px",
                                 cursor: "pointer",
-                                accentColor: "#667eea",
+                                accentColor: "#3d5a80",
                               }}
                               title={excluded ? `Add ${student.name} to ${subject}` : `Remove ${student.name} from ${subject}`}
                             />

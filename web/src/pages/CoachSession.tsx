@@ -6,7 +6,7 @@
  */
 
 import { useState, useEffect, useRef, useCallback } from "react";
-import { useParams, useSearchParams, Link } from "react-router-dom";
+import { useParams, useSearchParams, useLocation, Link } from "react-router-dom";
 import {
   getStudent,
   sendCoachChat,
@@ -21,12 +21,24 @@ import {
   type CoachingInvite,
 } from "../services/api";
 import { useVoice } from "../hooks/useVoice";
+import useVoiceConversation from "../hooks/useVoiceConversation";
 import ModeToggle from "../components/ModeToggle";
 import { buildCoachIntro, getCoachName } from "../utils/coachIntro";
 import Header from "../components/Header";
+import type { ConversationTurn } from "../components/VideoConversationRecorder";
+
+/** Context passed via React Router state when navigating from a completed assignment */
+interface AssignmentContext {
+  fromAssignment?: boolean;
+  transcript?: ConversationTurn[];
+  question?: string;
+  lessonTitle?: string;
+  durationSec?: number;
+  coachTurns?: number;
+  lastScore?: number;
+}
 
 type SessionMode = "voice" | "type";
-type VoiceState = "idle" | "speaking" | "listening" | "processing";
 
 export default function CoachSession() {
   const { studentId } = useParams<{ studentId: string }>();
@@ -36,6 +48,10 @@ export default function CoachSession() {
   const inviteId = searchParams.get("inviteId");
   const topics = topicsParam ? JSON.parse(decodeURIComponent(topicsParam)) : [];
   const gradeLevel = searchParams.get("gradeLevel") ? decodeURIComponent(searchParams.get("gradeLevel")!) : undefined;
+
+  // Read assignment context passed via React Router state (from "Keep Coaching" flow)
+  const location = useLocation();
+  const assignmentContext = (location.state as AssignmentContext) || null;
 
   // Mode state - can be toggled during the session
   const [mode, setMode] = useState<SessionMode>(initialMode);
@@ -55,21 +71,30 @@ export default function CoachSession() {
   const sessionSavedRef = useRef(false);
 
   // Voice mode state
-  const [voiceState, setVoiceState] = useState<VoiceState>("idle");
   const isProcessingRef = useRef(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const {
     isRecording,
-    isTranscribing,
-    isSpeaking,
     voiceAvailable,
-    recordingDuration,
     startRecording,
     stopRecording,
     speak,
+    speakStream,
+    stopSpeaking,
     cancelRecording,
   } = useVoice();
+
+  // Voice conversation hook — handles Web Speech API + silence detection for voice mode
+  const handleSendMessageRef = useRef<(msg: string) => void>(() => {});
+  const handleModeToggleRef = useRef<(mode: SessionMode) => void>(() => {});
+  const voiceConv = useVoiceConversation({
+    speak: speakStream || speak,
+    stopSpeaking,
+    voiceAvailable,
+    onTurnEnd: (transcript) => handleSendMessageRef.current(transcript),
+    onNoSpeechLimit: () => handleModeToggleRef.current("type"),
+  });
 
   // Save the coach session to the backend
   const saveSession = useCallback(async () => {
@@ -107,6 +132,8 @@ export default function CoachSession() {
   // Save session when navigating away (cleanup)
   useEffect(() => {
     return () => {
+      // Stop any voice activity
+      voiceConv.cancel();
       // Only save if session was started and has messages
       if (sessionStartedAt && messagesWithTimestamps.length > 0 && !sessionSavedRef.current) {
         // Fire and forget - we can't await in cleanup
@@ -129,14 +156,6 @@ export default function CoachSession() {
       }
     };
   }, [sessionStartedAt, messagesWithTimestamps, student, topics, mode, coachingInvite]);
-
-  // Update voice state based on hook states
-  useEffect(() => {
-    if (isSpeaking) setVoiceState("speaking");
-    else if (isRecording) setVoiceState("listening");
-    else if (isTranscribing) setVoiceState("processing");
-    else if (!isProcessingRef.current) setVoiceState("idle");
-  }, [isSpeaking, isRecording, isTranscribing]);
 
   // Scroll to bottom when conversation updates
   useEffect(() => {
@@ -189,7 +208,34 @@ export default function CoachSession() {
 
     // Build greeting using the coach intro helper
     let greeting: string;
-    if (coachingInvite) {
+    const firstName = getCoachName(student?.name || "", student?.preferredName);
+
+    if (assignmentContext?.fromAssignment) {
+      // Contextual greeting continuing from a completed assignment
+      const title = assignmentContext.lessonTitle || "that assignment";
+
+      // Extract a key idea from the student's longest turn in the transcript
+      let studentHighlight = "";
+      if (assignmentContext.transcript && assignmentContext.transcript.length > 0) {
+        const studentTurns = assignmentContext.transcript.filter(t => t.role === "student");
+        if (studentTurns.length > 0) {
+          const longest = studentTurns.reduce((a, b) => a.message.length > b.message.length ? a : b);
+          // Take the first meaningful clause (up to 60 chars) for reference
+          const snippet = longest.message.slice(0, 60).replace(/[.!?]+$/, "");
+          studentHighlight = snippet;
+        }
+      }
+
+      const scoreRef = assignmentContext.lastScore !== undefined && assignmentContext.lastScore >= 70
+        ? "You shared some really thoughtful ideas."
+        : "I liked how you were thinking through that.";
+
+      if (studentHighlight) {
+        greeting = `Hey ${firstName}! We just worked on ${title}. ${scoreRef} You were talking about "${studentHighlight}" — let's dig deeper! What questions do you still have, or what would you like to explore more?`;
+      } else {
+        greeting = `Hey ${firstName}! We just worked on ${title}. ${scoreRef} Let's keep going — what questions do you still have, or what would you like to explore more?`;
+      }
+    } else if (coachingInvite) {
       // Teacher-invited session (support or enrichment)
       const sessionType = coachingInvite.guardrails?.mode === "support" ? "support"
         : coachingInvite.guardrails?.mode === "enrichment" ? "enrichment"
@@ -203,10 +249,8 @@ export default function CoachSession() {
         sessionType,
       });
     } else if (topics.length > 0) {
-      const firstName = getCoachName(student?.name || "", student?.preferredName);
       greeting = `Hey ${firstName}! Welcome back. I'm excited to chat with you about ${topics.join(" and ")}. What would you like to explore or ask about?`;
     } else {
-      const firstName = getCoachName(student?.name || "", student?.preferredName);
       greeting = `Hey ${firstName}! Welcome back. I'm here to help you learn today. What's on your mind?`;
     }
 
@@ -214,11 +258,7 @@ export default function CoachSession() {
     setMessagesWithTimestamps([{ role: "coach", message: greeting, timestamp: now }]);
 
     if (mode === "voice" && voiceAvailable) {
-      await speak(greeting);
-      // Start listening after greeting
-      await new Promise((r) => setTimeout(r, 500));
-      setVoiceState("listening");
-      await startRecording();
+      await voiceConv.speakAndListen(greeting);
     }
   };
 
@@ -296,14 +336,12 @@ export default function CoachSession() {
         }
       }
 
-      // In voice mode, speak the response and listen for next input
+      // In voice mode, speak the response and auto-listen for next turn
       if (mode === "voice" && voiceAvailable) {
-        await speak(response.response);
         if (response.shouldContinue) {
-          // Start listening for next input
-          await new Promise((r) => setTimeout(r, 500));
-          setVoiceState("listening");
-          await startRecording();
+          await voiceConv.speakAndListen(response.response);
+        } else {
+          await voiceConv.speakOnly(response.response);
         }
       }
     } catch (err) {
@@ -336,23 +374,10 @@ export default function CoachSession() {
     }
   };
 
-  // Handle tap to stop recording in voice mode
-  const handleVoiceTap = async () => {
-    if (isRecording) {
-      setVoiceState("processing");
-      isProcessingRef.current = true;
-
-      const result = await stopRecording();
-
-      if (result?.text) {
-        await handleSendMessage(result.text);
-      } else {
-        // No text transcribed, restart recording
-        await new Promise((r) => setTimeout(r, 500));
-        setVoiceState("listening");
-        await startRecording();
-        isProcessingRef.current = false;
-      }
+  // Handle tap to manually end listening in voice mode (secondary to auto-silence)
+  const handleVoiceTap = () => {
+    if (voiceConv.phase === "listening") {
+      voiceConv.stopListening();
     }
   };
 
@@ -360,22 +385,21 @@ export default function CoachSession() {
   const handleModeToggle = (newMode: SessionMode) => {
     if (newMode === mode) return;
 
-    // Cancel any ongoing voice activity when switching to text mode
-    if (newMode === "type" && isRecording) {
-      cancelRecording();
+    if (newMode === "type") {
+      voiceConv.cancel();
+      if (isRecording) cancelRecording();
     }
 
     setMode(newMode);
 
-    // If switching to voice mode and session is active, start listening
     if (newMode === "voice" && sessionStarted && voiceAvailable && !sessionEnded && !isProcessing) {
-      // Start listening for next input
-      setTimeout(async () => {
-        setVoiceState("listening");
-        await startRecording();
-      }, 300);
+      setTimeout(() => voiceConv.startListening(), 300);
     }
   };
+
+  // Keep refs in sync for callbacks
+  handleSendMessageRef.current = (msg: string) => handleSendMessage(msg);
+  handleModeToggleRef.current = handleModeToggle;
 
   if (loading) {
     return (
@@ -484,7 +508,7 @@ export default function CoachSession() {
                     <p style={{ margin: 0, color: "#333", fontStyle: "italic", fontSize: "0.9rem" }}>
                       "{coachingInvite.teacherNote}"
                     </p>
-                    <p style={{ margin: "4px 0 0 0", color: "#666", fontSize: "0.8rem" }}>
+                    <p style={{ margin: "4px 0 0 0", color: "var(--text-secondary)", fontSize: "0.8rem" }}>
                       — Your Teacher
                     </p>
                   </div>
@@ -511,7 +535,7 @@ export default function CoachSession() {
               ? `Let's talk about ${topics.join(" and ")}`
               : "Ready to chat?"}
           </h2>
-          <p style={{ color: "#666", marginBottom: "32px" }}>
+          <p style={{ color: "var(--text-secondary)", marginBottom: "32px" }}>
             {isEnrichmentSession
               ? "This is a special enrichment session! We'll explore deeper challenges and go beyond the basics."
               : mode === "voice"
@@ -547,7 +571,7 @@ export default function CoachSession() {
             <ModeToggle
               mode={mode}
               onToggle={handleModeToggle}
-              disabled={voiceState === "processing" || isProcessing}
+              disabled={voiceConv.phase === "processing" || isProcessing}
             />
           ) : undefined
         }
@@ -584,39 +608,61 @@ export default function CoachSession() {
             textAlign: "center",
             padding: "24px",
             background:
-              voiceState === "speaking"
+              voiceConv.phase === "coach_speaking"
                 ? "#e3f2fd"
-                : voiceState === "listening"
+                : voiceConv.phase === "listening"
                 ? "#e8f5e9"
-                : voiceState === "processing"
+                : voiceConv.phase === "processing"
                 ? "#fff3e0"
                 : "#f5f5f5",
-            cursor: voiceState === "listening" ? "pointer" : "default",
+            cursor: voiceConv.phase === "listening" ? "pointer" : "default",
           }}
-          onClick={voiceState === "listening" ? handleVoiceTap : undefined}
+          onClick={voiceConv.phase === "listening" ? handleVoiceTap : undefined}
         >
-          <div style={{ fontSize: "1.1rem", marginBottom: "8px", fontWeight: 500, color: "#666" }}>
-            {voiceState === "speaking" && "Speaking"}
-            {voiceState === "listening" && ""}
-            {voiceState === "processing" && "Processing"}
-            {voiceState === "idle" && "Ready"}
-          </div>
+          {/* Mic level bar */}
+          {voiceConv.phase === "listening" && (
+            <div
+              style={{
+                height: "4px",
+                borderRadius: "2px",
+                background: "#c8e6c9",
+                marginBottom: "12px",
+                overflow: "hidden",
+              }}
+            >
+              <div
+                style={{
+                  height: "100%",
+                  width: `${Math.max(voiceConv.micLevel * 100, 5)}%`,
+                  background: "#2e7d32",
+                  borderRadius: "2px",
+                  transition: "width 0.1s ease-out",
+                }}
+              />
+            </div>
+          )}
           <p style={{ margin: 0, fontWeight: 500, color: "#333" }}>
-            {voiceState === "speaking" && "Coach is speaking..."}
-            {voiceState === "listening" && `Listening... ${recordingDuration}s`}
-            {voiceState === "processing" && "Thinking..."}
-            {voiceState === "idle" && (sessionEnded ? "Conversation complete!" : "Ready")}
+            {voiceConv.phase === "coach_speaking" && "Coach is speaking..."}
+            {voiceConv.phase === "listening" && "I'm listening..."}
+            {voiceConv.phase === "processing" && "Thinking..."}
+            {voiceConv.phase === "idle" && (sessionEnded ? "Conversation complete!" : "Ready")}
           </p>
-          {voiceState === "listening" && (
-            <p style={{ margin: "8px 0 0 0", fontSize: "0.9rem", color: "#666" }}>
-              Tap anywhere when done speaking
+          {/* Live transcript */}
+          {voiceConv.currentTranscript && (
+            <p style={{ fontStyle: "italic", color: "#333", marginTop: "8px", fontSize: "0.9rem" }}>
+              "{voiceConv.currentTranscript}"
+            </p>
+          )}
+          {voiceConv.phase === "listening" && !voiceConv.currentTranscript && (
+            <p style={{ margin: "8px 0 0 0", fontSize: "0.9rem", color: "var(--text-secondary)" }}>
+              I'll know when you're done — or tap to send now
             </p>
           )}
         </div>
       )}
 
-      {/* Conversation History - only show in type mode */}
-      {mode === "type" && (
+      {/* Conversation History */}
+      {(
         <div
           className="card"
           style={{
@@ -639,7 +685,7 @@ export default function CoachSession() {
                   maxWidth: "80%",
                   padding: "12px 16px",
                   borderRadius: msg.role === "student" ? "16px 16px 4px 16px" : "16px 16px 16px 4px",
-                  background: msg.role === "student" ? "#7c8fce" : "#f5f5f5",
+                  background: msg.role === "student" ? "#3d5a80" : "#f5f5f5",
                   color: msg.role === "student" ? "white" : "#333",
                 }}
               >
@@ -656,7 +702,7 @@ export default function CoachSession() {
                   padding: "12px 16px",
                   borderRadius: "16px 16px 16px 4px",
                   background: "#f5f5f5",
-                  color: "#999",
+                  color: "var(--text-muted)",
                 }}
               >
                 <p style={{ margin: 0 }}>Thinking...</p>
@@ -728,7 +774,7 @@ export default function CoachSession() {
       {/* Session Ended */}
       {sessionEnded && (
         <div className="card" style={{ marginTop: "16px", textAlign: "center", padding: "24px" }}>
-          <p style={{ margin: 0, color: "#666" }}>
+          <p style={{ margin: 0, color: "var(--text-secondary)" }}>
             Great conversation!
           </p>
           <Link

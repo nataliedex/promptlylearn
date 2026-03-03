@@ -1,0 +1,28 @@
+{
+  "id": "demo-math-word-problems",
+  "title": "Solving Word Problems",
+  "description": "Practice solving addition and subtraction word problems.",
+  "subject": "Math",
+  "gradeLevel": "2nd Grade",
+  "difficulty": "beginner",
+  "prompts": [
+    {
+      "id": "q1",
+      "type": "explain",
+      "input": "Maria had 8 apples. She gave 3 to her friend. How many does she have now? Explain your thinking.",
+      "hints": [
+        "What operation should you use?",
+        "Draw a picture to help you."
+      ]
+    },
+    {
+      "id": "q2",
+      "type": "explain",
+      "input": "Tom has 5 red cars and 7 blue cars. How many cars does he have in all? Show your work.",
+      "hints": [
+        "Are you putting together or taking apart?",
+        "Try counting on your fingers."
+      ]
+    }
+  ]
+}

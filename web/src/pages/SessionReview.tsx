@@ -10,6 +10,7 @@ import {
   type Session,
   type Lesson,
 } from "../services/api";
+import { wasHintUsed } from "../utils/teacherDashboardUtils";
 
 export default function SessionReview() {
   const { sessionId } = useParams<{ sessionId: string }>();
@@ -295,9 +296,9 @@ export default function SessionReview() {
         >
           {session.evaluation?.totalScore ?? 0}/100
         </div>
-        <p style={{ color: "#666", marginTop: "8px" }}>Overall Score</p>
+        <p style={{ color: "var(--text-secondary)", marginTop: "8px" }}>Overall Score</p>
         {session.evaluation?.feedback && (
-          <p style={{ marginTop: "16px", fontStyle: "italic", color: "#555" }}>
+          <p style={{ marginTop: "16px", fontStyle: "italic", color: "var(--text-secondary)" }}>
             "{session.evaluation.feedback}"
           </p>
         )}
@@ -307,7 +308,7 @@ export default function SessionReview() {
       <div className="card" style={{ marginTop: "24px" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px" }}>
           <h3 style={{ margin: 0 }}>Educator Notes</h3>
-          {saving && <span style={{ color: "#666", fontSize: "0.85rem" }}>Saving...</span>}
+          {saving && <span style={{ color: "var(--text-secondary)", fontSize: "0.85rem" }}>Saving...</span>}
           {!saving && lastSaved && (
             <span style={{ color: "#4caf50", fontSize: "0.85rem" }}>
               Saved {lastSaved.toLocaleTimeString()}
@@ -333,7 +334,7 @@ export default function SessionReview() {
       </div>
 
       {/* Transcript */}
-      <h2 style={{ color: "white", marginBottom: "16px", marginTop: "32px" }}>
+      <h2 style={{ color: "var(--text-primary)", marginBottom: "16px", marginTop: "32px" }}>
         Session Transcript
       </h2>
 
@@ -350,7 +351,7 @@ export default function SessionReview() {
               <div style={{ display: "flex", alignItems: "flex-start", gap: "12px" }}>
                 <span
                   style={{
-                    background: "#667eea",
+                    background: "#3d5a80",
                     color: "white",
                     padding: "4px 10px",
                     borderRadius: "12px",
@@ -369,7 +370,7 @@ export default function SessionReview() {
                 <button
                   onClick={() => playTTSAudio(prompt?.input || "", index, "question")}
                   style={{
-                    background: playingIndex === index && speakingType === "question" ? "#667eea" : "#f0f0f0",
+                    background: playingIndex === index && speakingType === "question" ? "#3d5a80" : "#f0f0f0",
                     color: playingIndex === index && speakingType === "question" ? "white" : "#333",
                     border: "none",
                     borderRadius: "50%",
@@ -398,9 +399,9 @@ export default function SessionReview() {
               }}
             >
               <div style={{ display: "flex", alignItems: "flex-start", gap: "12px" }}>
-                <span style={{ fontSize: "0.85rem", fontWeight: 600, color: "#666" }}>Student</span>
+                <span style={{ fontSize: "0.85rem", fontWeight: 600, color: "var(--text-secondary)" }}>Student</span>
                 <div style={{ flex: 1 }}>
-                  <p style={{ margin: 0, fontSize: "0.85rem", color: "#666", marginBottom: "4px" }}>
+                  <p style={{ margin: 0, fontSize: "0.85rem", color: "var(--text-secondary)", marginBottom: "4px" }}>
                     Student's Response
                   </p>
                   <p style={{ margin: 0, lineHeight: 1.6 }}>{response.response}</p>
@@ -419,7 +420,7 @@ export default function SessionReview() {
                         Voice recording
                       </span>
                     )}
-                    {response.hintUsed && (
+                    {wasHintUsed(response) && (
                       <span
                         style={{
                           display: "inline-block",
@@ -440,7 +441,7 @@ export default function SessionReview() {
                   <button
                     onClick={() => playStoredAudio(response.audioBase64!, response.audioFormat!, index)}
                     style={{
-                      background: playingIndex === index && speakingType === "response" ? "#667eea" : "#e8f5e9",
+                      background: playingIndex === index && speakingType === "response" ? "#3d5a80" : "#e8f5e9",
                       color: playingIndex === index && speakingType === "response" ? "white" : "#2e7d32",
                       border: "none",
                       borderRadius: "50%",
@@ -460,7 +461,7 @@ export default function SessionReview() {
                   <button
                     onClick={() => playTTSAudio(response.response, index, "response")}
                     style={{
-                      background: playingIndex === index && speakingType === "response" ? "#667eea" : "#f0f0f0",
+                      background: playingIndex === index && speakingType === "response" ? "#3d5a80" : "#f0f0f0",
                       color: playingIndex === index && speakingType === "response" ? "white" : "#333",
                       border: "none",
                       borderRadius: "50%",
@@ -514,7 +515,7 @@ export default function SessionReview() {
                   Score: {criteriaScore.score}/100
                 </span>
                 {criteriaScore.comment && (
-                  <span style={{ color: "#666", marginLeft: "8px" }}>
+                  <span style={{ color: "var(--text-secondary)", marginLeft: "8px" }}>
                     - {criteriaScore.comment}
                   </span>
                 )}
@@ -541,7 +542,7 @@ export default function SessionReview() {
             {/* Educator note for this response */}
             <div style={{ marginTop: "12px" }}>
               <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "6px" }}>
-                <span style={{ fontSize: "0.85rem", color: "#666" }}>Your note for this response:</span>
+                <span style={{ fontSize: "0.85rem", color: "var(--text-secondary)" }}>Your note for this response:</span>
               </div>
               <textarea
                 value={responseNotes[response.promptId] || ""}

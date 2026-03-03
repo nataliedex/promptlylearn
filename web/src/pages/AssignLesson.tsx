@@ -230,7 +230,7 @@ export default function AssignLesson() {
           >
             <div>
               <span style={{ fontWeight: 600, color: "#2e7d32" }}>{selectedLesson.title}</span>
-              <span style={{ marginLeft: "12px", color: "#666", fontSize: "0.9rem" }}>
+              <span style={{ marginLeft: "12px", color: "var(--text-secondary)", fontSize: "0.9rem" }}>
                 {selectedLesson.promptCount} questions
               </span>
             </div>
@@ -240,7 +240,7 @@ export default function AssignLesson() {
                 background: "transparent",
                 border: "none",
                 cursor: "pointer",
-                color: "#666",
+                color: "var(--text-secondary)",
                 fontSize: "0.85rem",
               }}
             >
@@ -298,7 +298,7 @@ export default function AssignLesson() {
           >
             <div>
               <span style={{ fontWeight: 600, color: "#2e7d32" }}>{selectedClass.name}</span>
-              <span style={{ marginLeft: "12px", color: "#666", fontSize: "0.9rem" }}>
+              <span style={{ marginLeft: "12px", color: "var(--text-secondary)", fontSize: "0.9rem" }}>
                 {selectedClass.students.length} students
               </span>
             </div>
@@ -307,7 +307,7 @@ export default function AssignLesson() {
           <>
             {classes.length === 0 ? (
               <div style={{ textAlign: "center", padding: "24px" }}>
-                <p style={{ color: "#666", marginBottom: "16px" }}>
+                <p style={{ color: "var(--text-secondary)", marginBottom: "16px" }}>
                   No classes yet. Create a class first to assign lessons.
                 </p>
                 <button
@@ -370,7 +370,7 @@ export default function AssignLesson() {
                     background: "transparent",
                     border: "none",
                     cursor: "pointer",
-                    color: "#667eea",
+                    color: "#3d5a80",
                     fontSize: "0.9rem",
                   }}
                 >
@@ -382,13 +382,13 @@ export default function AssignLesson() {
                     background: "transparent",
                     border: "none",
                     cursor: "pointer",
-                    color: "#667eea",
+                    color: "#3d5a80",
                     fontSize: "0.9rem",
                   }}
                 >
                   Deselect All
                 </button>
-                <span style={{ color: "#666", fontSize: "0.9rem" }}>
+                <span style={{ color: "var(--text-secondary)", fontSize: "0.9rem" }}>
                   {selectedStudentIds.size} selected
                 </span>
               </div>
@@ -443,7 +443,7 @@ export default function AssignLesson() {
       {selectedClass && classStudents.length > 0 && (
         <div className="card" style={{ marginBottom: "16px" }}>
           <h3 style={{ margin: 0, marginBottom: "8px" }}>4. Due Date (Optional)</h3>
-          <p style={{ color: "#666", fontSize: "0.9rem", marginBottom: "16px" }}>
+          <p style={{ color: "var(--text-secondary)", fontSize: "0.9rem", marginBottom: "16px" }}>
             Set a due date for this assignment, or leave blank for no deadline.
           </p>
 
@@ -469,7 +469,7 @@ export default function AssignLesson() {
                 background: "transparent",
                 border: "none",
                 cursor: "pointer",
-                color: "#666",
+                color: "var(--text-secondary)",
                 fontSize: "0.9rem",
               }}
             >
@@ -492,21 +492,21 @@ export default function AssignLesson() {
           style={{
             padding: "14px 28px",
             fontSize: "1rem",
-            background: "rgba(255, 255, 255, 0.18)",
-            color: "white",
-            border: "1px solid rgba(255, 255, 255, 0.45)",
+            background: "#ffffff",
+            color: "var(--text-primary)",
+            border: "1px solid #d1d5db",
             borderRadius: "8px",
             cursor: "pointer",
             fontWeight: 500,
             transition: "background 0.2s, border-color 0.2s",
           }}
           onMouseEnter={(e) => {
-            e.currentTarget.style.background = "rgba(255, 255, 255, 0.28)";
-            e.currentTarget.style.borderColor = "rgba(255, 255, 255, 0.6)";
+            e.currentTarget.style.background = "#f8fafc";
+            e.currentTarget.style.borderColor = "#94a3b8";
           }}
           onMouseLeave={(e) => {
-            e.currentTarget.style.background = "rgba(255, 255, 255, 0.18)";
-            e.currentTarget.style.borderColor = "rgba(255, 255, 255, 0.45)";
+            e.currentTarget.style.background = "#ffffff";
+            e.currentTarget.style.borderColor = "#d1d5db";
           }}
         >
           Cancel

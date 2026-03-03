@@ -57,21 +57,21 @@ export interface EducatorAppHeaderProps {
   showProfileInSlim?: boolean;
 }
 
-// Shared button styles
+// Shared button styles — light theme
 const buttonBase: React.CSSProperties = {
   display: "inline-flex",
   alignItems: "center",
   gap: "6px",
   padding: "6px 12px",
-  border: "1px solid rgba(255,255,255,0.18)",
+  border: "1px solid var(--border-subtle)",
   borderRadius: "6px",
   fontSize: "0.8rem",
   fontWeight: 500,
   cursor: "pointer",
   whiteSpace: "nowrap",
   transition: "all 0.15s ease",
-  background: "rgba(255,255,255,0.08)",
-  color: "rgba(255,255,255,0.9)",
+  background: "transparent",
+  color: "var(--text-secondary)",
 };
 
 function HeaderButton({
@@ -87,16 +87,16 @@ function HeaderButton({
 }) {
   const variants = {
     default: {
-      background: "rgba(255,255,255,0.08)",
-      borderColor: "rgba(255,255,255,0.18)",
+      background: "transparent",
+      borderColor: "var(--border-subtle)",
     },
     primary: {
-      background: "rgba(255,255,255,0.15)",
-      borderColor: "rgba(255,255,255,0.25)",
+      background: "var(--surface-accent)",
+      borderColor: "var(--border-subtle)",
     },
     ghost: {
       background: "transparent",
-      borderColor: "transparent",
+      borderColor: "var(--border-subtle)",
     },
   };
 
@@ -112,12 +112,12 @@ function HeaderButton({
         ...style,
       }}
       onMouseEnter={(e) => {
-        e.currentTarget.style.background = "rgba(255,255,255,0.2)";
-        e.currentTarget.style.borderColor = "rgba(255,255,255,0.3)";
+        e.currentTarget.style.background = "var(--surface-accent)";
+        e.currentTarget.style.color = "var(--text-primary)";
       }}
       onMouseLeave={(e) => {
         e.currentTarget.style.background = v.background;
-        e.currentTarget.style.borderColor = v.borderColor;
+        e.currentTarget.style.color = "var(--text-secondary)";
       }}
     >
       {children}
@@ -161,13 +161,12 @@ function CompactSearch({ onSearch }: { onSearch?: (query: string) => void }) {
         style={{
           ...buttonBase,
           padding: "6px 8px",
-          background: "rgba(255,255,255,0.08)",
         }}
         onMouseEnter={(e) => {
-          e.currentTarget.style.background = "rgba(255,255,255,0.15)";
+          e.currentTarget.style.background = "var(--surface-accent)";
         }}
         onMouseLeave={(e) => {
-          e.currentTarget.style.background = "rgba(255,255,255,0.08)";
+          e.currentTarget.style.background = "transparent";
         }}
         title="Search"
       >
@@ -192,10 +191,10 @@ function CompactSearch({ onSearch }: { onSearch?: (query: string) => void }) {
             width: "160px",
             padding: "6px 10px 6px 28px",
             fontSize: "0.8rem",
-            border: "1px solid rgba(255,255,255,0.25)",
+            border: "1px solid var(--border-subtle)",
             borderRadius: "6px",
-            background: "rgba(255,255,255,0.1)",
-            color: "rgba(255,255,255,0.95)",
+            background: "transparent",
+            color: "var(--text-secondary)",
             outline: "none",
           }}
           onBlur={() => {
@@ -210,7 +209,7 @@ function CompactSearch({ onSearch }: { onSearch?: (query: string) => void }) {
             transform: "translateY(-50%)",
             width: "12px",
             height: "12px",
-            color: "rgba(255,255,255,0.5)",
+            color: "var(--text-secondary)",
             pointerEvents: "none",
           }}
           fill="none"
@@ -247,7 +246,7 @@ function Breadcrumbs({ items, showHome = true }: { items: BreadcrumbItem[]; show
               <span
                 style={{
                   margin: "0 8px",
-                  color: "rgba(255,255,255,0.4)",
+                  color: "var(--text-muted)",
                   fontSize: "0.75rem",
                 }}
               >
@@ -259,7 +258,7 @@ function Breadcrumbs({ items, showHome = true }: { items: BreadcrumbItem[]; show
                 to={crumb.to}
                 state={crumb.state}
                 style={{
-                  color: "rgba(255,255,255,0.75)",
+                  color: "var(--text-secondary)",
                   textDecoration: "none",
                   fontWeight: i === 0 ? 500 : 400,
                   padding: "2px 4px",
@@ -267,12 +266,12 @@ function Breadcrumbs({ items, showHome = true }: { items: BreadcrumbItem[]; show
                   transition: "all 0.15s",
                 }}
                 onMouseEnter={(e) => {
-                  e.currentTarget.style.background = "rgba(255,255,255,0.1)";
-                  e.currentTarget.style.color = "rgba(255,255,255,0.95)";
+                  e.currentTarget.style.background = "var(--surface-accent)";
+                  e.currentTarget.style.color = "var(--text-primary)";
                 }}
                 onMouseLeave={(e) => {
                   e.currentTarget.style.background = "transparent";
-                  e.currentTarget.style.color = "rgba(255,255,255,0.75)";
+                  e.currentTarget.style.color = "var(--text-secondary)";
                 }}
               >
                 {crumb.label}
@@ -280,7 +279,7 @@ function Breadcrumbs({ items, showHome = true }: { items: BreadcrumbItem[]; show
             ) : (
               <span
                 style={{
-                  color: "rgba(255,255,255,0.95)",
+                  color: "var(--text-primary)",
                   fontWeight: 500,
                   maxWidth: "280px",
                   overflow: "hidden",
@@ -316,17 +315,16 @@ export default function EducatorAppHeader({
 }: EducatorAppHeaderProps) {
   const navigate = useNavigate();
 
-  // Header container styles
+  // Header container styles — light, minimal
   const headerStyle: React.CSSProperties = {
     display: "flex",
     alignItems: "center",
     justifyContent: "space-between",
     gap: "16px",
-    padding: "10px 16px",
+    padding: "10px 0",
     marginBottom: "16px",
-    background: "rgba(255,255,255,0.06)",
-    borderRadius: "10px",
-    borderBottom: "1px solid rgba(255,255,255,0.08)",
+    background: "transparent",
+    borderBottom: "1px solid var(--border-subtle)",
     minHeight: "48px",
   };
 
@@ -339,7 +337,7 @@ export default function EducatorAppHeader({
             <Link
               to={backLink}
               style={{
-                color: "rgba(255,255,255,0.7)",
+                color: "var(--text-muted)",
                 textDecoration: "none",
                 fontSize: "0.85rem",
                 display: "flex",
@@ -350,12 +348,12 @@ export default function EducatorAppHeader({
                 transition: "all 0.15s",
               }}
               onMouseEnter={(e) => {
-                e.currentTarget.style.background = "rgba(255,255,255,0.1)";
-                e.currentTarget.style.color = "rgba(255,255,255,0.95)";
+                e.currentTarget.style.background = "var(--surface-accent)";
+                e.currentTarget.style.color = "var(--text-primary)";
               }}
               onMouseLeave={(e) => {
                 e.currentTarget.style.background = "transparent";
-                e.currentTarget.style.color = "rgba(255,255,255,0.7)";
+                e.currentTarget.style.color = "var(--text-muted)";
               }}
             >
               <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -367,7 +365,7 @@ export default function EducatorAppHeader({
             <Link
               to="/educator"
               style={{
-                color: "rgba(255,255,255,0.7)",
+                color: "var(--text-muted)",
                 textDecoration: "none",
                 fontSize: "0.85rem",
               }}
@@ -377,8 +375,8 @@ export default function EducatorAppHeader({
           )}
           {title && (
             <>
-              <span style={{ color: "rgba(255,255,255,0.3)" }}>|</span>
-              <span style={{ color: "rgba(255,255,255,0.95)", fontWeight: 500, fontSize: "0.9rem" }}>
+              <span style={{ color: "var(--text-muted)" }}>|</span>
+              <span style={{ color: "var(--text-primary)", fontWeight: 500, fontSize: "0.9rem" }}>
                 {title}
               </span>
             </>
@@ -400,7 +398,7 @@ export default function EducatorAppHeader({
             <Link
               to={backLink}
               style={{
-                color: "rgba(255,255,255,0.7)",
+                color: "var(--text-muted)",
                 textDecoration: "none",
                 fontSize: "0.85rem",
                 display: "flex",
@@ -412,12 +410,12 @@ export default function EducatorAppHeader({
                 flexShrink: 0,
               }}
               onMouseEnter={(e) => {
-                e.currentTarget.style.background = "rgba(255,255,255,0.1)";
-                e.currentTarget.style.color = "rgba(255,255,255,0.95)";
+                e.currentTarget.style.background = "var(--surface-accent)";
+                e.currentTarget.style.color = "var(--text-primary)";
               }}
               onMouseLeave={(e) => {
                 e.currentTarget.style.background = "transparent";
-                e.currentTarget.style.color = "rgba(255,255,255,0.7)";
+                e.currentTarget.style.color = "var(--text-muted)";
               }}
             >
               <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -428,14 +426,14 @@ export default function EducatorAppHeader({
           {breadcrumbs.length > 0 ? (
             <Breadcrumbs items={breadcrumbs} showHome={!backLink} />
           ) : title ? (
-            <span style={{ color: "rgba(255,255,255,0.95)", fontWeight: 500, fontSize: "0.9rem" }}>
+            <span style={{ color: "var(--text-primary)", fontWeight: 500, fontSize: "0.9rem" }}>
               {title}
             </span>
           ) : (
             <Link
               to="/educator"
               style={{
-                color: "rgba(255,255,255,0.9)",
+                color: "var(--text-primary)",
                 textDecoration: "none",
                 fontWeight: 500,
                 fontSize: "0.9rem",
@@ -447,6 +445,9 @@ export default function EducatorAppHeader({
         </div>
 
         <div style={{ display: "flex", alignItems: "center", gap: "8px", flexShrink: 0 }}>
+          {/* Primary actions - page-specific buttons */}
+          {primaryActions}
+
           {/* My Classes - always visible in slim mode */}
           {onOpenClasses && (
             <HeaderButton onClick={onOpenClasses}>
@@ -488,7 +489,7 @@ export default function EducatorAppHeader({
         <Link
           to="/educator"
           style={{
-            color: "rgba(255,255,255,0.95)",
+            color: "var(--text-primary)",
             textDecoration: "none",
             fontWeight: 600,
             fontSize: "0.95rem",
@@ -501,7 +502,7 @@ export default function EducatorAppHeader({
             flexShrink: 0,
           }}
           onMouseEnter={(e) => {
-            e.currentTarget.style.background = "rgba(255,255,255,0.1)";
+            e.currentTarget.style.background = "var(--surface-accent)";
           }}
           onMouseLeave={(e) => {
             e.currentTarget.style.background = "transparent";
@@ -516,7 +517,7 @@ export default function EducatorAppHeader({
         {/* Optional breadcrumbs in full mode */}
         {breadcrumbs.length > 0 && (
           <>
-            <span style={{ color: "rgba(255,255,255,0.3)" }}>/</span>
+            <span style={{ color: "var(--text-muted)" }}>/</span>
             <Breadcrumbs items={breadcrumbs} showHome={false} />
           </>
         )}

@@ -4,6 +4,95 @@ import { Lesson } from "../domain/lesson";
 
 const LESSONS_DIR = path.join(__dirname, "../data/lessons");
 const ARCHIVE_DIR = path.join(LESSONS_DIR, "archive");
+const SEQUENCE_FILE = path.join(__dirname, "../data/lesson-sequences.json");
+
+// ============================================
+// Lesson Sequence Tracking
+// ============================================
+
+interface SequenceData {
+  // Key format: "{subject}-{grade}-{difficulty}" → next sequence number
+  sequences: Record<string, number>;
+}
+
+/**
+ * Load sequence data from file
+ */
+function loadSequenceData(): SequenceData {
+  try {
+    if (fs.existsSync(SEQUENCE_FILE)) {
+      const rawData = fs.readFileSync(SEQUENCE_FILE, "utf-8");
+      return JSON.parse(rawData);
+    }
+  } catch {
+    // Return default if file doesn't exist or is invalid
+  }
+  return { sequences: {} };
+}
+
+/**
+ * Save sequence data to file
+ */
+function saveSequenceData(data: SequenceData): void {
+  const dir = path.dirname(SEQUENCE_FILE);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+  fs.writeFileSync(SEQUENCE_FILE, JSON.stringify(data, null, 2), "utf-8");
+}
+
+/**
+ * Normalize a grade level string to a short form for the system index
+ * Examples: "2nd Grade" → "2", "Kindergarten" → "K", "K" → "K", "3" → "3"
+ */
+function normalizeGradeForIndex(gradeLevel: string): string {
+  const lower = gradeLevel.toLowerCase().trim();
+
+  // Handle kindergarten
+  if (lower === "k" || lower === "kindergarten") {
+    return "K";
+  }
+
+  // Extract number from grade level (e.g., "2nd grade" → "2", "3rd Grade" → "3")
+  const match = lower.match(/(\d+)/);
+  if (match) {
+    return match[1];
+  }
+
+  // Return first character uppercase if nothing else works
+  return gradeLevel.charAt(0).toUpperCase();
+}
+
+/**
+ * Generate the sequence key for tracking
+ */
+function getSequenceKey(subject: string, gradeLevel: string, difficulty: string): string {
+  const normalizedSubject = subject.toLowerCase().replace(/\s+/g, "-");
+  const normalizedGrade = normalizeGradeForIndex(gradeLevel).toLowerCase();
+  const normalizedDifficulty = difficulty.toLowerCase();
+  return `${normalizedSubject}-${normalizedGrade}-${normalizedDifficulty}`;
+}
+
+/**
+ * Generate a system index for a new lesson
+ * Format: "{Subject} {Grade}.{Sequence}"
+ * Example: "Math 1.3"
+ */
+export function generateSystemIndex(subject: string, gradeLevel: string, difficulty: string): string {
+  const data = loadSequenceData();
+  const key = getSequenceKey(subject, gradeLevel, difficulty);
+
+  // Get next sequence number (default to 1 if not exists)
+  const nextSequence = (data.sequences[key] || 0) + 1;
+
+  // Update and save the sequence
+  data.sequences[key] = nextSequence;
+  saveSequenceData(data);
+
+  // Build the system index
+  const grade = normalizeGradeForIndex(gradeLevel);
+  return `${subject} ${grade}.${nextSequence}`;
+}
 
 /**
  * Ensure the lessons directory exists

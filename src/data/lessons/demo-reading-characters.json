@@ -1,0 +1,28 @@
+{
+  "id": "demo-reading-characters",
+  "title": "Understanding Characters",
+  "description": "Analyzing character traits, feelings, and motivations.",
+  "subject": "Reading",
+  "gradeLevel": "3rd Grade",
+  "difficulty": "intermediate",
+  "prompts": [
+    {
+      "id": "q1",
+      "type": "explain",
+      "input": "How did the main character feel at the beginning of the story? What clues tell you this?",
+      "hints": [
+        "Look at what the character says and does.",
+        "How would you feel in that situation?"
+      ]
+    },
+    {
+      "id": "q2",
+      "type": "explain",
+      "input": "How did the character change by the end? What caused this change?",
+      "hints": [
+        "Compare the beginning and end.",
+        "What important events happened?"
+      ]
+    }
+  ]
+}

@@ -21,11 +21,11 @@ import {
   type CoachingInvite,
 } from "../services/api";
 import { useVoice } from "../hooks/useVoice";
+import useVoiceConversation from "../hooks/useVoiceConversation";
 import ModeToggle from "./ModeToggle";
 import { buildCoachIntro, getCoachName } from "../utils/coachIntro";
 
 type SessionMode = "voice" | "type";
-type VoiceState = "idle" | "speaking" | "listening" | "processing";
 
 interface AskCoachDrawerProps {
   isOpen: boolean;
@@ -64,8 +64,8 @@ export default function AskCoachDrawer({
   const [sessionEnded, setSessionEnded] = useState(false);
   const [sessionStarted, setSessionStarted] = useState(false);
 
-  // Topics for the session
-  const [topics] = useState<string[]>(initialTopics);
+  // Topics for the session - use prop directly since it won't change during session
+  const topics = initialTopics;
 
   // Session persistence state
   const [sessionStartedAt, setSessionStartedAt] = useState<string | null>(null);
@@ -73,22 +73,29 @@ export default function AskCoachDrawer({
   const sessionSavedRef = useRef(false);
 
   // Voice mode state
-  const [voiceState, setVoiceState] = useState<VoiceState>("idle");
   const isProcessingRef = useRef(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const {
     isRecording,
-    isTranscribing,
-    isSpeaking,
     voiceAvailable,
-    recordingDuration,
     startRecording,
     stopRecording,
     speak,
+    speakStream,
     stopSpeaking,
     cancelRecording,
   } = useVoice();
+
+  // Voice conversation hook — handles Web Speech API + silence detection for voice mode
+  const handleSendMessageRef = useRef<(msg: string) => void>(() => {});
+  const voiceConv = useVoiceConversation({
+    speak: speakStream || speak,
+    stopSpeaking,
+    voiceAvailable,
+    onTurnEnd: (transcript) => handleSendMessageRef.current(transcript),
+    onNoSpeechLimit: () => handleModeToggle("type"),
+  });
 
   // Handle ESC key to close
   useEffect(() => {
@@ -158,9 +165,7 @@ export default function AskCoachDrawer({
   // Handle cleanup when drawer closes
   const handleEndSession = useCallback(() => {
     // Stop any ongoing voice activity
-    if (isSpeaking) {
-      stopSpeaking();
-    }
+    voiceConv.cancel();
     if (isRecording) {
       cancelRecording();
     }
@@ -187,9 +192,8 @@ export default function AskCoachDrawer({
 
     onClose();
   }, [
-    isSpeaking,
     isRecording,
-    stopSpeaking,
+    voiceConv.cancel,
     cancelRecording,
     sessionStartedAt,
     messagesWithTimestamps,
@@ -199,14 +203,6 @@ export default function AskCoachDrawer({
     mode,
     onClose,
   ]);
-
-  // Update voice state based on hook states
-  useEffect(() => {
-    if (isSpeaking) setVoiceState("speaking");
-    else if (isRecording) setVoiceState("listening");
-    else if (isTranscribing) setVoiceState("processing");
-    else if (!isProcessingRef.current) setVoiceState("idle");
-  }, [isSpeaking, isRecording, isTranscribing]);
 
   // Scroll to bottom when conversation updates
   useEffect(() => {
@@ -252,11 +248,23 @@ export default function AskCoachDrawer({
       setSessionEnded(false);
       setSessionStartedAt(null);
       sessionSavedRef.current = false;
-      setVoiceState("idle");
       setMessage("");
       isProcessingRef.current = false;
     }
   }, [isOpen, initialMode]);
+
+  // Auto-start session when student data loads (no pre-session screen)
+  const hasAutoStarted = useRef(false);
+  useEffect(() => {
+    if (isOpen && student && !loading && !sessionStarted && !hasAutoStarted.current) {
+      hasAutoStarted.current = true;
+      handleStartSession();
+    }
+    // Reset auto-start flag when drawer closes
+    if (!isOpen) {
+      hasAutoStarted.current = false;
+    }
+  }, [isOpen, student, loading, sessionStarted]);
 
   // Start session with greeting
   const handleStartSession = async () => {
@@ -294,11 +302,11 @@ export default function AskCoachDrawer({
         sessionType,
       });
     } else if (topics.length === 1) {
-      // Single topic - direct and specific
-      greeting = `Hi ${firstName}! Let's talk about ${topics[0]}. What part would you like help with?`;
+      // Single topic - acknowledge it immediately, feel prepared
+      greeting = `Hi ${firstName}! I see you're working on ${topics[0]}. What would you like help with?`;
     } else if (topics.length > 1) {
       // Multiple topics - acknowledge all, invite them to pick where to start
-      greeting = `Hi ${firstName}! Today we can talk about ${topics.slice(0, -1).join(", ")} and ${topics[topics.length - 1]}. What should we start with?`;
+      greeting = `Hi ${firstName}! I see you picked ${topics.slice(0, -1).join(", ")} and ${topics[topics.length - 1]}. Which one should we start with?`;
     } else {
       // No topics selected - generic opener (edge case)
       greeting = `Hi ${firstName}! I'm here to help you learn. What's on your mind?`;
@@ -308,10 +316,7 @@ export default function AskCoachDrawer({
     setMessagesWithTimestamps([{ role: "coach", message: greeting, timestamp: now }]);
 
     if (mode === "voice" && voiceAvailable) {
-      await speak(greeting);
-      await new Promise((r) => setTimeout(r, 500));
-      setVoiceState("listening");
-      await startRecording();
+      await voiceConv.speakAndListen(greeting);
     }
   };
 
@@ -382,13 +387,12 @@ export default function AskCoachDrawer({
         }
       }
 
-      // In voice mode, speak the response and listen for next input
+      // In voice mode, speak the response and auto-listen for next turn
       if (mode === "voice" && voiceAvailable) {
-        await speak(response.response);
         if (response.shouldContinue) {
-          await new Promise((r) => setTimeout(r, 500));
-          setVoiceState("listening");
-          await startRecording();
+          await voiceConv.speakAndListen(response.response);
+        } else {
+          await voiceConv.speakOnly(response.response);
         }
       }
     } catch (err) {
@@ -421,22 +425,10 @@ export default function AskCoachDrawer({
     }
   };
 
-  // Handle tap to stop recording in voice mode
-  const handleVoiceTap = async () => {
-    if (isRecording) {
-      setVoiceState("processing");
-      isProcessingRef.current = true;
-
-      const result = await stopRecording();
-
-      if (result?.text) {
-        await handleSendMessage(result.text);
-      } else {
-        await new Promise((r) => setTimeout(r, 500));
-        setVoiceState("listening");
-        await startRecording();
-        isProcessingRef.current = false;
-      }
+  // Handle tap to manually end listening in voice mode (secondary to auto-silence)
+  const handleVoiceTap = () => {
+    if (voiceConv.phase === "listening") {
+      voiceConv.stopListening();
     }
   };
 
@@ -444,48 +436,45 @@ export default function AskCoachDrawer({
   const handleModeToggle = (newMode: SessionMode) => {
     if (newMode === mode) return;
 
-    if (newMode === "type" && isRecording) {
-      cancelRecording();
+    if (newMode === "type") {
+      voiceConv.cancel();
+      if (isRecording) cancelRecording();
     }
 
     setMode(newMode);
 
     if (newMode === "voice" && sessionStarted && voiceAvailable && !sessionEnded && !isProcessing) {
-      setTimeout(async () => {
-        setVoiceState("listening");
-        await startRecording();
-      }, 300);
+      setTimeout(() => voiceConv.startListening(), 300);
     }
   };
 
-  // Get voice state display info
+  // Keep handleSendMessageRef in sync
+  handleSendMessageRef.current = (msg: string) => handleSendMessage(msg);
+
+  // Get voice state display info based on voiceConv.phase
   const getVoiceStateDisplay = () => {
-    switch (voiceState) {
-      case "speaking":
+    switch (voiceConv.phase) {
+      case "coach_speaking":
         return {
-          icon: "",
           label: "Coach is talking...",
           background: "linear-gradient(135deg, #e3f2fd, #bbdefb)",
           color: "#1565c0",
         };
       case "listening":
         return {
-          icon: "",
-          label: `I'm listening... ${recordingDuration}s`,
+          label: "I'm listening...",
           background: "linear-gradient(135deg, #e8f5e9, #c8e6c9)",
           color: "#2e7d32",
         };
       case "processing":
         return {
-          icon: "",
-          label: isTranscribing ? "Processing your words..." : "Thinking...",
+          label: "Thinking...",
           background: "linear-gradient(135deg, #fff3e0, #ffe0b2)",
           color: "#e65100",
         };
       case "idle":
       default:
         return {
-          icon: "",
           label: sessionEnded ? "Great conversation!" : "What would you like help with?",
           background: "linear-gradient(135deg, #f5f5f5, #eeeeee)",
           color: "#616161",
@@ -565,7 +554,7 @@ export default function AskCoachDrawer({
           }}
         >
           <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-            <span style={{ fontSize: "0.9rem", fontWeight: 600, color: "#667eea" }}>Coach</span>
+            <span style={{ fontSize: "0.9rem", fontWeight: 600, color: "#3d5a80" }}>Coach</span>
             <h2 style={{ margin: 0, fontSize: "1.1rem", fontWeight: 600, color: "#2d3748" }}>
               {coachingInvite ? "Coaching Session" : "Ask Coach"}
             </h2>
@@ -575,7 +564,8 @@ export default function AskCoachDrawer({
               <ModeToggle
                 mode={mode}
                 onToggle={handleModeToggle}
-                disabled={voiceState === "processing" || isProcessing}
+                disabled={voiceConv.phase === "processing" || isProcessing}
+                compact
               />
             )}
             <button
@@ -585,7 +575,7 @@ export default function AskCoachDrawer({
                 background: "none",
                 border: "none",
                 fontSize: "1.25rem",
-                color: "#94a3b8",
+                color: "var(--text-muted)",
                 cursor: "pointer",
                 padding: "4px 8px",
                 lineHeight: 1,
@@ -606,105 +596,17 @@ export default function AskCoachDrawer({
             flexDirection: "column",
           }}
         >
-          {loading ? (
+          {loading || !sessionStarted ? (
+            /* Loading / Starting state - session auto-starts when ready */
             <div style={{ padding: "48px", textAlign: "center" }}>
               <div className="loading-spinner" style={{ margin: "0 auto 16px" }}></div>
-              <p style={{ color: "#666" }}>Loading...</p>
+              <p style={{ color: "var(--text-secondary)" }}>
+                {loading ? "Loading..." : "Starting your coaching session..."}
+              </p>
             </div>
           ) : !student ? (
             <div style={{ padding: "48px", textAlign: "center" }}>
-              <p style={{ color: "#666" }}>Student not found.</p>
-            </div>
-          ) : !sessionStarted ? (
-            /* Pre-session: Start screen */
-            <div style={{ padding: "24px", textAlign: "center" }}>
-              {/* Coaching Invite Banner */}
-              {coachingInvite && (
-                <div
-                  style={{
-                    background: "linear-gradient(135deg, #e8f5e9, #c8e6c9)",
-                    border: "2px solid #4caf50",
-                    borderRadius: "12px",
-                    padding: "16px",
-                    marginBottom: "20px",
-                    textAlign: "left",
-                  }}
-                >
-                  <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "8px" }}>
-                    <span style={{ fontSize: "0.85rem", fontWeight: 600, color: "#166534" }}>Session</span>
-                    <span
-                      style={{
-                        fontSize: "0.7rem",
-                        fontWeight: 600,
-                        color: "#166534",
-                        background: "#fff",
-                        padding: "2px 8px",
-                        borderRadius: "4px",
-                        textTransform: "uppercase",
-                      }}
-                    >
-                      From Your Teacher
-                    </span>
-                  </div>
-                  <h3 style={{ margin: "0 0 4px 0", color: "#1b5e20", fontSize: "1rem" }}>
-                    {coachingInvite.title}
-                  </h3>
-                  <p style={{ margin: 0, color: "#166534", fontSize: "0.85rem" }}>
-                    {coachingInvite.subject}
-                    {coachingInvite.assignmentTitle && ` • ${coachingInvite.assignmentTitle}`}
-                  </p>
-                  {coachingInvite.teacherNote && (
-                    <div
-                      style={{
-                        background: "rgba(255,255,255,0.8)",
-                        padding: "10px",
-                        borderRadius: "6px",
-                        borderLeft: "3px solid #4caf50",
-                        marginTop: "12px",
-                      }}
-                    >
-                      <p style={{ margin: 0, color: "#333", fontStyle: "italic", fontSize: "0.85rem" }}>
-                        "{coachingInvite.teacherNote}"
-                      </p>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              <div style={{ fontSize: "1.2rem", marginBottom: "16px", fontWeight: 600, color: "#667eea" }}>
-                {coachingInvite ? "Session Ready" : mode === "voice" ? "Voice Mode" : "Chat Mode"}
-              </div>
-              <h3 style={{ margin: "0 0 8px 0", color: "#333" }}>
-                {coachingInvite
-                  ? "Ready for your session?"
-                  : topics.length > 0
-                  ? `Let's explore ${topics.join(" and ")}`
-                  : "Ready to chat?"}
-              </h3>
-              <p style={{ color: "#666", marginBottom: "24px", fontSize: "0.9rem" }}>
-                {mode === "voice"
-                  ? "Click start to begin a voice conversation."
-                  : "Click start to begin chatting."}
-              </p>
-
-              {/* Mode toggle before starting */}
-              {voiceAvailable && (
-                <div style={{ marginBottom: "16px" }}>
-                  <ModeToggle mode={mode} onToggle={handleModeToggle} />
-                </div>
-              )}
-
-              <button
-                className="btn btn-primary"
-                onClick={handleStartSession}
-                style={{
-                  padding: "14px 36px",
-                  fontSize: "1.05rem",
-                  background: coachingInvite ? "#166534" : undefined,
-                }}
-              >
-                Start Session
-              </button>
+              <p style={{ color: "var(--text-secondary)" }}>Student not found.</p>
             </div>
           ) : (
             /* Active Session */
@@ -718,20 +620,33 @@ export default function AskCoachDrawer({
                     borderRadius: "12px",
                     background: voiceStateDisplay.background,
                     textAlign: "center",
-                    cursor: voiceState === "listening" ? "pointer" : "default",
+                    cursor: voiceConv.phase === "listening" ? "pointer" : "default",
                     transition: "all 0.3s ease",
                   }}
-                  onClick={voiceState === "listening" ? handleVoiceTap : undefined}
+                  onClick={voiceConv.phase === "listening" ? handleVoiceTap : undefined}
                 >
-                  <div
-                    style={{
-                      fontSize: "2.5rem",
-                      marginBottom: "8px",
-                      animation: voiceState === "listening" ? "pulse 1.5s infinite" : "none",
-                    }}
-                  >
-                    {voiceStateDisplay.icon}
-                  </div>
+                  {/* Mic level bar */}
+                  {voiceConv.phase === "listening" && (
+                    <div
+                      style={{
+                        height: "4px",
+                        borderRadius: "2px",
+                        background: "#c8e6c9",
+                        marginBottom: "12px",
+                        overflow: "hidden",
+                      }}
+                    >
+                      <div
+                        style={{
+                          height: "100%",
+                          width: `${Math.max(voiceConv.micLevel * 100, 5)}%`,
+                          background: "#2e7d32",
+                          borderRadius: "2px",
+                          transition: "width 0.1s ease-out",
+                        }}
+                      />
+                    </div>
+                  )}
                   <p
                     style={{
                       margin: 0,
@@ -742,9 +657,15 @@ export default function AskCoachDrawer({
                   >
                     {voiceStateDisplay.label}
                   </p>
-                  {voiceState === "listening" && (
-                    <p style={{ margin: "8px 0 0 0", fontSize: "0.85rem", color: "#666" }}>
-                      Tap here when done speaking
+                  {/* Live transcript */}
+                  {voiceConv.currentTranscript && (
+                    <p style={{ fontStyle: "italic", color: "#333", marginTop: "8px", fontSize: "0.9rem" }}>
+                      "{voiceConv.currentTranscript}"
+                    </p>
+                  )}
+                  {voiceConv.phase === "listening" && !voiceConv.currentTranscript && (
+                    <p style={{ margin: "8px 0 0 0", fontSize: "0.85rem", color: "var(--text-secondary)" }}>
+                      I'll know when you're done — or tap to send now
                     </p>
                   )}
                 </div>
@@ -780,12 +701,12 @@ export default function AskCoachDrawer({
                         maxWidth: "85%",
                         padding: "12px 16px",
                         borderRadius: msg.role === "student" ? "16px 16px 4px 16px" : "16px 16px 16px 4px",
-                        background: msg.role === "student" ? "#667eea" : "#f5f5f5",
+                        background: msg.role === "student" ? "#3d5a80" : "#f5f5f5",
                         color: msg.role === "student" ? "white" : "#333",
                       }}
                     >
                       {msg.role === "coach" && (
-                        <span style={{ marginRight: "6px", fontWeight: 600, fontSize: "0.8rem", color: "#666" }}>Coach:</span>
+                        <span style={{ marginRight: "6px", fontWeight: 600, fontSize: "0.8rem", color: "var(--text-secondary)" }}>Coach:</span>
                       )}
                       <span style={{ fontSize: "0.95rem", lineHeight: 1.5 }}>{msg.message}</span>
                     </div>
@@ -798,10 +719,10 @@ export default function AskCoachDrawer({
                         padding: "12px 16px",
                         borderRadius: "16px 16px 16px 4px",
                         background: "#f5f5f5",
-                        color: "#999",
+                        color: "var(--text-muted)",
                       }}
                     >
-                      <span style={{ marginRight: "6px", fontWeight: 600, fontSize: "0.8rem", color: "#666" }}>Coach:</span>
+                      <span style={{ marginRight: "6px", fontWeight: 600, fontSize: "0.8rem", color: "var(--text-secondary)" }}>Coach:</span>
                       Thinking...
                     </div>
                   </div>
@@ -898,7 +819,7 @@ export default function AskCoachDrawer({
                   padding: "14px",
                   fontSize: "1rem",
                   fontWeight: 600,
-                  background: "#1a1a2e",
+                  background: "#1e293b",
                   color: "#ffffff",
                   border: "none",
                   borderRadius: "8px",
@@ -909,8 +830,8 @@ export default function AskCoachDrawer({
                   gap: "8px",
                   transition: "background 0.2s",
                 }}
-                onMouseEnter={(e) => (e.currentTarget.style.background = "#2d2d44")}
-                onMouseLeave={(e) => (e.currentTarget.style.background = "#1a1a2e")}
+                onMouseEnter={(e) => (e.currentTarget.style.background = "#334155")}
+                onMouseLeave={(e) => (e.currentTarget.style.background = "#1e293b")}
               >
                 <span>✕</span>
                 End Coach Session
@@ -971,7 +892,7 @@ function TopicContextHeader({ topics, onChangeTopics }: TopicContextHeaderProps)
               flexShrink: 0,
             }}
           >
-            Talking about:
+            Practicing:
           </span>
           {visibleTopics.map((topic, index) => (
             <span
@@ -980,7 +901,7 @@ function TopicContextHeader({ topics, onChangeTopics }: TopicContextHeaderProps)
                 display: "inline-block",
                 padding: "3px 10px",
                 background: "#e0e7ff",
-                color: "#4338ca",
+                color: "#2c4a6e",
                 borderRadius: "12px",
                 fontSize: "0.8rem",
                 fontWeight: 500,
@@ -1030,7 +951,7 @@ function TopicContextHeader({ topics, onChangeTopics }: TopicContextHeaderProps)
             style={{
               padding: "4px 10px",
               background: "transparent",
-              color: "#667eea",
+              color: "#3d5a80",
               border: "none",
               fontSize: "0.75rem",
               fontWeight: 500,

@@ -19,7 +19,29 @@
       ],
       "standards": [
         "ESS2.2"
-      ]
+      ],
+      "scope": {
+        "allowedKeywords": [
+          "sun", "planets", "solar system", "orbit", "gravity", "light",
+          "heat", "warmth", "distance", "temperature", "seasons", "day",
+          "night", "energy", "earth", "mercury", "venus", "mars", "jupiter",
+          "saturn", "uranus", "neptune", "star", "rotation", "revolution"
+        ],
+        "offScopeKeywords": [
+          "photosynthesis steps", "chlorophyll", "calvin cycle", "stomata",
+          "glucose production", "cell membrane", "mitochondria", "atp",
+          "carbon fixation", "light reactions", "thylakoid",
+          "weather patterns", "weather forecast", "cloud formation"
+        ],
+        "scopeAlignedProbes": [
+          "Besides warmth, what does the sun do that keeps planets in orbit?",
+          "How does distance from the sun change what a planet is like?",
+          "What might happen to planets if the sun disappeared?",
+          "Why do some planets end up too hot or too cold?",
+          "Plants need sunlight — how does that show the sun is important for Earth compared to other planets?"
+        ],
+        "topicTags": ["space", "solar system", "sun", "planets"]
+      }
     },
     {
       "id": "q2",
@@ -31,8 +53,30 @@
       ],
       "standards": [
         "ESS3.1"
-      ]
+      ],
+      "scope": {
+        "allowedKeywords": [
+          "earth", "mars", "planets", "water", "atmosphere", "air",
+          "temperature", "red planet", "soil", "rocks", "gravity",
+          "living things", "life", "plants", "animals", "weather",
+          "cold", "hot", "desert", "ice", "moons", "size"
+        ],
+        "offScopeKeywords": [
+          "photosynthesis steps", "chemical formula", "molecular",
+          "advanced physics", "rocket engineering", "quantum",
+          "geological eras", "tectonic plates"
+        ],
+        "scopeAlignedProbes": [
+          "What's one thing about Earth that makes it good for living things?",
+          "If you could visit Mars, what do you think would be different from Earth?",
+          "Why do you think Mars is called the 'red planet'?",
+          "Could plants grow on Mars? Why or why not?",
+          "What would you need to bring if you traveled from Earth to Mars?"
+        ],
+        "topicTags": ["space", "earth", "mars", "planets"]
+      }
     }
   ],
-  "subject": "Science"
+  "subject": "Science",
+  "systemIndex": "Science K.1"
 }

@@ -1,19 +1,21 @@
 /**
  * AssignmentPreviewPanel - Read-only view of assignment content
  *
- * Displays the lesson content (questions and hints) so teachers can
- * review what students are working on while reviewing their work.
+ * Displays the lesson content (questions, hints, and correctness criteria)
+ * so teachers can review what students are working on while reviewing work.
  *
  * Features:
  * - Lesson metadata (title, description, subject, grade, difficulty)
- * - Standards chips
  * - All questions in order
  * - Hints (collapsed by default)
+ * - Correctness Criteria panel (learning objective, success criteria,
+ *   evaluation focus, misconceptions) — visible when question is expanded
  * - Read-only - no editing controls
+ * - Teacher-only: not used by any student-facing page
  */
 
 import { useState } from "react";
-import type { Lesson } from "../services/api";
+import type { Lesson, Prompt, PromptAssessment } from "../services/api";
 
 interface AssignmentPreviewPanelProps {
   lesson: Lesson;
@@ -67,7 +69,7 @@ export default function AssignmentPreviewPanel({ lesson, onClose }: AssignmentPr
                 style={{
                   fontSize: "0.75rem",
                   padding: "3px 8px",
-                  background: "#f3e5f5",
+                  background: "#e8ecf0",
                   color: "#7b1fa2",
                   borderRadius: "4px",
                   fontWeight: 500,
@@ -103,31 +105,11 @@ export default function AssignmentPreviewPanel({ lesson, onClose }: AssignmentPr
 
           {/* Description */}
           {lesson.description && (
-            <p style={{ margin: "8px 0 0 0", fontSize: "0.9rem", color: "#666" }}>
+            <p style={{ margin: "8px 0 0 0", fontSize: "0.9rem", color: "var(--text-secondary)" }}>
               {lesson.description}
             </p>
           )}
 
-          {/* Standards */}
-          {lesson.standards && lesson.standards.length > 0 && (
-            <div style={{ marginTop: "8px", display: "flex", gap: "6px", flexWrap: "wrap" }}>
-              {lesson.standards.map((standard, idx) => (
-                <span
-                  key={idx}
-                  style={{
-                    fontSize: "0.7rem",
-                    padding: "2px 6px",
-                    background: "#fff",
-                    border: "1px solid #ddd",
-                    borderRadius: "4px",
-                    color: "#666",
-                  }}
-                >
-                  {standard}
-                </span>
-              ))}
-            </div>
-          )}
         </div>
 
         {/* Close button */}
@@ -138,18 +120,18 @@ export default function AssignmentPreviewPanel({ lesson, onClose }: AssignmentPr
               background: "none",
               border: "none",
               fontSize: "1.2rem",
-              color: "#999",
+              color: "var(--text-muted)",
               cursor: "pointer",
               padding: "4px 8px",
               lineHeight: 1,
               borderRadius: "4px",
             }}
             onMouseEnter={(e) => {
-              e.currentTarget.style.color = "#666";
+              e.currentTarget.style.color = "var(--text-secondary)";
               e.currentTarget.style.background = "#eee";
             }}
             onMouseLeave={(e) => {
-              e.currentTarget.style.color = "#999";
+              e.currentTarget.style.color = "var(--text-muted)";
               e.currentTarget.style.background = "none";
             }}
             aria-label="Close preview"
@@ -175,36 +157,35 @@ export default function AssignmentPreviewPanel({ lesson, onClose }: AssignmentPr
 // Question Card Component
 // ============================================
 
-interface QuestionCardProps {
-  prompt: {
-    id: string;
-    type: string;
-    input: string;
-    hints: string[];
-    standards?: string[];
-  };
-  index: number;
-}
-
-function QuestionCard({ prompt, index }: QuestionCardProps) {
-  const [showHints, setShowHints] = useState(false);
+function QuestionCard({ prompt, index }: { prompt: Prompt; index: number }) {
+  const [expanded, setExpanded] = useState(false);
 
   return (
     <div
       style={{
         background: "#fff",
         borderRadius: "8px",
-        border: "1px solid #e8e8e8",
+        border: expanded ? "1px solid #c0cfe0" : "1px solid #e8e8e8",
         overflow: "hidden",
+        transition: "border-color 0.15s",
       }}
     >
-      {/* Question Header */}
+      {/* Question Header — clickable to expand */}
       <div
+        onClick={() => setExpanded(!expanded)}
         style={{
           padding: "12px 16px",
           display: "flex",
           alignItems: "flex-start",
           gap: "12px",
+          cursor: "pointer",
+          transition: "background 0.15s",
+        }}
+        onMouseEnter={(e) => {
+          if (!expanded) e.currentTarget.style.background = "#f9fafb";
+        }}
+        onMouseLeave={(e) => {
+          if (!expanded) e.currentTarget.style.background = "transparent";
         }}
       >
         {/* Question number */}
@@ -214,7 +195,7 @@ function QuestionCard({ prompt, index }: QuestionCardProps) {
             width: "24px",
             height: "24px",
             borderRadius: "50%",
-            background: "#667eea",
+            background: "#3d5a80",
             color: "white",
             fontSize: "0.8rem",
             fontWeight: 600,
@@ -248,7 +229,7 @@ function QuestionCard({ prompt, index }: QuestionCardProps) {
                 fontSize: "0.7rem",
                 padding: "2px 6px",
                 background: "#f5f5f5",
-                color: "#888",
+                color: "var(--text-muted)",
                 borderRadius: "4px",
                 textTransform: "capitalize",
               }}
@@ -256,74 +237,250 @@ function QuestionCard({ prompt, index }: QuestionCardProps) {
               {prompt.type}
             </span>
 
-            {/* Question standards */}
-            {prompt.standards?.map((std, idx) => (
-              <span
-                key={idx}
-                style={{
-                  fontSize: "0.7rem",
-                  padding: "2px 6px",
-                  background: "#fff8e1",
-                  color: "#f57c00",
-                  borderRadius: "4px",
-                }}
-              >
-                {std}
-              </span>
-            ))}
-
-            {/* Hints toggle */}
+            {/* Hints count */}
             {prompt.hints.length > 0 && (
-              <button
-                onClick={() => setShowHints(!showHints)}
-                style={{
-                  background: "none",
-                  border: "none",
-                  padding: "2px 6px",
-                  fontSize: "0.75rem",
-                  color: "#667eea",
-                  cursor: "pointer",
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "4px",
-                }}
-              >
-                <span>{showHints ? "▼" : "▶"}</span>
+              <span style={{ fontSize: "0.75rem", color: "#3d5a80" }}>
                 {prompt.hints.length} hint{prompt.hints.length !== 1 ? "s" : ""}
-              </button>
+              </span>
+            )}
+
+            {/* Criteria indicator when collapsed */}
+            {!expanded && prompt.assessment?.learningObjective && (
+              <span style={{
+                fontSize: "0.65rem",
+                padding: "1px 6px",
+                background: "#dcfce7",
+                color: "#16a34a",
+                borderRadius: "3px",
+                fontWeight: 500,
+              }}>
+                criteria
+              </span>
             )}
           </div>
         </div>
-      </div>
 
-      {/* Hints (collapsed by default) */}
-      {showHints && prompt.hints.length > 0 && (
-        <div
+        {/* Expand/collapse chevron */}
+        <span
           style={{
-            padding: "12px 16px",
-            paddingLeft: "52px",
-            background: "#fafafa",
-            borderTop: "1px solid #f0f0f0",
+            color: "#3d5a80",
+            fontSize: "0.8rem",
+            transform: expanded ? "rotate(180deg)" : "rotate(0deg)",
+            transition: "transform 0.2s",
+            flexShrink: 0,
+            marginTop: "4px",
           }}
         >
-          <div style={{ fontSize: "0.75rem", color: "#888", marginBottom: "8px", fontWeight: 500 }}>
-            Hints:
+          ▼
+        </span>
+      </div>
+
+      {/* Expanded content: hints + criteria */}
+      {expanded && (
+        <div style={{ borderTop: "1px solid #f0f0f0" }}>
+          {/* Hints */}
+          {prompt.hints.length > 0 && (
+            <div
+              style={{
+                padding: "12px 16px",
+                paddingLeft: "52px",
+                background: "#fafafa",
+              }}
+            >
+              <div style={{ fontSize: "0.75rem", color: "var(--text-muted)", marginBottom: "8px", fontWeight: 500 }}>
+                Hints:
+              </div>
+              <ol
+                style={{
+                  margin: 0,
+                  paddingLeft: "16px",
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: "4px",
+                }}
+              >
+                {prompt.hints.map((hint, idx) => (
+                  <li key={idx} style={{ fontSize: "0.85rem", color: "var(--text-secondary)" }}>
+                    {hint}
+                  </li>
+                ))}
+              </ol>
+            </div>
+          )}
+
+          {/* Correctness Criteria */}
+          <CorrectnessCriteriaPanel assessment={prompt.assessment} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ============================================
+// Correctness Criteria Panel (read-only, teacher-only)
+// ============================================
+
+function CorrectnessCriteriaPanel({ assessment }: { assessment?: PromptAssessment }) {
+  const [showMisconceptions, setShowMisconceptions] = useState(false);
+
+  const hasCriteria = assessment && (
+    assessment.learningObjective ||
+    (assessment.successCriteria && assessment.successCriteria.length > 0) ||
+    (assessment.evaluationFocus && assessment.evaluationFocus.length > 0)
+  );
+
+  // Graceful fallback for legacy assignments without criteria
+  if (!hasCriteria) {
+    return (
+      <div style={{
+        padding: "10px 16px",
+        paddingLeft: "52px",
+        background: "#f8f9fa",
+        borderTop: "1px solid #f0f0f0",
+      }}>
+        <span style={{ fontSize: "0.8rem", color: "var(--text-muted)", fontStyle: "italic" }}>
+          Criteria not configured for this question
+        </span>
+      </div>
+    );
+  }
+
+  const hasMisconceptions = assessment.misconceptions && assessment.misconceptions.length > 0;
+
+  return (
+    <div style={{
+      padding: "12px 16px",
+      paddingLeft: "52px",
+      background: "#f0f7ff",
+      borderTop: "1px solid #e0ecf5",
+    }}>
+      {/* Section header */}
+      <div style={{
+        fontSize: "0.75rem",
+        fontWeight: 600,
+        color: "#3d5a80",
+        marginBottom: "2px",
+        textTransform: "uppercase",
+        letterSpacing: "0.04em",
+      }}>
+        Correctness Criteria
+      </div>
+      <div style={{ fontSize: "0.7rem", color: "#7a8ea8", marginBottom: "10px" }}>
+        Used for scoring and coach feedback
+      </div>
+
+      {/* Learning Objective */}
+      {assessment.learningObjective && (
+        <div style={{ marginBottom: "10px" }}>
+          <div style={{ fontSize: "0.72rem", fontWeight: 500, color: "#5a7a9e", marginBottom: "3px" }}>
+            Learning Objective
           </div>
-          <ol
+          <p style={{
+            margin: 0,
+            fontSize: "0.85rem",
+            color: "#333",
+            lineHeight: 1.5,
+          }}>
+            {assessment.learningObjective}
+          </p>
+        </div>
+      )}
+
+      {/* Success Criteria */}
+      {assessment.successCriteria && assessment.successCriteria.length > 0 && (
+        <div style={{ marginBottom: "10px" }}>
+          <div style={{ fontSize: "0.72rem", fontWeight: 500, color: "#5a7a9e", marginBottom: "3px" }}>
+            A strong response includes
+          </div>
+          <ul style={{
+            margin: 0,
+            paddingLeft: "16px",
+            display: "flex",
+            flexDirection: "column",
+            gap: "3px",
+          }}>
+            {assessment.successCriteria.map((item, idx) => (
+              <li key={idx} style={{ fontSize: "0.82rem", color: "#444", lineHeight: 1.4 }}>
+                {item}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {/* Evaluation Focus chips */}
+      {assessment.evaluationFocus && assessment.evaluationFocus.length > 0 && (
+        <div style={{ marginBottom: hasMisconceptions ? "10px" : "0" }}>
+          <div style={{ fontSize: "0.72rem", fontWeight: 500, color: "#5a7a9e", marginBottom: "4px" }}>
+            Evaluation Focus
+          </div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "5px" }}>
+            {assessment.evaluationFocus.map((focus) => (
+              <span
+                key={focus}
+                style={{
+                  fontSize: "0.7rem",
+                  padding: "2px 8px",
+                  background: "#e0e7ff",
+                  color: "#3730a3",
+                  borderRadius: "4px",
+                  fontWeight: 500,
+                  textTransform: "capitalize",
+                }}
+              >
+                {focus}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Misconceptions — collapsed by default */}
+      {hasMisconceptions && (
+        <div>
+          <button
+            onClick={() => setShowMisconceptions(!showMisconceptions)}
             style={{
-              margin: 0,
+              background: "none",
+              border: "none",
+              padding: "0",
+              fontSize: "0.75rem",
+              color: "#7a8ea8",
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              gap: "4px",
+              fontWeight: 500,
+            }}
+            onMouseEnter={(e) => { e.currentTarget.style.color = "#3d5a80"; }}
+            onMouseLeave={(e) => { e.currentTarget.style.color = "#7a8ea8"; }}
+          >
+            <span style={{
+              display: "inline-block",
+              transform: showMisconceptions ? "rotate(90deg)" : "rotate(0deg)",
+              transition: "transform 0.15s",
+              fontSize: "0.6rem",
+            }}>
+              ▶
+            </span>
+            Common misconceptions ({assessment.misconceptions!.length})
+          </button>
+
+          {showMisconceptions && (
+            <ul style={{
+              margin: "6px 0 0 0",
               paddingLeft: "16px",
               display: "flex",
               flexDirection: "column",
-              gap: "4px",
-            }}
-          >
-            {prompt.hints.map((hint, idx) => (
-              <li key={idx} style={{ fontSize: "0.85rem", color: "#555" }}>
-                {hint}
-              </li>
-            ))}
-          </ol>
+              gap: "3px",
+            }}>
+              {assessment.misconceptions!.map((item, idx) => (
+                <li key={idx} style={{ fontSize: "0.82rem", color: "#666", lineHeight: 1.4, fontStyle: "italic" }}>
+                  {item}
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
       )}
     </div>
