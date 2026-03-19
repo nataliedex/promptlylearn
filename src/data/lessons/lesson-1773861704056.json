@@ -1,0 +1,38 @@
+{
+  "id": "lesson-1773861704056",
+  "title": "Exploring Ocean Animals",
+  "description": "Students will learn about different ocean animals and their unique characteristics.",
+  "difficulty": "intermediate",
+  "gradeLevel": "2",
+  "prompts": [
+    {
+      "id": "q1",
+      "type": "explain",
+      "input": "Name two ocean animals. Tell one thing about each.",
+      "hints": [
+        "Think about common ocean animals.",
+        "Consider what makes each animal special."
+      ],
+      "blueprintId": "two_examples",
+      "filledSlots": {
+        "category": "ocean animals"
+      }
+    },
+    {
+      "id": "q2",
+      "type": "explain",
+      "input": "Some ocean animals are mammals and some are fish. Name one example of each.",
+      "hints": [
+        "Remember, mammals breathe air and fish breathe water.",
+        "Think of animals you might see in an aquarium or the ocean."
+      ],
+      "blueprintId": "category_example",
+      "filledSlots": {
+        "category": "ocean animals",
+        "type1": "mammals",
+        "type2": "fish"
+      }
+    }
+  ],
+  "subject": "Science"
+}

@@ -1,0 +1,76 @@
+{
+  "id": "lesson-1772813336881",
+  "title": "What Are Planets Made Of?",
+  "description": "2 planets and what they are made of",
+  "difficulty": "intermediate",
+  "gradeLevel": "3",
+  "prompts": [
+    {
+      "id": "q1",
+      "type": "explain",
+      "input": "How would you explain what the Earth and Mars are made of? Why do you think their materials are important?",
+      "hints": [
+        "Think about the different layers of Earth and Mars.",
+        "Consider how these materials help support life or create conditions on each planet."
+      ],
+      "assessment": {
+        "learningObjective": "Explains what Earth and Mars are made of and why those materials are important.",
+        "expectedConcepts": [
+          "Describes that Earth is made of rock and metal.",
+          "States that Mars is made of rock and has some ice.",
+          "Explains why the materials of Earth and Mars are important for life and exploration."
+        ],
+        "requiredExamples": "Mentions at least two materials for Earth and Mars and explains their importance.",
+        "validVocabulary": [
+          "rock",
+          "metal",
+          "ice",
+          "atmosphere",
+          "surface",
+          "core"
+        ],
+        "misconceptions": [
+          "Thinks Earth and Mars are made of the same materials.",
+          "Believes that Mars has no materials at all.",
+          "Considers that the materials of planets do not affect life."
+        ],
+        "scoringLevels": {
+          "strong": "Includes all key concepts with specific examples of materials and their importance.",
+          "developing": "Mentions some materials but misses one key concept or example.",
+          "needsSupport": "Gives incorrect facts about the materials or does not answer the question."
+        },
+        "successCriteria": [
+          "Describes that Earth is made of rock and metal.",
+          "States that Mars is made of rock and has some ice.",
+          "Explains why the materials of Earth and Mars are important for life and exploration.",
+          "Mentions at least two materials for Earth and Mars and explains their importance."
+        ],
+        "evaluationFocus": [
+          "understanding",
+          "clarity"
+        ],
+        "requiredEvidence": {
+          "minEntities": 2,
+          "entityLabel": "planets",
+          "attributeLabel": "materials",
+          "minAttributeTypes": 2,
+          "requirePairing": true
+        },
+        "referenceFacts": {
+          "Earth": [
+            "rock",
+            "metal",
+            "water"
+          ],
+          "Mars": [
+            "rock",
+            "ice",
+            "dust"
+          ]
+        }
+      }
+    }
+  ],
+  "subject": "Science",
+  "systemIndex": "Science 3.1"
+}

@@ -4,6 +4,10 @@ import {
   hasForeignKeyword,
   buildEvidenceSummary,
   formatEvidenceSummary,
+  detectMathStrategy,
+  buildNumbersSummary,
+  buildMathStepSummary,
+  extractPlanetMaterialPairs,
   TranscriptTurn,
 } from "./summarizeTranscript";
 
@@ -413,6 +417,51 @@ describe("summarizeStudentTranscript — foreign keyword filtering", () => {
   });
 });
 
+// ── summarizeStudentTranscript — criteria-based fallback for non-solar-system ─
+
+describe("summarizeStudentTranscript — criteria-based fallback", () => {
+  const coachTurn = (msg: string): TranscriptTurn => ({ role: "coach", message: msg });
+  const studentTurn = (msg: string): TranscriptTurn => ({ role: "student", message: msg });
+
+  it("uses evidence summary for math subtraction lesson", () => {
+    const turns = [
+      coachTurn("How would you subtract 8, 3, and 2?"),
+      studentTurn("First I subtract 3 from 8 and get 5"),
+      coachTurn("What next?"),
+      studentTurn("Then I subtract 2 from 5 and get 3"),
+    ];
+    const criteria = [
+      "Describe how to subtract 8, 3, and 2 step by step.",
+      "Explain that you start with 8 and subtract the other numbers from it.",
+    ];
+    const result = summarizeStudentTranscript(turns, "How would you subtract 8, 3, and 2?", criteria);
+    // Should NOT be the generic fallback
+    expect(result).not.toBe("Some thinking was shared on this topic, making a good start at exploring the key ideas.");
+    expect(result).toMatch(/understanding|exploring/i);
+  });
+
+  it("uses numbers-only summary when math transcript has numbers but no strategy keywords", () => {
+    const turns = [
+      coachTurn("How do you subtract 8, 3, and 2?"),
+      studentTurn("I would take 3 away from 8 first"),
+      coachTurn("Good, then what?"),
+      studentTurn("Then take 2 away from 5"),
+    ];
+    const result = summarizeStudentTranscript(turns, "How do you subtract 8, 3, and 2?");
+    // Numbers present but no strategy keyword → numbers-only summary
+    expect(result).toMatch(/numbers/i);
+  });
+
+  it("still uses topic patterns for solar system content", () => {
+    const turns = [
+      coachTurn("Why is the sun important?"),
+      studentTurn("The sun gives warmth and heat to Earth"),
+    ];
+    const result = summarizeStudentTranscript(turns, "Why is the sun important?");
+    expect(result).toMatch(/warmth/i);
+  });
+});
+
 // ── buildEvidenceSummary ─────────────────────────────────────────────────────
 
 describe("buildEvidenceSummary", () => {
@@ -536,5 +585,514 @@ describe("formatEvidenceSummary", () => {
     expect(result).toMatch(/demonstrated understanding/i);
     // "third concept" should NOT appear (sliced to 2)
     expect(result).not.toMatch(/third concept/i);
+  });
+});
+
+// ── detectMathStrategy ───────────────────────────────────────────────────────
+
+describe("detectMathStrategy", () => {
+  it("detects break-apart with 'break up' and extracts broken number and answer", () => {
+    const result = detectMathStrategy(
+      "I would break up that 25 into a 20 and a 5 so I would do 34 + 20 = 54 and then add the 5 to get 59."
+    );
+    expect(result).not.toBeNull();
+    expect(result!.type).toBe("break-apart");
+    expect(result!.summary).toMatch(/break-apart/i);
+    expect(result!.summary).toMatch(/25/);
+    expect(result!.summary).toMatch(/59/);
+    expect(result!.verified).toBe(false);
+  });
+
+  it("detects break-apart with 'split'", () => {
+    const result = detectMathStrategy("I split 15 into 10 and 5 and then added them to 20 to get 35.");
+    expect(result).not.toBeNull();
+    expect(result!.type).toBe("break-apart");
+    expect(result!.summary).toMatch(/15/);
+    expect(result!.summary).toMatch(/35/);
+  });
+
+  it("detects break-apart with 'tens and ones'", () => {
+    const result = detectMathStrategy("I used the tens and ones to add 47 and 38 to get 85.");
+    expect(result).not.toBeNull();
+    expect(result!.type).toBe("break-apart");
+    expect(result!.summary).toMatch(/85/);
+  });
+
+  it("detects tens-then-ones strategy", () => {
+    const result = detectMathStrategy("I add the tens first, 30 + 40 = 70, then add the ones, 7 + 8 = 15.");
+    expect(result).not.toBeNull();
+    expect(result!.type).toBe("tens-then-ones");
+    expect(result!.summary).toMatch(/tens first/i);
+    expect(result!.summary).toMatch(/15/);
+  });
+
+  it("detects 'tens first' shorthand", () => {
+    const result = detectMathStrategy("I did the tens first. 20 plus 30 is 50 then 4 plus 3 is 7 so 57.");
+    expect(result).not.toBeNull();
+    expect(result!.type).toBe("tens-then-ones");
+  });
+
+  it("detects verification with 'backwards'", () => {
+    const result = detectMathStrategy("I break up 25 into 20 and 5. 34 + 20 is 54, add 5 to get 59. I checked it backwards.");
+    expect(result).not.toBeNull();
+    expect(result!.verified).toBe(true);
+    expect(result!.summary).toMatch(/checked.*subtraction/i);
+  });
+
+  it("detects verification with 'check my answer'", () => {
+    const result = detectMathStrategy("I split 12 into 10 and 2. To check my answer I subtracted.");
+    expect(result).not.toBeNull();
+    expect(result!.verified).toBe(true);
+    expect(result!.summary).toMatch(/checked.*subtraction/i);
+  });
+
+  it("returns null when no numbers present", () => {
+    expect(detectMathStrategy("I think the answer is a lot")).toBeNull();
+  });
+
+  it("returns null when numbers present but no strategy keywords", () => {
+    expect(detectMathStrategy("I got 5 and then 3")).toBeNull();
+  });
+});
+
+// ── buildNumbersSummary ──────────────────────────────────────────────────────
+
+describe("buildNumbersSummary", () => {
+  it("produces summary with answer from 'get' keyword", () => {
+    const result = buildNumbersSummary("I did 34 plus 25 to get 59");
+    expect(result).not.toBeNull();
+    expect(result).toMatch(/59/);
+    expect(result).toMatch(/numbers/i);
+  });
+
+  it("uses last number as answer when no 'get' keyword", () => {
+    const result = buildNumbersSummary("34 plus 25 is 59");
+    expect(result).not.toBeNull();
+    expect(result).toMatch(/59/);
+  });
+
+  it("returns null when fewer than 2 numbers", () => {
+    expect(buildNumbersSummary("The answer is 5")).toBeNull();
+  });
+
+  it("returns null when no numbers", () => {
+    expect(buildNumbersSummary("I think the answer is a lot")).toBeNull();
+  });
+});
+
+// ── summarizeStudentTranscript — math strategy integration ───────────────────
+
+describe("summarizeStudentTranscript — math strategy detection", () => {
+  const coachTurn = (msg: string): TranscriptTurn => ({ role: "coach", message: msg });
+  const studentTurn = (msg: string): TranscriptTurn => ({ role: "student", message: msg });
+
+  it("produces strategy summary for break-apart transcript", () => {
+    const turns = [
+      coachTurn("What is 34 + 25?"),
+      studentTurn("I would break up that 25 into a 20 and a 5 so I would do 34 + 20 = 54 and then add the 5 to get 59"),
+    ];
+    const result = summarizeStudentTranscript(turns, "What is 34 + 25?");
+    expect(result).toMatch(/break-apart/i);
+    expect(result).toMatch(/25/);
+    expect(result).toMatch(/59/);
+    // Should NOT be the generic fallback
+    expect(result).not.toMatch(/some thinking was shared/i);
+    expect(result).not.toMatch(/exchanges/i);
+  });
+
+  it("produces strategy summary for tens-then-ones transcript", () => {
+    const turns = [
+      coachTurn("What is 47 + 38?"),
+      studentTurn("I add the tens first 40 + 30 = 70 then add the ones 7 + 8 = 15 so 85"),
+    ];
+    const result = summarizeStudentTranscript(turns, "What is 47 + 38?");
+    expect(result).toMatch(/tens first/i);
+    expect(result).toMatch(/85/);
+  });
+
+  it("includes verification when student checks backwards", () => {
+    const turns = [
+      coachTurn("What is 34 + 25?"),
+      studentTurn("I break up 25 into 20 and 5. 34 + 20 is 54, add 5 to get 59. I checked it backwards with subtraction."),
+    ];
+    const result = summarizeStudentTranscript(turns, "What is 34 + 25?");
+    expect(result).toMatch(/break-apart/i);
+    expect(result).toMatch(/checked.*subtraction/i);
+  });
+
+  it("produces numbers-only summary when math numbers present but no strategy", () => {
+    const turns = [
+      coachTurn("What is 12 + 7?"),
+      studentTurn("12 and 7 makes 19"),
+    ];
+    const result = summarizeStudentTranscript(turns, "What is 12 + 7?");
+    expect(result).toMatch(/19/);
+    expect(result).toMatch(/numbers/i);
+  });
+
+  it("strategy detection takes priority over evidence-based", () => {
+    const turns = [
+      coachTurn("What is 34 + 25?"),
+      studentTurn("I would break up that 25 into a 20 and a 5 and get 59"),
+    ];
+    const criteria = ["Show addition step by step"];
+    const result = summarizeStudentTranscript(turns, "What is 34 + 25?", criteria);
+    // Strategy should win over evidence-based
+    expect(result).toMatch(/break-apart/i);
+  });
+
+  it("does NOT detect strategy in non-math solar system transcript", () => {
+    const turns = [
+      coachTurn("Why is the sun important?"),
+      studentTurn("The sun gives warmth and heat to all the planets"),
+    ];
+    const result = summarizeStudentTranscript(turns, "Why is the sun important?");
+    // Should use topic-based summary, not strategy
+    expect(result).not.toMatch(/break-apart|tens first|numbers/i);
+    expect(result).toMatch(/warmth|heat/i);
+  });
+});
+
+// ── extractPlanetMaterialPairs ────────────────────────────────────────────────
+
+describe("extractPlanetMaterialPairs", () => {
+  it("extracts Earth + rock from 'Earth is made of rock'", () => {
+    const pairs = extractPlanetMaterialPairs("Earth is made of rock");
+    expect(pairs).toEqual(
+      expect.arrayContaining([{ planet: "Earth", material: "rock" }]),
+    );
+  });
+
+  it("extracts Jupiter + gas from 'Jupiter is a gas giant'", () => {
+    const pairs = extractPlanetMaterialPairs("Jupiter is a gas giant");
+    expect(pairs).toEqual(
+      expect.arrayContaining([{ planet: "Jupiter", material: "gas" }]),
+    );
+  });
+
+  it("extracts multiple planet-material pairs", () => {
+    const pairs = extractPlanetMaterialPairs(
+      "Earth is rocky and Jupiter is made of gas",
+    );
+    expect(pairs.length).toBeGreaterThanOrEqual(2);
+    const planets = pairs.map(p => p.planet);
+    expect(planets).toContain("Earth");
+    expect(planets).toContain("Jupiter");
+  });
+
+  it("returns empty for no planet content", () => {
+    const pairs = extractPlanetMaterialPairs("I don't know what planets are made of");
+    expect(pairs).toHaveLength(0);
+  });
+
+  it("normalizes 'rocky' to 'rock'", () => {
+    const pairs = extractPlanetMaterialPairs("Mars is rocky");
+    expect(pairs).toEqual(
+      expect.arrayContaining([{ planet: "Mars", material: "rock" }]),
+    );
+  });
+
+  it("extracts Neptune + ice", () => {
+    const pairs = extractPlanetMaterialPairs("Neptune is icy and cold");
+    expect(pairs).toEqual(
+      expect.arrayContaining([{ planet: "Neptune", material: "ice" }]),
+    );
+  });
+});
+
+// ── buildEvidenceSummary — planet-material integration ────────────────────────
+
+describe("buildEvidenceSummary — planet-material pairs", () => {
+  const coachTurn = (msg: string): TranscriptTurn => ({ role: "coach", message: msg });
+  const studentTurn = (msg: string): TranscriptTurn => ({ role: "student", message: msg });
+
+  it("includes planet-material pairs when student names Earth and Jupiter", () => {
+    const turns = [
+      coachTurn("Choose two planets and explain what they are made of."),
+      studentTurn("Earth is made of rock and Jupiter is made of gas"),
+    ];
+    const criteria = ["Name two different planets and explain what each is made of"];
+    const bullets = buildEvidenceSummary(turns, criteria);
+
+    expect(bullets[0].status).toBe("met");
+    expect(bullets[0].evidence).toContain("Earth");
+    expect(bullets[0].evidence).toContain("Jupiter");
+  });
+
+  it("marks partial when only one planet-material pair", () => {
+    const turns = [
+      coachTurn("Choose two planets and explain what they are made of."),
+      studentTurn("Earth is rocky"),
+    ];
+    const criteria = ["Name two different planets and explain what each is made of"];
+    const bullets = buildEvidenceSummary(turns, criteria);
+
+    expect(bullets[0].status).toBe("partial");
+    expect(bullets[0].evidence).toContain("Earth");
+  });
+
+  it("formats evidence summary with planet names", () => {
+    const turns = [
+      coachTurn("Choose two planets and explain what they are made of."),
+      studentTurn("Earth is made of rock and Jupiter is made of gas"),
+    ];
+    const criteria = ["Name two different planets and explain what each is made of"];
+    const bullets = buildEvidenceSummary(turns, criteria);
+    const summary = formatEvidenceSummary(bullets);
+
+    expect(summary).toContain("Earth");
+    expect(summary).toContain("Jupiter");
+  });
+});
+
+// ── buildEvidenceSummary — all meta/confusion ────────────────────────────────
+
+describe("buildEvidenceSummary — all meta/confusion", () => {
+  const coachTurn = (msg: string): TranscriptTurn => ({ role: "coach", message: msg });
+  const studentTurn = (msg: string): TranscriptTurn => ({ role: "student", message: msg });
+
+  it("returns honest summary when all student speech is meta-confusion", () => {
+    const turns = [
+      coachTurn("Choose two planets and explain what they are made of."),
+      studentTurn("What do you mean?"),
+      studentTurn("I'm confused"),
+      studentTurn("Can you repeat that?"),
+    ];
+    const criteria = ["Name two different planets"];
+    const bullets = buildEvidenceSummary(turns, criteria);
+
+    expect(bullets[0].status).toBe("not_addressed");
+    expect(bullets[0].evidence).toMatch(/confusion/i);
+
+    const summary = formatEvidenceSummary(bullets);
+    expect(summary).toMatch(/confusion/i);
+  });
+
+  it("does NOT mark as confusion when real content exists", () => {
+    const turns = [
+      coachTurn("Choose two planets and explain what they are made of."),
+      studentTurn("What do you mean?"),
+      studentTurn("Earth is made of rock and Jupiter is gas"),
+    ];
+    const criteria = ["Name two different planets and explain materials"];
+    const bullets = buildEvidenceSummary(turns, criteria);
+
+    // Should find evidence, not be marked as all-meta
+    expect(bullets[0].status).not.toBe("not_addressed");
+  });
+});
+
+// ── buildMathStepSummary ──────────────────────────────────────────────────
+
+describe("buildMathStepSummary", () => {
+  it("extracts single equation", () => {
+    const result = buildMathStepSummary("1 + 4 = 5");
+    expect(result).toBeTruthy();
+    expect(result).toContain("1 + 4 = 5");
+  });
+
+  it("extracts multiple equations with final answer", () => {
+    const result = buildMathStepSummary("1 + 4 = 5 and then 10 + 10 = 20 and the answer is 25");
+    expect(result).toBeTruthy();
+    expect(result).toContain("1 + 4 = 5");
+    expect(result).toContain("10 + 10 = 20");
+    expect(result).toContain("25");
+  });
+
+  it("normalizes number words: 'five' → 5 in equations", () => {
+    // "one plus four equals five" should be detected as "1 + 4 = 5" after normalization
+    const result = buildMathStepSummary("I got five because one + four = five");
+    expect(result).toBeTruthy();
+    expect(result).toContain("1 + 4 = 5");
+  });
+
+  it("returns null when no equations present", () => {
+    expect(buildMathStepSummary("I think it's a big number")).toBeNull();
+  });
+
+  it("returns null for pure filler", () => {
+    expect(buildMathStepSummary("um well like I guess")).toBeNull();
+  });
+});
+
+// ── Evidence-based summary for completed math explanation ──────────────────
+
+describe("summarizeStudentTranscript — math step evidence", () => {
+  it("produces evidence-based summary instead of generic for 'five'", () => {
+    const turns: TranscriptTurn[] = [
+      { role: "student", message: "25" },
+      { role: "coach", message: "What do you get when you add 1 and 4?" },
+      { role: "student", message: "1 + 4 = 5" },
+      { role: "coach", message: "What do you get when you add 10 and 10?" },
+      { role: "student", message: "10 + 10 = 20 and 20 + 5 = 25" },
+    ];
+    const result = summarizeStudentTranscript(turns, "Solve 11 + 14. Tell how you got your answer.");
+    // Should NOT be generic
+    expect(result).not.toContain("initial thinking");
+    expect(result).not.toContain("initial thoughts");
+    // Should contain concrete evidence
+    expect(result).toMatch(/1\s*\+\s*4\s*=\s*5|10\s*\+\s*10\s*=\s*20|25/);
+  });
+
+  it("does not produce generic text for partial math explanation", () => {
+    const turns: TranscriptTurn[] = [
+      { role: "student", message: "25" },
+      { role: "coach", message: "How did you get that?" },
+      { role: "student", message: "1 + 4 = 5" },
+    ];
+    const result = summarizeStudentTranscript(turns, "Solve 11 + 14. Tell how you got your answer.");
+    expect(result).not.toContain("initial thinking");
+    expect(result).toMatch(/1\s*\+\s*4\s*=\s*5|25/);
+  });
+});
+
+// ── formatEvidenceSummary with math step fallback ────────────────────────────
+
+describe("formatEvidenceSummary — math step fallback", () => {
+  const mathCriteria = [
+    "States that 1 + 4 = 5",
+    "States that 10 + 10 = 20",
+    "States that the final answer is 25",
+  ];
+
+  it("uses math step evidence when all criteria are not_addressed", () => {
+    // Criteria keyword matching fails because extractContentWords strips numbers.
+    // But the allStudentText contains equations that buildMathStepSummary can extract.
+    const bullets = mathCriteria.map(c => ({
+      criterion: c,
+      status: "not_addressed" as const,
+    }));
+    const result = formatEvidenceSummary(bullets, "25 and then 1 + 4 = 5 and 10 + 10 = 20");
+    expect(result).not.toContain("initial thinking");
+    expect(result).toMatch(/1\s*\+\s*4\s*=\s*5/);
+    expect(result).toMatch(/10\s*\+\s*10\s*=\s*20/);
+  });
+
+  it("still uses generic fallback when no equations present", () => {
+    const bullets = mathCriteria.map(c => ({
+      criterion: c,
+      status: "not_addressed" as const,
+    }));
+    const result = formatEvidenceSummary(bullets, "I like pizza");
+    expect(result).toContain("initial thinking");
+  });
+
+  it("backward compatible: works without allStudentText", () => {
+    const bullets = mathCriteria.map(c => ({
+      criterion: c,
+      status: "not_addressed" as const,
+    }));
+    const result = formatEvidenceSummary(bullets);
+    expect(result).toContain("initial thinking");
+  });
+});
+
+// ── Completed explanation produces evidence-based summary ────────────────────
+
+describe("completed explanation summary", () => {
+  it("ones-then-tens produces concrete evidence", () => {
+    const text = "25 1 + 4 = 5 10 + 10 = 20 20 + 5 = 25";
+    const result = buildMathStepSummary(text);
+    expect(result).toBeTruthy();
+    expect(result).toContain("1 + 4 = 5");
+    expect(result).toContain("10 + 10 = 20");
+    expect(result).toContain("25");
+    expect(result).not.toContain("initial thinking");
+  });
+
+  it("tens-then-ones produces concrete evidence", () => {
+    const text = "25 10 + 10 = 20 1 + 4 = 5 20 + 5 = 25";
+    const result = buildMathStepSummary(text);
+    expect(result).toBeTruthy();
+    expect(result).toContain("10 + 10 = 20");
+    expect(result).toContain("1 + 4 = 5");
+  });
+
+  it("partial ones-only produces concrete evidence with equation", () => {
+    const text = "25 1 + 4 = 5";
+    const result = buildMathStepSummary(text);
+    expect(result).toBeTruthy();
+    expect(result).toContain("1 + 4 = 5");
+  });
+
+  it("partial tens-only produces concrete evidence with equation", () => {
+    const text = "25 10 + 10 = 20";
+    const result = buildMathStepSummary(text);
+    expect(result).toBeTruthy();
+    expect(result).toContain("10 + 10 = 20");
+  });
+
+  it("PART 5: aggregates BOTH ones and tens equations across turns", () => {
+    // Student says "1 + 4 = 5" in one turn and "10 + 10 = 20" in another
+    const allStudentText = "five 1 + 4 = 5 the ones are 5 10 + 10 = 20 that's 25";
+    const result = buildMathStepSummary(allStudentText);
+    expect(result).toBeTruthy();
+    expect(result).toContain("1 + 4 = 5");
+    expect(result).toContain("10 + 10 = 20");
+  });
+
+  it("aggregates equations from separate turn concatenation", () => {
+    // Simulates joining two turns: "1 + 4 = 5" and "10 + 10 = 20"
+    const allStudentText = "1 + 4 = 5 10 + 10 = 20";
+    const result = buildMathStepSummary(allStudentText);
+    expect(result).toBeTruthy();
+    expect(result).toContain("1 + 4 = 5");
+    expect(result).toContain("10 + 10 = 20");
+  });
+
+  // ========================================================================
+  // Summary accuracy regression tests (Request M)
+  // ========================================================================
+
+  it("Case A: '25' then '1 + 4 is 5 and 10 + 10 is 20' → summary includes both steps + 25", () => {
+    // Student says "25" on turn 1, then explains both steps on turn 2
+    const allStudentText = "25 1 + 4 = 5 and 10 + 10 = 20";
+    const result = buildMathStepSummary(allStudentText);
+    expect(result).toBeTruthy();
+    expect(result).toContain("1 + 4 = 5");
+    expect(result).toContain("10 + 10 = 20");
+    // Should NOT say "to reach 5" — the final answer is 25
+    expect(result).not.toMatch(/to reach 5[^0-9]/);
+  });
+
+  it("Case B: wrong answer '21' then corrections → summary ends with 25, not 5", () => {
+    // Student starts wrong then self-corrects
+    const allStudentText = "21 1 + 4 = 5 10 + 10 = 20 the answer should be 25";
+    const result = buildMathStepSummary(allStudentText);
+    expect(result).toBeTruthy();
+    expect(result).toContain("1 + 4 = 5");
+    expect(result).toContain("10 + 10 = 20");
+    // Must use 25 as final answer, not 5
+    expect(result).toContain("25");
+    expect(result).not.toMatch(/to reach 5[^0-9]/);
+  });
+
+  it("deduplicates repeated '1 + 4 = 5' across turns", () => {
+    // Student says the same equation in multiple turns
+    const allStudentText = "1 + 4 = 5 and then 1 + 4 = 5 also 10 + 10 = 20";
+    const result = buildMathStepSummary(allStudentText);
+    expect(result).toBeTruthy();
+    // "1 + 4 = 5" should appear exactly once in the summary
+    const matches = result!.match(/1 \+ 4 = 5/g);
+    expect(matches).toHaveLength(1);
+    expect(result).toContain("10 + 10 = 20");
+  });
+
+  it("Case C: direct full explanation on first turn → correct summary", () => {
+    const allStudentText = "1 + 4 = 5 10 + 10 = 20 the answer is 25";
+    const result = buildMathStepSummary(allStudentText);
+    expect(result).toBeTruthy();
+    expect(result).toContain("1 + 4 = 5");
+    expect(result).toContain("10 + 10 = 20");
+    expect(result).toContain("25");
+  });
+
+  it("final answer comes from explicit 'the answer is' statement, not sub-step result", () => {
+    // Make sure "the answer is 36" trumps sub-step result "6"
+    const allStudentText = "4 + 2 = 6 20 + 10 = 30 the answer is 36";
+    const result = buildMathStepSummary(allStudentText);
+    expect(result).toBeTruthy();
+    expect(result).toContain("36");
+    expect(result).not.toMatch(/to reach 6[^0-9]/);
   });
 });

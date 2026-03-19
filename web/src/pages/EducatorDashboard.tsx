@@ -131,6 +131,7 @@ export default function EducatorDashboard() {
   const [coachingInvites, setCoachingInvites] = useState<CoachingInvite[]>([]);
   const [lessonMetadata, setLessonMetadata] = useState<Map<string, { subject?: string; gradeLevel?: string; difficulty?: string }>>(new Map());
   const [teacherProfile, setTeacherProfile] = useState<TeacherProfile | null>(null);
+  const [classStudentIds, setClassStudentIds] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -281,7 +282,7 @@ export default function EducatorDashboard() {
         type: "lesson",
         id: l.id,
         primary: l.title,
-        secondary: [l.subject, l.gradeLevel, l.difficulty].filter(Boolean).join(" · "),
+        secondary: [l.subject, l.gradeLevel].filter(Boolean).join(" · "),
         route: `/educator/lesson/${l.id}/edit`,
       }));
     results.push(...lessonMatches);
@@ -466,6 +467,23 @@ export default function EducatorDashboard() {
       setUnassignedLessons(unassignedData);
       setLessonDrafts(draftsData.drafts);
 
+      // Build class student IDs set — union of all class rosters
+      // This is the authoritative filter for all student-related dashboard data
+      const classStudentIdSet = new Set<string>();
+      await Promise.all(
+        classesData.map(async (cls) => {
+          try {
+            const fullClass = await getClass(cls.id);
+            for (const s of fullClass.students) {
+              classStudentIdSet.add(s.id);
+            }
+          } catch {
+            // Class details unavailable — skip
+          }
+        })
+      );
+      setClassStudentIds(classStudentIdSet);
+
       // Build lesson metadata map (subject, gradeLevel, difficulty)
       const metadataMap = new Map<string, { subject?: string; gradeLevel?: string; difficulty?: string }>();
       allLessonsData.forEach(lesson => {
@@ -496,10 +514,13 @@ export default function EducatorDashboard() {
 
       setAssignmentClassMap(classMap);
 
-      // Load coaching insights for all students
+      // Load coaching insights only for students in class rosters
+      const classStudentsData = classStudentIdSet.size > 0
+        ? studentsData.filter((s: Student) => classStudentIdSet.has(s.id))
+        : studentsData;
       const coachingActivities: StudentCoachingActivity[] = [];
       await Promise.all(
-        studentsData.map(async (student: Student) => {
+        classStudentsData.map(async (student: Student) => {
           try {
             const insight = await getStudentCoachingInsights(student.id);
             if (insight.totalCoachRequests > 0) {
@@ -852,8 +873,9 @@ export default function EducatorDashboard() {
   const { active, resolved, archivedCount } = dashboardData;
 
   // Use attention state (single source of truth) for students needing attention
-  // This is derived from recommendations with status "active"
-  const studentsNeedingAttention: StudentAttentionStatus[] = attentionState?.studentsNeedingAttention || [];
+  // Scoped to class roster only — filter out students not in any class
+  const studentsNeedingAttention: StudentAttentionStatus[] = (attentionState?.studentsNeedingAttention || [])
+    .filter(s => classStudentIds.size === 0 || classStudentIds.has(s.studentId));
 
   // Group assignments by class
   const groupAssignmentsByClass = (assignments: ComputedAssignmentState[]): ClassAssignmentGroup[] => {
@@ -923,15 +945,18 @@ export default function EducatorDashboard() {
         const assignmentSummary = attentionState?.assignmentSummaries.find(
           (s) => s.assignmentId === assignment.assignmentId
         );
-        const attentionCount = assignmentSummary?.needingAttentionCount || assignment.studentsNeedingSupport;
+        const attentionCount = assignmentSummary?.needingAttentionCount ?? assignment.studentsNeedingSupport;
 
         // Get open todo count for this assignment
         const openTodosForAssignment = teacherTodos.filter(
           (t) => t.assignmentId === assignment.assignmentId && t.status === "open"
         ).length;
 
-        // Check if all completed submissions have been reviewed
-        const completedStudents = assignment.studentStatuses.filter(s => s.isComplete);
+        // Check if all completed submissions have been reviewed (class-scoped)
+        const scopedStatuses = classStudentIds.size > 0
+          ? assignment.studentStatuses.filter(s => classStudentIds.has(s.studentId))
+          : assignment.studentStatuses;
+        const completedStudents = scopedStatuses.filter(s => s.isComplete);
         const hasCompletedSubmissions = completedStudents.length > 0;
         const allCompletedReviewed = hasCompletedSubmissions &&
           completedStudents.every(s => s.hasTeacherNote);
@@ -956,18 +981,26 @@ export default function EducatorDashboard() {
         };
 
         // Determine priority bucket
-        const hasActivity = assignment.completedCount > 0 || assignment.inProgressCount > 0;
-        const hasAttention = attentionCount > 0 || openTodosForAssignment > 0;
+        const hasCompletedWork = assignment.completedCount > 0;
+        const hasStartedWork = assignment.inProgressCount > 0;
+        // Student-based attention only counts when there are completed submissions;
+        // teacher todos always count (they represent explicit teacher intent)
+        const hasStudentAttention = attentionCount > 0 && hasCompletedWork;
+        const hasAttention = hasStudentAttention || openTodosForAssignment > 0;
 
         if (hasAttention) {
           prioritizedItem.priority = "needs-attention";
           needsAttention.push(prioritizedItem);
-        } else if (!hasActivity) {
-          // No submissions yet
+        } else if (!hasCompletedWork && !hasStartedWork) {
+          // No activity at all
           prioritizedItem.priority = "awaiting-submissions";
           awaitingSubmissions.push(prioritizedItem);
+        } else if (!hasCompletedWork && hasStartedWork) {
+          // Students have started but none have submitted — in progress
+          prioritizedItem.priority = "in-progress";
+          inProgress.push(prioritizedItem);
         } else if (!allCompletedReviewed || !assignment.allFlaggedReviewed) {
-          // Has submissions but not all reviewed, OR has outstanding flagged items
+          // Has completed submissions but not all reviewed
           prioritizedItem.priority = "in-progress";
           inProgress.push(prioritizedItem);
         } else {
@@ -1510,174 +1543,776 @@ export default function EducatorDashboard() {
         </div>
       )}
 
-      <div className="header">
-        {/* Row 1: Primary Header - Title + Actions */}
-        <div style={{ marginBottom: "16px" }}>
-          <h1>Your Teaching Hub</h1>
-          <p>Student progress, patterns, and recommended actions</p>
+      {/* ============================================ */}
+      {/* ROW 1: TOP SUMMARY STRIP                     */}
+      {/* ============================================ */}
+      {(() => {
+        // Derive summary counts from existing data
+        const attentionStudentCount = studentsNeedingAttention.length > 0
+          ? new Set(studentsNeedingAttention.map(s => s.studentId)).size
+          : 0;
+
+        // Helper: filter studentStatuses to class roster
+        const scopeStatuses = (statuses: typeof active[0]["studentStatuses"]) =>
+          classStudentIds.size === 0 ? statuses : statuses.filter(s => classStudentIds.has(s.studentId));
+
+        // Review queue: completed submissions without a teacher note (class-scoped)
+        const allActive = [...active, ...resolved];
+        const unreviewedCount = allActive.reduce((sum, a) => {
+          return sum + scopeStatuses(a.studentStatuses).filter(s => s.isComplete && !s.hasTeacherNote).length;
+        }, 0);
+
+        // Overdue: assignments with overdue active reason or class-scoped incomplete + needs-support
+        const overdueCount = active.filter(a =>
+          a.activeReasons?.includes("has_overdue" as any) ||
+          scopeStatuses(a.studentStatuses).some(s => !s.isComplete && s.needsSupport)
+        ).length;
+
+        // In progress: assignments with at least one class student working but not all complete
+        const inProgressCount = active.filter(a => {
+          const scoped = scopeStatuses(a.studentStatuses);
+          const completedCount = scoped.filter(s => s.isComplete).length;
+          const inProgCount = scoped.filter(s => !s.isComplete).length;
+          return inProgCount > 0 || (completedCount > 0 && completedCount < scoped.length);
+        }).length;
+
+        const summaryCards = [
+          {
+            label: "Needs attention",
+            count: attentionStudentCount,
+            color: attentionStudentCount > 0 ? "#dc2626" : "#6b7280",
+            bg: attentionStudentCount > 0 ? "#fef2f2" : "#f9fafb",
+            border: attentionStudentCount > 0 ? "#fca5a5" : "#e5e7eb",
+            icon: (
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+                <line x1="12" y1="9" x2="12" y2="13" /><line x1="12" y1="17" x2="12.01" y2="17" />
+              </svg>
+            ),
+            onClick: () => document.getElementById("needs-attention-section")?.scrollIntoView({ behavior: "smooth" }),
+          },
+          {
+            label: "Needs review",
+            count: unreviewedCount,
+            color: unreviewedCount > 0 ? "#d97706" : "#6b7280",
+            bg: unreviewedCount > 0 ? "#fffbeb" : "#f9fafb",
+            border: unreviewedCount > 0 ? "#fcd34d" : "#e5e7eb",
+            icon: (
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                <polyline points="14 2 14 8 20 8" />
+                <line x1="16" y1="13" x2="8" y2="13" /><line x1="16" y1="17" x2="8" y2="17" />
+              </svg>
+            ),
+            onClick: () => document.getElementById("review-queue-section")?.scrollIntoView({ behavior: "smooth" }),
+          },
+          {
+            label: "Overdue",
+            count: overdueCount,
+            color: overdueCount > 0 ? "#ea580c" : "#6b7280",
+            bg: overdueCount > 0 ? "#fff7ed" : "#f9fafb",
+            border: overdueCount > 0 ? "#fdba74" : "#e5e7eb",
+            icon: (
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                <circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" />
+              </svg>
+            ),
+            onClick: () => {
+              setAssignmentFilters({ ...assignmentFilters });
+              setOpenDrawer("assignments");
+            },
+          },
+          {
+            label: "In progress",
+            count: inProgressCount,
+            color: inProgressCount > 0 ? "#2563eb" : "#6b7280",
+            bg: inProgressCount > 0 ? "#eff6ff" : "#f9fafb",
+            border: inProgressCount > 0 ? "#93c5fd" : "#e5e7eb",
+            icon: (
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                <path d="M12 2v4m0 12v4M4.93 4.93l2.83 2.83m8.48 8.48l2.83 2.83M2 12h4m12 0h4M4.93 19.07l2.83-2.83m8.48-8.48l2.83-2.83" />
+              </svg>
+            ),
+            onClick: () => {
+              setAssignmentFilters({ ...assignmentFilters });
+              setOpenDrawer("assignments");
+            },
+          },
+        ];
+
+        return (
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "12px", marginBottom: "16px" }}>
+            {summaryCards.map((card) => (
+              <button
+                key={card.label}
+                onClick={card.onClick}
+                style={{
+                  padding: "16px 18px",
+                  background: card.bg,
+                  border: `1px solid ${card.border}`,
+                  borderRadius: "10px",
+                  cursor: "pointer",
+                  textAlign: "left",
+                  transition: "transform 0.15s, box-shadow 0.15s",
+                  display: "flex",
+                  alignItems: "flex-start",
+                  gap: "12px",
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.transform = "translateY(-2px)";
+                  e.currentTarget.style.boxShadow = "0 4px 12px rgba(0,0,0,0.08)";
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.transform = "translateY(0)";
+                  e.currentTarget.style.boxShadow = "none";
+                }}
+              >
+                <span style={{ color: card.color, marginTop: "2px", flexShrink: 0, opacity: 0.8 }}>
+                  {card.icon}
+                </span>
+                <div>
+                  <div style={{ fontSize: "1.5rem", fontWeight: 700, color: card.color, lineHeight: 1 }}>
+                    {card.count}
+                  </div>
+                  <div style={{ fontSize: "0.78rem", color: "#6b7280", marginTop: "3px", fontWeight: 500 }}>
+                    {card.label}
+                  </div>
+                </div>
+              </button>
+            ))}
+          </div>
+        );
+      })()}
+
+      {/* ============================================ */}
+      {/* ROW 2: MAIN ACTION AREA                      */}
+      {/* ============================================ */}
+      <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: "16px", marginBottom: "20px" }}>
+
+        {/* LEFT: Needs your attention */}
+        <div id="needs-attention-section" className="card" style={{ padding: "20px 22px" }}>
+          {(() => {
+            // Build attention rows from multiple data sources
+            interface AttentionRow {
+              studentId: string;
+              studentName: string;
+              reason: string;
+              subtext: string;
+              assignmentId?: string;
+              urgency: number; // higher = more urgent
+            }
+
+            const urgentRows: AttentionRow[] = [];
+            const seenStudents = new Set<string>();
+
+            // Source 1: Students needing attention (from attention state API)
+            for (const student of studentsNeedingAttention) {
+              if (seenStudents.has(student.studentId)) continue;
+              seenStudents.add(student.studentId);
+
+              const studentAttentionItems = studentsNeedingAttention.filter(s => s.studentId === student.studentId);
+              const assignmentCount = studentAttentionItems.length;
+
+              let reason = student.attentionReason || "Needs support";
+              if (assignmentCount > 1) {
+                reason += ` + ${assignmentCount - 1} more`;
+              }
+
+              const subjects = studentAttentionItems
+                .map(s => lessonMetadata.get(s.assignmentId)?.subject)
+                .filter(Boolean);
+              const subjectText = subjects.length > 0 ? subjects.slice(0, 2).join(", ") : "";
+
+              urgentRows.push({
+                studentId: student.studentId,
+                studentName: student.studentName,
+                reason,
+                subtext: [subjectText, student.assignmentTitle].filter(Boolean).join(" · "),
+                assignmentId: student.assignmentId,
+                urgency: 10 + assignmentCount,
+              });
+            }
+
+            // Source 2: Support-seeking coaching students
+            for (const activity of coachingActivity.slice(0, 5)) {
+              if (seenStudents.has(activity.studentId)) continue;
+              seenStudents.add(activity.studentId);
+
+              if (activity.insight.intentLabel === "support-seeking") {
+                urgentRows.push({
+                  studentId: activity.studentId,
+                  studentName: activity.studentName,
+                  reason: "Frequently seeking coach help",
+                  subtext: activity.insight.recentTopics.slice(0, 2).join(", "),
+                  urgency: 5,
+                });
+              }
+            }
+
+            urgentRows.sort((a, b) => b.urgency - a.urgency);
+
+            // Build "keep an eye on" rows when no urgent students
+            const buildKeepAnEyeRows = (): { rows: AttentionRow[]; summaryNote?: string } => {
+              const eyeRows: AttentionRow[] = [];
+              const eyeSeen = new Set<string>();
+              const usedReasonTypes = new Set<string>();
+
+              // Compute per-student signals (scoped to class roster)
+              const allAssignments = [...active, ...resolved];
+              const studentOpenCounts = new Map<string, number>();
+              const studentNeedsSupportCounts = new Map<string, number>();
+              const studentTotalCoachCount = new Map<string, number>();
+
+              for (const a of allAssignments) {
+                for (const s of a.studentStatuses) {
+                  // Skip students not in any class roster
+                  if (classStudentIds.size > 0 && !classStudentIds.has(s.studentId)) continue;
+                  if (!s.isComplete) {
+                    studentOpenCounts.set(s.studentId, (studentOpenCounts.get(s.studentId) || 0) + 1);
+                  }
+                  if (s.needsSupport) {
+                    studentNeedsSupportCounts.set(s.studentId, (studentNeedsSupportCounts.get(s.studentId) || 0) + 1);
+                  }
+                }
+              }
+              for (const act of coachingActivity) {
+                // coachingActivity is already class-scoped from loadData
+                studentTotalCoachCount.set(act.studentId, act.insight.totalCoachRequests);
+              }
+
+              // Helper to add a row (max 5, prefer variety)
+              const addRow = (sid: string, reason: string, signalType: string, urgency: number): boolean => {
+                if (eyeSeen.has(sid) || eyeRows.length >= 5) return false;
+                const student = allStudents.find(s => s.id === sid);
+                if (!student) return false;
+                eyeSeen.add(sid);
+                usedReasonTypes.add(signalType);
+                eyeRows.push({
+                  studentId: sid,
+                  studentName: student.preferredName || student.name,
+                  reason,
+                  subtext: "",
+                  urgency,
+                });
+                return true;
+              };
+
+              // Signal 1: Needs support (developing/struggling on completed work)
+              const supportSorted = [...studentNeedsSupportCounts.entries()]
+                .sort((a, b) => b[1] - a[1]);
+              if (supportSorted.length > 0) {
+                const [sid, count] = supportSorted[0];
+                addRow(sid, count > 1 ? `Needs support on ${count} assignments` : "Needs support", "support", 10 + count);
+              }
+
+              // Signal 2: Most open assignments (different student)
+              const openSorted = [...studentOpenCounts.entries()]
+                .filter(([, count]) => count >= 2)
+                .sort((a, b) => b[1] - a[1]);
+              for (const [sid, openCount] of openSorted) {
+                if (eyeRows.length >= 5) break;
+                addRow(sid, `${openCount} assignments still open`, "open", openCount);
+              }
+
+              // Signal 3: Heavy coaching usage (different students)
+              const coachSorted = [...studentTotalCoachCount.entries()]
+                .filter(([, count]) => count >= 3)
+                .sort((a, b) => b[1] - a[1]);
+              for (const [sid, coachCount] of coachSorted) {
+                if (eyeRows.length >= 5) break;
+                addRow(sid, `Used coaching ${coachCount} times`, "coaching", coachCount);
+              }
+
+              // Signal 4: Additional needs-support students
+              for (const [sid, count] of supportSorted.slice(1)) {
+                if (eyeRows.length >= 5) break;
+                addRow(sid, count > 1 ? `Needs support on ${count} assignments` : "Needs support", "support", count);
+              }
+
+              // Summary note for remaining students not shown
+              let summaryNote: string | undefined;
+              const remainingOpen = openSorted.filter(([sid]) => !eyeSeen.has(sid)).length;
+              if (remainingOpen > 0) {
+                summaryNote = `+ ${remainingOpen} more student${remainingOpen !== 1 ? "s" : ""} with multiple assignments open`;
+              }
+              const remainingSupport = supportSorted.filter(([sid]) => !eyeSeen.has(sid)).length;
+              if (remainingSupport > 0 && !summaryNote) {
+                summaryNote = `+ ${remainingSupport} more student${remainingSupport !== 1 ? "s" : ""} could use extra support`;
+              }
+
+              return { rows: eyeRows, summaryNote };
+            };
+
+            const hasUrgent = urgentRows.length > 0;
+            const keepAnEyeResult = hasUrgent ? { rows: [], summaryNote: undefined } : buildKeepAnEyeRows();
+            const displayRows = hasUrgent ? urgentRows : keepAnEyeResult.rows;
+
+            return (
+              <>
+                {/* Section header */}
+                <h3 style={{ margin: "0 0 12px 0", fontSize: "1rem", fontWeight: 600, color: "var(--text-primary)" }}>
+                  {hasUrgent ? "Needs your attention" : displayRows.length > 0 ? "Keep an eye on" : "All clear"}
+                </h3>
+
+                {displayRows.length > 0 ? (
+                  <div style={{ display: "flex", flexDirection: "column", gap: "0" }}>
+                    {displayRows.slice(0, hasUrgent ? 8 : 5).map((row) => (
+                      <div
+                        key={row.studentId}
+                        onClick={() => {
+                          if (row.assignmentId) {
+                            navigate(`/educator/assignment/${row.assignmentId}/student/${row.studentId}`);
+                          } else {
+                            navigate(`/educator/student/${row.studentId}`);
+                          }
+                        }}
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "space-between",
+                          padding: "10px 2px",
+                          cursor: "pointer",
+                          borderBottom: "1px solid #f3f4f6",
+                          transition: "background 0.1s",
+                          borderRadius: "4px",
+                          marginLeft: "-4px",
+                          marginRight: "-4px",
+                          paddingLeft: "6px",
+                          paddingRight: "6px",
+                        }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.background = "#f9fafb";
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.background = "transparent";
+                        }}
+                      >
+                        <div style={{ flex: 1, minWidth: 0, display: "flex", alignItems: "center", gap: "8px" }}>
+                          <span style={{ fontWeight: 600, fontSize: "0.88rem", color: "#111", flexShrink: 0 }}>
+                            {row.studentName}
+                          </span>
+                          <span style={{ color: "#d1d5db", fontSize: "0.75rem" }}>—</span>
+                          <span style={{
+                            fontSize: "0.82rem",
+                            color: hasUrgent ? "#b45309" : "#6b7280",
+                            whiteSpace: "nowrap",
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                          }}>
+                            {row.reason}
+                          </span>
+                        </div>
+                        {row.subtext && (
+                          <span style={{
+                            fontSize: "0.74rem",
+                            color: "#9ca3af",
+                            marginLeft: "8px",
+                            flexShrink: 0,
+                            whiteSpace: "nowrap",
+                          }}>
+                            {row.subtext}
+                          </span>
+                        )}
+                        <span style={{ color: "#d1d5db", marginLeft: "10px", flexShrink: 0, fontSize: "0.85rem" }}>
+                          →
+                        </span>
+                      </div>
+                    ))}
+
+                    {/* Summary note for keep-an-eye-on */}
+                    {!hasUrgent && keepAnEyeResult.summaryNote && (
+                      <div style={{
+                        padding: "8px 2px 0",
+                        fontSize: "0.78rem",
+                        color: "#9ca3af",
+                      }}>
+                        {keepAnEyeResult.summaryNote}
+                      </div>
+                    )}
+
+                    {/* Overflow for urgent list */}
+                    {hasUrgent && urgentRows.length > 8 && (
+                      <div style={{ textAlign: "center", marginTop: "8px" }}>
+                        <button
+                          onClick={() => setOpenDrawer("assignments")}
+                          style={{
+                            padding: "5px 14px",
+                            fontSize: "0.8rem",
+                            background: "transparent",
+                            border: "1px solid #e5e7eb",
+                            borderRadius: "6px",
+                            color: "var(--text-secondary)",
+                            cursor: "pointer",
+                            transition: "background 0.1s",
+                          }}
+                          onMouseEnter={(e) => { e.currentTarget.style.background = "#f9fafb"; }}
+                          onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
+                        >
+                          View all {urgentRows.length} students
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  /* Positive empty state */
+                  <div style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    padding: "28px 20px",
+                  }}>
+                    <div style={{ fontSize: "1rem", fontWeight: 600, color: "#374151", marginBottom: "4px" }}>
+                      All students are on track today
+                    </div>
+                    <div style={{ fontSize: "0.82rem", color: "#9ca3af", marginBottom: "16px" }}>
+                      No immediate action needed.
+                    </div>
+                    <div style={{ display: "flex", gap: "8px" }}>
+                      {[
+                        { label: "Review recent work", onClick: () => setOpenDrawer("assignments") },
+                        { label: "Create lesson", onClick: () => setOpenDrawer("create-lesson") },
+                      ].map((action) => (
+                        <button
+                          key={action.label}
+                          onClick={action.onClick}
+                          style={{
+                            padding: "5px 14px",
+                            fontSize: "0.8rem",
+                            fontWeight: 500,
+                            background: "transparent",
+                            border: "1px solid #d1d5db",
+                            borderRadius: "6px",
+                            color: "#374151",
+                            cursor: "pointer",
+                            transition: "background 0.1s, border-color 0.1s",
+                          }}
+                          onMouseEnter={(e) => {
+                            e.currentTarget.style.background = "#f9fafb";
+                            e.currentTarget.style.borderColor = "#9ca3af";
+                          }}
+                          onMouseLeave={(e) => {
+                            e.currentTarget.style.background = "transparent";
+                            e.currentTarget.style.borderColor = "#d1d5db";
+                          }}
+                        >
+                          {action.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </>
+            );
+          })()}
         </div>
 
-        {/* Row 2: System Status Indicators */}
-        <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
-          {/* To-Dos Pill */}
-          <button
-            onClick={() => setOpenDrawer("todos")}
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: "6px",
-              padding: "6px 12px",
-              background: todoCounts.open > 0 ? "rgba(33,150,243,0.12)" : "rgba(0,0,0,0.04)",
-              border: "1px solid rgba(0,0,0,0.1)",
-              borderRadius: "20px",
-              color: "var(--text-primary)",
-              fontSize: "0.8rem",
-              cursor: "pointer",
-              transition: "all 0.2s",
-            }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.background = "rgba(0,0,0,0.06)";
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.background = todoCounts.open > 0 ? "rgba(33,150,243,0.12)" : "rgba(0,0,0,0.04)";
-            }}
-          >
-            <span>To-Dos</span>
-            <span
-              style={{
-                background: todoCounts.open > 0 ? "var(--status-info)" : "rgba(0,0,0,0.08)",
-                color: todoCounts.open > 0 ? "white" : "var(--text-secondary)",
-                padding: "2px 7px",
-                borderRadius: "10px",
-                fontSize: "0.7rem",
-                fontWeight: 600,
-              }}
-            >
-              {todoCounts.open}
-            </span>
-          </button>
+        {/* RIGHT: Review queue + Quick actions */}
+        <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
 
-          {/* Coach Pill */}
-          <button
-            onClick={() => setOpenDrawer("coach")}
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: "6px",
-              padding: "6px 12px",
-              background: coachingActivity.length > 0 || coachingInvites.some(i => i.status !== "completed") ? "rgba(156,39,176,0.12)" : "rgba(0,0,0,0.04)",
-              border: "1px solid rgba(0,0,0,0.1)",
-              borderRadius: "20px",
-              color: "var(--text-primary)",
-              fontSize: "0.8rem",
-              cursor: "pointer",
-              transition: "all 0.2s",
-            }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.background = "rgba(0,0,0,0.06)";
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.background = coachingActivity.length > 0 || coachingInvites.some(i => i.status !== "completed") ? "rgba(156,39,176,0.12)" : "rgba(0,0,0,0.04)";
-            }}
-          >
-            <span>Coach</span>
-            <span
-              style={{
-                background: coachingActivity.length > 0 || coachingInvites.some(i => i.status !== "completed") ? "var(--accent-secondary)" : "rgba(0,0,0,0.08)",
-                color: coachingActivity.length > 0 || coachingInvites.some(i => i.status !== "completed") ? "white" : "var(--text-secondary)",
-                padding: "2px 7px",
-                borderRadius: "10px",
-                fontSize: "0.7rem",
-                fontWeight: 600,
-              }}
-            >
-              {coachingActivity.length + coachingInvites.filter(i => i.status !== "completed").length}
-            </span>
-          </button>
+          {/* Review queue */}
+          <div id="review-queue-section" className="card" style={{ padding: "18px 20px", flex: 1 }}>
+            <h3 style={{ margin: "0 0 12px 0", fontSize: "1rem", fontWeight: 600, color: "var(--text-primary)" }}>
+              Review queue
+            </h3>
 
-          {/* Assignments Pill */}
-          {(active.length > 0 || resolved.length > 0) && (
-            <button
-              onClick={() => setOpenDrawer("assignments")}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: "6px",
-                padding: "6px 12px",
-                background: prioritizedGroups.needsAttention.length > 0 ? "rgba(239,68,68,0.15)" : "rgba(0,0,0,0.04)",
-                border: "1px solid rgba(0,0,0,0.1)",
-                borderRadius: "20px",
-                color: "var(--text-primary)",
-                fontSize: "0.8rem",
-                cursor: "pointer",
-                transition: "all 0.2s",
-              }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.background = "rgba(0,0,0,0.06)";
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.background = prioritizedGroups.needsAttention.length > 0 ? "rgba(239,68,68,0.15)" : "rgba(0,0,0,0.04)";
-              }}
-            >
-              <span>Assignments</span>
-              <span
-                style={{
-                  background: prioritizedGroups.needsAttention.length > 0 ? "var(--status-danger)" : "rgba(0,0,0,0.08)",
-                  color: prioritizedGroups.needsAttention.length > 0 ? "white" : "var(--text-secondary)",
-                  padding: "2px 7px",
-                  borderRadius: "10px",
-                  fontSize: "0.7rem",
-                  fontWeight: 600,
-                }}
-              >
-                {active.length + resolved.length}
-              </span>
-            </button>
-          )}
+            {(() => {
+              const reviewItems = [...active, ...resolved]
+                .map(a => {
+                  const scoped = classStudentIds.size > 0
+                    ? a.studentStatuses.filter(s => classStudentIds.has(s.studentId))
+                    : a.studentStatuses;
+                  const unreviewed = scoped.filter(s => s.isComplete && !s.hasTeacherNote).length;
+                  return { assignmentId: a.assignmentId, title: a.title, unreviewed };
+                })
+                .filter(item => item.unreviewed > 0)
+                .sort((a, b) => b.unreviewed - a.unreviewed);
 
-          {/* Unassigned Lessons Pill */}
-          {unassignedLessons.length > 0 && (
-            <button
-              onClick={() => setOpenDrawer("unassigned")}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: "6px",
-                padding: "6px 12px",
-                background: "rgba(33,150,243,0.12)",
-                border: "1px solid rgba(0,0,0,0.1)",
-                borderRadius: "20px",
-                color: "var(--text-primary)",
-                fontSize: "0.8rem",
-                cursor: "pointer",
-                transition: "all 0.2s",
-              }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.background = "rgba(0,0,0,0.06)";
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.background = "rgba(33,150,243,0.12)";
-              }}
-            >
-              <span>Unassigned</span>
-              <span
-                style={{
-                  background: "var(--status-info)",
-                  color: "white",
-                  padding: "2px 7px",
-                  borderRadius: "10px",
-                  fontSize: "0.7rem",
-                  fontWeight: 600,
-                }}
-              >
-                {unassignedLessons.length}
-              </span>
-            </button>
-          )}
+              if (reviewItems.length === 0) {
+                return (
+                  <div style={{
+                    padding: "20px 16px",
+                    textAlign: "center",
+                    color: "#9ca3af",
+                    fontSize: "0.85rem",
+                  }}>
+                    All caught up — nothing to review
+                  </div>
+                );
+              }
+
+              return (
+                <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
+                  {reviewItems.slice(0, 6).map((item) => (
+                    <div
+                      key={item.assignmentId}
+                      onClick={() => navigate(`/educator/assignment/${item.assignmentId}`)}
+                      style={{
+                        display: "flex",
+                        justifyContent: "space-between",
+                        alignItems: "center",
+                        padding: "9px 12px",
+                        borderRadius: "7px",
+                        cursor: "pointer",
+                        transition: "background 0.12s",
+                      }}
+                      onMouseEnter={(e) => { e.currentTarget.style.background = "#f9fafb"; }}
+                      onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
+                    >
+                      <span style={{
+                        fontSize: "0.85rem",
+                        color: "#374151",
+                        whiteSpace: "nowrap",
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        flex: 1,
+                        minWidth: 0,
+                      }}>
+                        {item.title}
+                      </span>
+                      <span style={{
+                        fontSize: "0.72rem",
+                        fontWeight: 600,
+                        color: "#92400e",
+                        background: "#fef3c7",
+                        padding: "2px 9px",
+                        borderRadius: "10px",
+                        flexShrink: 0,
+                        marginLeft: "10px",
+                        border: "1px solid #fde68a",
+                      }}>
+                        {item.unreviewed}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              );
+            })()}
+          </div>
+
+          {/* Quick actions */}
+          <div className="card" style={{ padding: "16px 20px" }}>
+            <h3 style={{ margin: "0 0 10px 0", fontSize: "0.9rem", fontWeight: 600, color: "var(--text-primary)" }}>
+              Quick actions
+            </h3>
+            <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+              {[
+                {
+                  label: "View all assignments",
+                  onClick: () => setOpenDrawer("assignments"),
+                  count: active.length + resolved.length,
+                  accent: false,
+                  icon: (
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                      <polyline points="14 2 14 8 20 8" />
+                    </svg>
+                  ),
+                },
+                {
+                  label: "Unassigned work",
+                  onClick: () => setOpenDrawer("unassigned"),
+                  count: unassignedLessons.length,
+                  accent: true,
+                  icon: (
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                      <path d="M12 9v2m0 4h.01M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0z" />
+                    </svg>
+                  ),
+                },
+                {
+                  label: "To-do list",
+                  onClick: () => setOpenDrawer("todos"),
+                  count: todoCounts.open,
+                  accent: false,
+                  icon: (
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                      <polyline points="9 11 12 14 22 4" />
+                      <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />
+                    </svg>
+                  ),
+                },
+                {
+                  label: "Coach activity",
+                  onClick: () => setOpenDrawer("coach"),
+                  count: coachingActivity.length,
+                  accent: false,
+                  icon: (
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                      <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+                    </svg>
+                  ),
+                },
+              ].map((action) => (
+                <button
+                  key={action.label}
+                  onClick={action.onClick}
+                  style={{
+                    padding: "9px 12px",
+                    fontSize: "0.82rem",
+                    fontWeight: 500,
+                    background: "transparent",
+                    border: "1px solid #e5e7eb",
+                    borderRadius: "7px",
+                    color: "#374151",
+                    cursor: "pointer",
+                    textAlign: "left",
+                    transition: "background 0.1s, border-color 0.1s",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "10px",
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.background = "#f9fafb";
+                    e.currentTarget.style.borderColor = "#d1d5db";
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.background = "transparent";
+                    e.currentTarget.style.borderColor = "#e5e7eb";
+                  }}
+                >
+                  <span style={{ color: "#9ca3af", display: "flex", alignItems: "center" }}>{action.icon}</span>
+                  <span style={{ flex: 1 }}>{action.label}</span>
+                  {action.count > 0 ? (
+                    <span style={{
+                      minWidth: "20px",
+                      height: "20px",
+                      padding: "0 6px",
+                      borderRadius: "10px",
+                      fontSize: "0.7rem",
+                      fontWeight: 600,
+                      lineHeight: "20px",
+                      textAlign: "center",
+                      flexShrink: 0,
+                      background: action.accent ? "#fef3c7" : "#f3f4f6",
+                      color: action.accent ? "#92400e" : "#6b7280",
+                    }}>
+                      {action.count}
+                    </span>
+                  ) : (
+                    <span style={{
+                      minWidth: "20px",
+                      height: "20px",
+                      fontSize: "0.7rem",
+                      lineHeight: "20px",
+                      textAlign: "center",
+                      color: "#d1d5db",
+                      flexShrink: 0,
+                    }}>
+                      —
+                    </span>
+                  )}
+                </button>
+              ))}
+            </div>
+          </div>
         </div>
       </div>
 
-      {/* Recommended Actions - Active Recommendations (Primary) */}
+      {/* ============================================ */}
+      {/* ROW 3: CLASS SNAPSHOT                         */}
+      {/* ============================================ */}
+      <div className="card" style={{ padding: "22px 24px", marginBottom: "20px" }}>
+        <h3 style={{ margin: "0 0 16px 0", fontSize: "1rem", fontWeight: 600, color: "var(--text-primary)" }}>
+          Class snapshot
+        </h3>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "20px" }}>
+          {(() => {
+            const allAssignments = [...active, ...resolved];
+            // Scope all student statuses to class roster
+            const scopeS = (statuses: typeof allAssignments[0]["studentStatuses"]) =>
+              classStudentIds.size === 0 ? statuses : statuses.filter(s => classStudentIds.has(s.studentId));
+            const allStatuses = allAssignments.flatMap(a => scopeS(a.studentStatuses));
+
+            // Strongest area
+            const subjectScores = new Map<string, { total: number; count: number }>();
+            for (const a of allAssignments) {
+              const subject = lessonMetadata.get(a.assignmentId)?.subject;
+              if (!subject) continue;
+              for (const s of scopeS(a.studentStatuses)) {
+                if (s.isComplete && s.score > 0) {
+                  const entry = subjectScores.get(subject) || { total: 0, count: 0 };
+                  entry.total += s.score;
+                  entry.count += 1;
+                  subjectScores.set(subject, entry);
+                }
+              }
+            }
+            let strongestArea = "Not enough data yet";
+            let strongestSubject = "";
+            let highestAvg = 0;
+            for (const [subject, { total, count }] of subjectScores) {
+              const avg = total / count;
+              if (avg > highestAvg && count >= 2) {
+                highestAvg = avg;
+                strongestSubject = subject;
+              }
+            }
+            if (strongestSubject) {
+              strongestArea = `Class is strongest in ${strongestSubject.toLowerCase()}`;
+            }
+
+            // Watch area
+            let watchArea = "Not enough data yet";
+            let lowestSubject = "";
+            let lowestAvg = Infinity;
+            for (const [subject, { total, count }] of subjectScores) {
+              const avg = total / count;
+              if (avg < lowestAvg && count >= 2 && subject !== strongestSubject) {
+                lowestAvg = avg;
+                lowestSubject = subject;
+              }
+            }
+            if (lowestSubject) {
+              watchArea = `More support needed in ${lowestSubject.toLowerCase()}`;
+            }
+
+            // Coaching trend
+            const coachingCount = coachingActivity.length;
+            const coachingTrend = coachingCount > 0
+              ? `${coachingCount} student${coachingCount !== 1 ? "s" : ""} used coaching recently`
+              : "No coaching activity this week";
+
+            // Completion trend
+            const totalIncomplete = allStatuses.filter(s => !s.isComplete).length;
+            const completionTrend = totalIncomplete > 0
+              ? `${totalIncomplete} assignment${totalIncomplete !== 1 ? "s" : ""} still in progress`
+              : "All assignments complete";
+
+            const snapshots = [
+              { label: "Strongest area", value: strongestArea, color: "#16a34a" },
+              { label: "Watch area", value: watchArea, color: "#d97706" },
+              { label: "Coaching trend", value: coachingTrend, color: "#7c3aed" },
+              { label: "Completion trend", value: completionTrend, color: "#2563eb" },
+            ];
+
+            return snapshots.map((item) => (
+              <div key={item.label} style={{ paddingRight: "8px" }}>
+                <div style={{
+                  fontSize: "0.73rem",
+                  fontWeight: 600,
+                  color: item.color,
+                  textTransform: "uppercase",
+                  letterSpacing: "0.04em",
+                  marginBottom: "5px",
+                  opacity: 0.85,
+                }}>
+                  {item.label}
+                </div>
+                <div style={{
+                  fontSize: "0.88rem",
+                  color: "#374151",
+                  lineHeight: 1.5,
+                }}>
+                  {item.value}
+                </div>
+              </div>
+            ));
+          })()}
+        </div>
+      </div>
+
+      {/* Recommended Actions — below the main triage area */}
       <RecommendationPanel
         recommendations={recommendations}
         students={allStudents}
@@ -1685,35 +2320,6 @@ export default function EducatorDashboard() {
         onFeedback={handleRecommendationFeedback}
         onRefresh={handleRefreshRecommendations}
       />
-
-      {/* Primary: Students Needing Attention */}
-      {studentsNeedingAttention.length > 0 ? (
-        <NeedsAttentionSection
-          students={studentsNeedingAttention}
-          onNavigate={(studentId, assignmentId) =>
-            navigate(`/educator/assignment/${assignmentId}/student/${studentId}`)
-          }
-        />
-      ) : (
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: "10px",
-            padding: "14px 18px",
-            background: "#ffffff",
-            borderRadius: "10px",
-            color: "var(--status-success-text)",
-            fontSize: "0.9rem",
-            boxShadow: "0 1px 3px rgba(0,0,0,0.1)",
-          }}
-        >
-          <span style={{ fontWeight: 500 }}>All students on track — no one needs attention right now</span>
-        </div>
-      )}
-
-
-
       {/* Add Student Modal */}
       {addStudentModal && (
         <AddStudentModal
@@ -2800,19 +3406,6 @@ function _UnassignedLessonsSection({ lessons, availableSubjects, onAssign, onArc
             <div style={{ flex: 1, minWidth: "200px" }}>
               <div style={{ display: "flex", alignItems: "center", gap: "12px", flexWrap: "wrap" }}>
                 <span style={{ fontWeight: 600, color: "#333" }}>{lesson.title}</span>
-                <span
-                  style={{
-                    fontSize: "0.75rem",
-                    padding: "2px 8px",
-                    borderRadius: "4px",
-                    background: lesson.difficulty === "beginner" ? "var(--status-success-bg)" :
-                               lesson.difficulty === "intermediate" ? "var(--status-pending-bg)" : "var(--status-danger-bg)",
-                    color: lesson.difficulty === "beginner" ? "var(--status-success-text)" :
-                           lesson.difficulty === "intermediate" ? "var(--status-warning-text)" : "var(--status-danger)",
-                  }}
-                >
-                  {lesson.difficulty}
-                </span>
               </div>
               <p style={{ margin: 0, marginTop: "4px", color: "var(--text-secondary)", fontSize: "0.85rem" }}>
                 {lesson.promptCount} question{lesson.promptCount !== 1 ? "s" : ""}
@@ -3159,19 +3752,6 @@ function UnassignedLessonsDrawerContent({
                   >
                     {lesson.title}
                   </button>
-                  <span
-                    style={{
-                      fontSize: "0.7rem",
-                      padding: "2px 6px",
-                      borderRadius: "4px",
-                      background: lesson.difficulty === "beginner" ? "var(--status-success-bg)" :
-                                 lesson.difficulty === "intermediate" ? "var(--status-pending-bg)" : "var(--status-danger-bg)",
-                      color: lesson.difficulty === "beginner" ? "var(--status-success-text)" :
-                             lesson.difficulty === "intermediate" ? "var(--status-warning-text)" : "var(--status-danger)",
-                    }}
-                  >
-                    {lesson.difficulty}
-                  </span>
                 </div>
                 <p style={{ margin: "4px 0 0 0", color: "var(--text-muted)", fontSize: "0.85rem" }}>
                   {lesson.promptCount} question{lesson.promptCount !== 1 ? "s" : ""}
@@ -3486,7 +4066,7 @@ function AssignmentsDrawerContent({ prioritizedGroups, onNavigate, archivedCount
   };
 
   // Check if any filters are active
-  const hasActiveFilters = filters.classId || filters.subject || filters.gradeLevel || filters.difficulty;
+  const hasActiveFilters = filters.classId || filters.subject || filters.gradeLevel;
 
   // Collect all assignments for extracting filter options (memoized for stable reference)
   const allAssignments = useMemo(() => [
@@ -3790,15 +4370,6 @@ function AssignmentsDrawerContent({ prioritizedGroups, onNavigate, archivedCount
       });
     }
 
-    // 4. Skill (removing only clears skill, keeps class, grade, and subject)
-    if (filters.difficulty) {
-      chips.push({
-        key: "difficulty",
-        label: filters.difficulty.charAt(0).toUpperCase() + filters.difficulty.slice(1),
-        onRemove: () => onUpdateFilters({ classId: filters.classId, gradeLevel: filters.gradeLevel, subject: filters.subject }),
-      });
-    }
-
     return chips;
   };
 
@@ -4097,31 +4668,6 @@ function AssignmentsDrawerContent({ prioritizedGroups, onNavigate, archivedCount
             {availableSubjects.map((subject) => (
               <option key={subject} value={subject}>
                 {subject}
-              </option>
-            ))}
-          </select>
-
-          {/* Skill level dropdown */}
-          <select
-            value={filters.difficulty || ""}
-            onChange={(e) => handleDifficultyChange(e.target.value)}
-            style={{
-              flex: "1 1 0",
-              minWidth: "100px",
-              padding: "8px 12px",
-              fontSize: "0.8rem",
-              border: "1px solid var(--border-muted)",
-              borderRadius: "6px",
-              background: "var(--surface-elevated)",
-              color: filters.difficulty ? "#374151" : "#9ca3af",
-              cursor: "pointer",
-            }}
-            disabled={availableDifficulties.length === 0}
-          >
-            <option value="">All levels</option>
-            {availableDifficulties.map((difficulty) => (
-              <option key={difficulty} value={difficulty}>
-                {difficulty.charAt(0).toUpperCase() + difficulty.slice(1)}
               </option>
             ))}
           </select>
@@ -4872,6 +5418,7 @@ function ClassListView({
                   <div style={{ fontWeight: 600, color: "#333", fontSize: "0.95rem" }}>{cls.name}</div>
                   <div style={{ marginTop: "4px", fontSize: "0.8rem", color: "var(--text-muted)" }}>
                     {cls.gradeLevel && <span style={{ marginRight: "8px" }}>{cls.gradeLevel}</span>}
+                    {cls.subject && <span style={{ marginRight: "8px" }}>{cls.subject}</span>}
                     {cls.studentCount} student{cls.studentCount !== 1 ? "s" : ""}
                     {cls.subjects && cls.subjects.length > 0 && (
                       <span style={{ marginLeft: "8px", color: "var(--text-muted)" }}>
@@ -4996,6 +5543,8 @@ function CreateClassView({ onBack, onClassCreated }: CreateClassViewProps) {
   const { showError } = useToast();
   const [name, setName] = useState("");
   const [gradeLevel, setGradeLevel] = useState("");
+  const [subject, setSubject] = useState("");
+  const [customSubject, setCustomSubject] = useState("");
   const [period, setPeriod] = useState("");
   const [sectionLabel, setSectionLabel] = useState("");
   const [isCreating, setIsCreating] = useState(false);
@@ -5006,9 +5555,14 @@ function CreateClassView({ onBack, onClassCreated }: CreateClassViewProps) {
 
     setIsCreating(true);
     try {
+      const resolvedSubject = subject === "Other"
+        ? (customSubject.trim() || undefined)
+        : (subject || undefined);
+
       const newClass = await createClass({
         name: name.trim(),
         gradeLevel: gradeLevel.trim() || undefined,
+        subject: resolvedSubject,
         period: period.trim() || undefined,
         sectionLabel: sectionLabel.trim() || undefined,
       });
@@ -5101,6 +5655,54 @@ function CreateClassView({ onBack, onClassCreated }: CreateClassViewProps) {
             <option value="11th Grade">11th Grade</option>
             <option value="12th Grade">12th Grade</option>
           </select>
+        </div>
+
+        <div style={{ marginBottom: "16px" }}>
+          <label style={{ display: "block", fontSize: "0.8rem", fontWeight: 600, color: "#374151", marginBottom: "6px" }}>
+            Subject <span style={{ fontWeight: 400, color: "var(--text-muted)" }}>(optional)</span>
+          </label>
+          <select
+            value={subject}
+            onChange={(e) => {
+              setSubject(e.target.value);
+              if (e.target.value !== "Other") setCustomSubject("");
+            }}
+            style={{
+              width: "100%",
+              padding: "10px 12px",
+              fontSize: "0.9rem",
+              border: "1px solid #e2e8f0",
+              borderRadius: "6px",
+              background: "white",
+              boxSizing: "border-box",
+            }}
+          >
+            <option value="">Select subject...</option>
+            <option value="Math">Math</option>
+            <option value="Science">Science</option>
+            <option value="English / Language Arts">English / Language Arts</option>
+            <option value="Reading">Reading</option>
+            <option value="Writing">Writing</option>
+            <option value="Social Studies">Social Studies</option>
+            <option value="Other">Other</option>
+          </select>
+          {subject === "Other" && (
+            <input
+              type="text"
+              value={customSubject}
+              onChange={(e) => setCustomSubject(e.target.value)}
+              placeholder="Enter subject"
+              style={{
+                width: "100%",
+                padding: "10px 12px",
+                fontSize: "0.9rem",
+                border: "1px solid #e2e8f0",
+                borderRadius: "6px",
+                boxSizing: "border-box",
+                marginTop: "8px",
+              }}
+            />
+          )}
         </div>
 
         <div style={{ marginBottom: "16px" }}>
@@ -5576,7 +6178,6 @@ function CreateLessonDrawerContent({
   const [title, setTitle] = useState(editingDraft?.title || "");
   const [subject, setSubject] = useState(editingDraft?.subject || lastSettings.subject || "");
   const [gradeLevel, setGradeLevel] = useState(editingDraft?.gradeLevel || lastSettings.gradeLevel || "");
-  const [difficulty, setDifficulty] = useState<"beginner" | "intermediate" | "advanced">("intermediate");
   const [questionCount, setQuestionCount] = useState(editingDraft?.questionCount || suggestedQuestionCount);
   const [description, setDescription] = useState(editingDraft?.description || "");
   const [assignToClassId, setAssignToClassId] = useState(editingDraft?.assignToClassId || "");
@@ -5616,7 +6217,7 @@ function CreateLessonDrawerContent({
       const generatedLesson = await generateLesson({
         mode: "topic",
         content: contentParts.join(". "),
-        difficulty,
+        difficulty: "intermediate",
         questionCount,
         gradeLevel: gradeLevel || undefined,
       });
@@ -5630,7 +6231,6 @@ function CreateLessonDrawerContent({
         description: description.trim() || generatedLesson.description,
         subject: subject,
         gradeLevel: gradeLevel || undefined,
-        difficulty,
       };
 
       // Save the lesson
@@ -5883,36 +6483,6 @@ function CreateLessonDrawerContent({
               {gradeLevels.map((g) => (
                 <option key={g.value} value={g.value}>{g.label}</option>
               ))}
-            </select>
-          </div>
-          <div style={{ flex: 1 }}>
-            <label
-              style={{
-                display: "block",
-                fontSize: "0.8rem",
-                fontWeight: 600,
-                color: "#374151",
-                marginBottom: "6px",
-              }}
-            >
-              Difficulty
-            </label>
-            <select
-              value={difficulty}
-              onChange={(e) => setDifficulty(e.target.value as "beginner" | "intermediate" | "advanced")}
-              style={{
-                width: "100%",
-                padding: "12px 14px",
-                fontSize: "0.9rem",
-                border: "1px solid #e2e8f0",
-                borderRadius: "8px",
-                background: "white",
-                cursor: "pointer",
-              }}
-            >
-              <option value="beginner">Beginner</option>
-              <option value="intermediate">Intermediate</option>
-              <option value="advanced">Advanced</option>
             </select>
           </div>
         </div>

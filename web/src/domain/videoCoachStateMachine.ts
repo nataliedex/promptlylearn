@@ -32,6 +32,9 @@ export interface VideoCoachState {
   maxAttempts: number;         // typically 3
   questionText: string;        // the question being asked, for restate-question support
   followUpCount: number;       // how many probing follow-ups coach has done on this question
+  lastCoachQuestion?: string;  // the most recent coach sub-question (for context-aware short-answer validation)
+  activeMathQuestion?: string; // the last semantic math sub-question (survives no-speech retry and hint offers)
+  hasReasoningSteps?: boolean; // true when the prompt has deterministic reasoning steps (math) — bypasses generic hint flow
 }
 
 export type VideoCoachActionType =
@@ -84,6 +87,29 @@ export interface VideoOutcomeInputs {
 // ---------------------------------------------------------------------------
 
 /** Detect low-confidence responses that should trigger hint offer. */
+/**
+ * Detect whether a response is an interrogative candidate answer — a question
+ * containing a number or number word.  e.g. "Is it three?", "Could it be 3?",
+ * "So is it 25?".  These are genuine academic attempts with uncertainty, NOT
+ * low-confidence / off-topic / conversational filler.
+ *
+ * Also handles STT-noisy variants without trailing "?" by detecting common
+ * interrogative frames: "is it <num>", "could it be <num>", "is the answer <num>",
+ * "oh is it <num>", etc.
+ */
+const INTERROGATIVE_FRAME = /\b(?:is\s+it|is\s+the\s+answer|could\s+it\s+be|would\s+it\s+be|so\s+is\s+it)\b/i;
+
+export function isInterrogativeMathAnswer(response: string): boolean {
+  const trimmed = response.trim();
+  const normalized = normalizeNumberWordsClient(trimmed);
+  const hasNumber = /\d/.test(normalized);
+  if (!hasNumber) return false;
+  // Explicit question mark — any number + "?" is interrogative
+  if (trimmed.endsWith("?")) return true;
+  // STT often drops "?". Detect interrogative frames with a number.
+  return INTERROGATIVE_FRAME.test(trimmed);
+}
+
 export function isLowConfidenceResponse(response: string): boolean {
   const lowConfidencePatterns = [
     /^i\s*don'?t\s*know/i,
@@ -101,12 +127,107 @@ export function isLowConfidenceResponse(response: string): boolean {
 
   const trimmed = response.trim().toLowerCase();
 
+  // Interrogative candidate answers ("Is it 3?", "Could it be five?") are
+  // genuine academic attempts — never classify as low-confidence.
+  if (isInterrogativeMathAnswer(response)) {
+    return false;
+  }
+
   // Very short response (< 10 chars) unless it's a valid answer like "yes" or a number
   if (trimmed.length < 10 && !/^(yes|no|maybe|\d+|[a-z])$/i.test(trimmed)) {
     return true;
   }
 
   return lowConfidencePatterns.some((pattern) => pattern.test(trimmed));
+}
+
+// ---------------------------------------------------------------------------
+// Context-aware short-answer validation
+// ---------------------------------------------------------------------------
+
+/** Map of English number words to digits. */
+const WORD_TO_NUMBER: Record<string, number> = {
+  zero: 0, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7,
+  eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12, thirteen: 13,
+  fourteen: 14, fifteen: 15, sixteen: 16, seventeen: 17, eighteen: 18,
+  nineteen: 19, twenty: 20, thirty: 30, forty: 40, fifty: 50, sixty: 60,
+  seventy: 70, eighty: 80, ninety: 90,
+};
+
+const TENS_WORDS = ["twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety"];
+const ONES_WORDS = ["one", "two", "three", "four", "five", "six", "seven", "eight", "nine"];
+
+/**
+ * Normalize number words to digits in text.
+ * "a five" → "a 5", "twenty five" → "25"
+ */
+export function normalizeNumberWordsClient(text: string): string {
+  let normalized = text.toLowerCase();
+  // Compound tens+ones first ("twenty five" → "25")
+  for (const tens of TENS_WORDS) {
+    for (const ones of ONES_WORDS) {
+      const compound = new RegExp(`\\b${tens}[\\s-]+${ones}\\b`, "gi");
+      const value = WORD_TO_NUMBER[tens] + WORD_TO_NUMBER[ones];
+      normalized = normalized.replace(compound, String(value));
+    }
+  }
+  // Single word numbers
+  for (const [word, num] of Object.entries(WORD_TO_NUMBER)) {
+    normalized = normalized.replace(new RegExp(`\\b${word}\\b`, "gi"), String(num));
+  }
+  return normalized;
+}
+
+/**
+ * Check if a short student answer is a valid response to the current coach sub-question.
+ *
+ * When the coach asks a targeted sub-question like "What do you get when you add 1 and 4?",
+ * a short answer like "a five" or "5" is a valid content answer, not low-confidence.
+ *
+ * Returns true if the answer contains a number (after word normalization) that appears
+ * among or relates to the numbers in the coach question, OR uses math vocabulary
+ * (carry, regroup, tens place, etc.) relevant to the question context.
+ */
+export function isShortAnswerValidForCoachQuestion(
+  studentResponse: string,
+  coachQuestion: string,
+): boolean {
+  if (!coachQuestion) return false;
+
+  const normalizedStudent = normalizeNumberWordsClient(studentResponse);
+  const normalizedCoach = normalizeNumberWordsClient(coachQuestion);
+
+  // Extract all numbers from both texts
+  const studentNums = normalizedStudent.match(/\b\d+\b/g) || [];
+  const coachNums = normalizedCoach.match(/\b\d+\b/g) || [];
+
+  // If the student provided a number and the coach asked a math sub-question, it's valid
+  if (studentNums.length > 0 && coachNums.length > 0) {
+    return true;
+  }
+
+  // Math vocabulary answers to math-context questions
+  const mathVocab = /\b(?:carr(?:y|ied|ying)|regroup(?:ed|ing)?|tens?\s*(?:place|column)?|ones?\s*(?:place|column)?|borrow(?:ed|ing)?|extra\s+ten|left\s*over|add(?:ed)?|plus)\b/i;
+  if (mathVocab.test(normalizedStudent) && coachNums.length > 0) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Check if a student response contains math content (numbers, number words,
+ * or equations) that should be treated as a content answer rather than
+ * hint meta-conversation. Used to prevent hintOfferPending from swallowing
+ * valid math answers like "five" or "No 1 + 4 = 5".
+ */
+export function containsMathContent(response: string): boolean {
+  const normalized = normalizeNumberWordsClient(response);
+  // Has digits (after number-word normalization)
+  if (/\d/.test(normalized)) return true;
+  // Has math vocabulary
+  if (/\b(?:plus|minus|add|subtract|equals?|carry|regroup|tens?|ones?)\b/i.test(response)) return true;
+  return false;
 }
 
 /** Parse whether student accepted, declined, or inquired about a hint offer. */
@@ -474,12 +595,42 @@ export function buildRetryPrompt(questionText: string): string {
  */
 export function buildProbeFromQuestion(questionText: string, studentAnswer: string): string {
   const answerLower = studentAnswer.toLowerCase();
+  const questionLower = questionText.toLowerCase();
+
+  // Examples / materials questions — rubric-aligned probes for science topics.
+  // Checked BEFORE procedural to prevent math probes leaking into conceptual questions.
+  if (/\bexamples?\b|\bdifferent\b|\bmaterials?\b|\bmade\s+of\b/i.test(questionLower)) {
+    const namedPlanet = /\b(mercury|venus|earth|mars|jupiter|saturn|uranus|neptune)\b/i.test(answerLower);
+    if (!namedPlanet) {
+      return "Nice start. Which two planets will you use as examples, and what is each made of?";
+    }
+    return "Good. For each planet you named, what is it made of?";
+  }
+
+  // Procedural / math questions — evidence-based probes.
+  // Tightened to be math-specific to avoid false positives on science questions.
+  const isProceduralMath =
+    /\bsubtract|\baddition\b|\badd(?:ing)?\s+\d|\bsum\b|\bdifference\b|\bmultiply|\bdivide|\bproduct\b|\bquotient\b/i.test(questionLower) ||
+    /\bshow\s+(?:your|the)\s+work\b|\bstep\s+by\s+step\b|\bsolve\b|\bcalculate\b/i.test(questionLower) ||
+    /\d+\s*[+\-×÷xX*]\s*\d+/.test(questionLower);
+
+  if (isProceduralMath) {
+    const hasSteps = /first|then|next|after|start|step/i.test(answerLower);
+    const hasNumbers = /\d/.test(answerLower);
+    if (hasNumbers && !hasSteps) {
+      return "Can you walk me through each step? What did you do first?";
+    }
+    if (hasSteps) {
+      return "Why did you choose to do it in that order?";
+    }
+    return "Show me the first step you used to solve the math problem.";
+  }
 
   // List-type answers: ask about one item
   const listItems = answerLower.split(/[,\s]+and\s+|\s*,\s*/).filter(s => s.trim().length > 2);
   if (listItems.length >= 2) {
     const item = listItems[0].trim();
-    return `You mentioned ${item}. Can you describe what that looks or feels like?`;
+    return `You mentioned ${item}. Can you tell me more about that?`;
   }
 
   // Question asks for description/explanation
@@ -534,7 +685,14 @@ export function computeVideoCoachAction(
     maxAttempts,
     questionText,
     followUpCount,
+    lastCoachQuestion,
+    activeMathQuestion,
+    hasReasoningSteps,
   } = state;
+
+  // Use activeMathQuestion (survives procedural messages) for context-aware validation,
+  // falling back to lastCoachQuestion for non-math flows.
+  const effectiveCoachQuestion = activeMathQuestion || lastCoachQuestion;
 
   const hasHintsAvailable = hintsAvailable.length > 0 && hintIndex < hintsAvailable.length;
 
@@ -562,8 +720,28 @@ export function computeVideoCoachAction(
 
   // -----------------------------------------------------------------------
   // STEP 1: If hint offer is pending, parse the student's response
+  // MATH CONTENT BYPASS: If the student gives a valid math answer (e.g.,
+  // "five", "1 + 4 = 5", "No 1 + 4 = 5") instead of responding to the
+  // hint offer, treat it as a content answer — clear pending and fall through.
   // -----------------------------------------------------------------------
   if (hintOfferPending) {
+    // REASONING-STEP BYPASS: If the prompt has deterministic reasoning steps,
+    // clear hintOfferPending and fall through to EVALUATE_ANSWER — the backend's
+    // deterministic remediation engine handles all hint/probe selection.
+    if (hasReasoningSteps) {
+      console.log("[VideoSM] hasReasoningSteps — clearing hintOfferPending, routing to backend");
+      // Fall through: hintOfferPending will be cleared by stateUpdates below
+    } else {
+    // Check if this looks like math content rather than hint meta-conversation
+    const hasMathContent = containsMathContent(latestStudentResponse);
+    const mathContextValid = effectiveCoachQuestion
+      ? isShortAnswerValidForCoachQuestion(latestStudentResponse, effectiveCoachQuestion)
+      : false;
+
+    if (hasMathContent && (mathContextValid || /\d+\s*[+\-×x]\s*\d+\s*=\s*\d+/.test(normalizeNumberWordsClient(latestStudentResponse)))) {
+      console.log("[VideoSM] Hint offer pending but math content detected — treating as content answer");
+      // Fall through to STEP 2+ with hintOfferPending cleared
+    } else {
     const decision = parseHintResponse(latestStudentResponse);
     console.log("[VideoSM] Hint offer pending, decision:", decision);
 
@@ -648,6 +826,8 @@ export function computeVideoCoachAction(
 
     // "unclear" → clear pending flag, fall through to step 2
     console.log("[VideoSM] Unclear hint response, falling through");
+    } // end else (non-math hint response)
+    } // end else (!hasReasoningSteps)
   }
 
   // -----------------------------------------------------------------------
@@ -655,7 +835,7 @@ export function computeVideoCoachAction(
   // -----------------------------------------------------------------------
   if (isNoSpeech(latestStudentResponse)) {
     console.log("[VideoSM] No speech detected");
-    if (hasHintsAvailable && hintDeclineCount < MAX_HINT_DECLINES) {
+    if (hasHintsAvailable && !hasReasoningSteps && hintDeclineCount < MAX_HINT_DECLINES) {
       console.log("[VideoSM] OFFER_HINT (no speech, hints available)");
       return {
         type: "OFFER_HINT",
@@ -697,6 +877,16 @@ export function computeVideoCoachAction(
   // -----------------------------------------------------------------------
   if (isHintRequest(latestStudentResponse)) {
     console.log("[VideoSM] Explicit hint request detected");
+    // REASONING-STEP BYPASS: Route hint requests through backend deterministic
+    // remediation — it produces step-specific, operand-aligned hints.
+    if (hasReasoningSteps) {
+      console.log("[VideoSM] EVALUATE_ANSWER (hint request → deterministic step hint)");
+      return {
+        type: "EVALUATE_ANSWER",
+        shouldContinue: true,
+        stateUpdates: hintUpdates, // no attempt increment — hint request is not an answer
+      };
+    }
     if (hasHintsAvailable) {
       const hint = hintsAvailable[hintIndex];
       console.log("[VideoSM] DELIVER_HINT (requested), hintIndex:", hintIndex);
@@ -768,9 +958,30 @@ export function computeVideoCoachAction(
 
   // -----------------------------------------------------------------------
   // STEP 4: Low-confidence response
+  // Context-aware bypass: if the coach asked a targeted sub-question and
+  // the student's short answer is valid for that context, skip low-confidence.
   // -----------------------------------------------------------------------
-  if (isLowConfidenceResponse(latestStudentResponse)) {
+  const contextValid = effectiveCoachQuestion
+    ? isShortAnswerValidForCoachQuestion(latestStudentResponse, effectiveCoachQuestion)
+    : false;
+
+  if (contextValid) {
+    console.log("[VideoSM] Short answer valid for coach question context — bypassing low-confidence check");
+  }
+
+  if (!contextValid && isLowConfidenceResponse(latestStudentResponse)) {
     console.log("[VideoSM] Low confidence detected");
+
+    // REASONING-STEP BYPASS: Route "I don't know" through backend deterministic
+    // remediation — it gives a simpler step probe for the next missing step.
+    if (hasReasoningSteps) {
+      console.log("[VideoSM] EVALUATE_ANSWER (low confidence → deterministic step probe)");
+      return {
+        type: "EVALUATE_ANSWER",
+        shouldContinue: true,
+        stateUpdates: hintUpdates, // no attempt increment — uncertainty is not an answer
+      };
+    }
 
     if (hasHintsAvailable && hintDeclineCount < MAX_HINT_DECLINES) {
       // OFFER_HINT — hint meta-conversation, no attempt increment
@@ -903,6 +1114,92 @@ export function resolvePostEvaluation(
   // Incorrect, not first, not max: continue
   console.log("[VideoSM] resolvePostEvaluation: incorrect, keep trying");
   return { shouldContinue: true, probeFirst: false };
+}
+
+// ---------------------------------------------------------------------------
+// Mastery stop rule — prevents unnecessary probing after strong answers
+// ---------------------------------------------------------------------------
+
+export const MASTERY_STOP_THRESHOLD = 85;
+export const PROCEDURAL_MASTERY_THRESHOLD = 90;
+
+/**
+ * Detect procedural (step-by-step math/algorithm) questions client-side.
+ * Mirrors the server-side classifyConceptType procedural branch.
+ */
+export function isProceduralQuestion(questionText: string): boolean {
+  const lower = questionText.toLowerCase();
+  const hasMathContext = /\d|add|subtract|multiply|divide|calculate|equation|expression/i.test(lower);
+  return /\bsubtract\b/i.test(lower)
+  || /\baddition\b/i.test(lower)
+  || /\badd(?:ing)?\s+\d/i.test(lower)
+  || /\bsum\b/i.test(lower)
+  || /\bdifference\b/i.test(lower)
+  || /\bsolve\s+(?:the\s+)?(?:problem|equation|expression)\b/i.test(lower)
+  || (/\bsolve\b/i.test(lower) && /\d/.test(lower))
+  || /\bshow\s+your\s+work\b/i.test(lower)
+  || (/\bexplain\s+(?:your|the)\s+(?:thinking|steps)\b/i.test(lower) && hasMathContext)
+  || /\bwhat\s+is\s+\d+\s*[+\-×÷xX*]\s*\d+/i.test(lower)
+  || /\d+\s*[+\-×÷xX*]\s*\d+/.test(lower);
+}
+
+/**
+ * Client-side mastery stop rule — applied AFTER receiving the API response.
+ *
+ * Prevents the coach from probing a student who already demonstrated mastery:
+ * - score >= 85, CONTENT_ANSWER, turnKind is PROBE, attemptCount >= 1 → stop
+ * - score >= 90, procedural question → stop even on first attempt (optional fast-track)
+ *
+ * Returns `null` if no override needed, or `{ shouldContinue, turnKind }` to apply.
+ */
+export function shouldApplyMasteryStop(params: {
+  score: number;
+  turnKind: string;
+  attemptCount: number;
+  questionText?: string;
+  criteriaMet?: boolean;
+  utteranceIntent?: "CONTENT_ANSWER" | "META" | "CONFUSION" | "STOP" | string;
+}): { shouldContinue: false; turnKind: "WRAP" } | null {
+  const { score, turnKind, attemptCount, questionText, criteriaMet, utteranceIntent } = params;
+
+  if(!criteriaMet) return null;
+  if(utteranceIntent !== "CONTENT_ANSWER") return null;
+  
+
+  // Fast-track: procedural question with very high score → skip probe entirely
+  if (
+    score >= PROCEDURAL_MASTERY_THRESHOLD &&
+    turnKind === "PROBE" &&
+    questionText &&
+    isProceduralQuestion(questionText)
+  ) {
+    console.log(
+      "[VideoSM] masteryStop: procedural fast-track (score",
+      score,
+      ", attemptCount",
+      attemptCount,
+      ") → WRAP"
+    );
+    return { shouldContinue: false, turnKind: "WRAP" };
+  }
+
+  // Standard mastery stop: strong score + already probed at least once
+  if (
+    score >= MASTERY_STOP_THRESHOLD &&
+    turnKind === "PROBE" &&
+    attemptCount >= 1
+  ) {
+    console.log(
+      "[VideoSM] masteryStop: score",
+      score,
+      "attemptCount",
+      attemptCount,
+      "→ WRAP"
+    );
+    return { shouldContinue: false, turnKind: "WRAP" };
+  }
+
+  return null;
 }
 
 // ---------------------------------------------------------------------------

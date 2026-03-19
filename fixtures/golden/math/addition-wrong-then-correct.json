@@ -1,0 +1,51 @@
+{
+  "id": "addition-wrong-then-correct",
+  "tags": ["regression", "error-correction"],
+  "expectedVerdict": "PASS",
+  "expectedIssueCodes": [],
+  "notes": "Student gives wrong ones answer (3), coach probes with exact operands, student corrects through all 3 steps to success. Tests STEP_PROBE_DIRECT after wrong answer.",
+  "mode": "math",
+  "name": "11+14: wrong ones → correction → success",
+  "mathProblem": {
+    "skill": "two_digit_addition",
+    "a": 11,
+    "b": 14,
+    "expression": "11 + 14",
+    "correctAnswer": 25,
+    "requiresRegrouping": false,
+    "expectedStrategyTags": ["add ones", "add tens", "combine"]
+  },
+  "reasoningSteps": [
+    {
+      "id": "step_ones",
+      "label": "Add the ones",
+      "expectedStatements": ["1 + 4 = 5"],
+      "probe": "What do you get when you add 1 and 4?",
+      "kind": "ones_sum"
+    },
+    {
+      "id": "step_tens",
+      "label": "Add the tens",
+      "expectedStatements": ["10 + 10 = 20"],
+      "probe": "What do you get when you add 10 and 10?",
+      "kind": "tens_sum"
+    },
+    {
+      "id": "step_combine",
+      "label": "Combine",
+      "expectedStatements": ["20 + 5 = 25"],
+      "probe": "What do you get when you put 20 and 5 together?",
+      "kind": "combine"
+    }
+  ],
+  "transcript": [
+    { "role": "coach", "message": "What is 11 + 14? Let's start with the ones." },
+    { "role": "student", "message": "3" },
+    { "role": "coach", "message": "Not quite. What do you get when you add 1 and 4?" },
+    { "role": "student", "message": "5" },
+    { "role": "coach", "message": "Good. What do you get when you add 10 and 10?" },
+    { "role": "student", "message": "20" },
+    { "role": "coach", "message": "Good. What is 20 + 5?" },
+    { "role": "student", "message": "25" }
+  ]
+}

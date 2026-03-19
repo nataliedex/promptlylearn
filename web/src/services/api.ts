@@ -30,11 +30,63 @@ export type EvaluationFocusArea =
   | "clarity"
   | "creativity";
 
+export interface ScoringLevels {
+  strong: string;
+  developing: string;
+  needsSupport: string;
+}
+
+export interface RequiredEvidence {
+  minEntities: number;
+  entityLabel: string;
+  attributeLabel: string;
+  minAttributeTypes?: number;
+  requirePairing?: boolean;
+}
+
 export interface PromptAssessment {
   learningObjective?: string;
-  successCriteria?: string[];
+  expectedConcepts?: string[];
+  requiredExamples?: string;
+  validVocabulary?: string[];
   misconceptions?: string[];
+  scoringLevels?: ScoringLevels;
+  successCriteria?: string[];
   evaluationFocus?: EvaluationFocusArea[];
+  requiredEvidence?: RequiredEvidence;
+  referenceFacts?: Record<string, string[]>;
+  reasoningSteps?: Array<{ id: string; kind: string }>;
+}
+
+export interface ConceptAnchor {
+  anchorSentence: string;
+  coreConcepts: string[];
+  allowedEntities: string[];
+  allowedAttributes: string[];
+  offTopicConcepts: string[];
+}
+
+export type MathProblemSkill =
+  | "two_digit_addition"
+  | "two_digit_subtraction"
+  | "basic_multiplication"
+  | "place_value";
+
+export interface CommonWrongAnswer {
+  answer: number;
+  misconception: string;
+}
+
+export interface MathProblem {
+  skill: MathProblemSkill;
+  a: number;
+  b?: number;
+  expression: string;
+  correctAnswer: number;
+  requiresRegrouping: boolean;
+  expectedStrategyTags: string[];
+  commonWrongAnswers?: CommonWrongAnswer[];
+  targetPlace?: "ones" | "tens" | "hundreds";
 }
 
 export interface Prompt {
@@ -43,6 +95,12 @@ export interface Prompt {
   input: string;
   hints: string[];
   assessment?: PromptAssessment;
+  blueprintId?: string;
+  filledSlots?: Record<string, string>;
+  allowedProbes?: string[];
+  retryQuestions?: string[];
+  conceptAnchor?: ConceptAnchor;
+  mathProblem?: MathProblem;
 }
 
 export interface Lesson {
@@ -111,10 +169,35 @@ export interface Session {
   currentPromptIndex?: number;
   educatorNotes?: string;
 
-  // Pause state fields (for "Take a break" feature)
+  // Pause state fields (for "Take a break" feature and auto-save)
   pausedAt?: string;
-  mode?: "voice" | "type";
+  mode?: "voice" | "type" | "video";
   wasRecording?: boolean;
+  draftState?: {
+    answer?: string;
+    followUpAnswer?: string;
+    conversationHistory?: Array<{ role: "student" | "coach"; message: string }>;
+    feedback?: {
+      feedback: string;
+      score: number;
+      isCorrect: boolean;
+      followUpQuestion?: string;
+      encouragement: string;
+      shouldContinue: boolean;
+    };
+    showHint?: boolean;
+    hintIndex?: number;
+    videoAttemptCount?: number;
+    videoFollowUpCount?: number;
+    videoHintUsed?: boolean;
+    videoHintIndex?: number;
+    // Video preview state (for resuming into the preview screen)
+    vcrPhase?: string;
+    recordedDuration?: number;
+    videoDraft?: VideoResponse;
+    sessionSummary?: string;
+    savedAt: string;
+  };
 }
 
 export interface EvaluationResult {
@@ -479,7 +562,7 @@ export type CreationMode = "book-title" | "book-excerpt" | "pasted-text" | "topi
 export interface LessonParams {
   mode: CreationMode;
   content: string;
-  difficulty: "beginner" | "intermediate" | "advanced";
+  difficulty?: "beginner" | "intermediate" | "advanced";
   questionCount: number;
   gradeLevel?: string;
 }
@@ -495,7 +578,7 @@ export async function generateLesson(params: LessonParams): Promise<Lesson> {
 export async function generateQuestion(
   lessonContext: string,
   existingQuestions: string[],
-  difficulty: string,
+  difficulty?: string,
   options?: { focus?: string; subject?: string; gradeLevel?: string }
 ): Promise<Prompt> {
   return fetchJson(`${API_BASE}/lessons/generate-question`, {
@@ -503,7 +586,7 @@ export async function generateQuestion(
     body: JSON.stringify({
       lessonContext,
       existingQuestions,
-      difficulty,
+      ...(difficulty && { difficulty }),
       ...(options?.focus && { focus: options.focus }),
       ...(options?.subject && { subject: options.subject }),
       ...(options?.gradeLevel && { gradeLevel: options.gradeLevel }),
@@ -526,6 +609,35 @@ export async function generateAssessment(
       ...(options?.difficulty && { difficulty: options.difficulty }),
       ...(options?.lessonDescription && { lessonDescription: options.lessonDescription }),
     }),
+  });
+}
+
+// ============================================
+// Question Package (question + hints + assessment)
+// ============================================
+
+export interface QuestionPackage {
+  questionText: string;
+  hints: string[];
+  learningObjective?: string;
+  successCriteria?: string[];
+  misconceptions?: string[];
+  evaluationFocus?: string[];
+}
+
+export async function generateQuestionPackage(params: {
+  questionText: string;
+  lessonContext: string;
+  gradeLevel?: string;
+  subject?: string;
+  difficulty?: string;
+  lessonDescription?: string;
+  existingQuestions?: string[];
+  regenerate: { question: boolean; hints: boolean; mastery: boolean };
+}): Promise<QuestionPackage> {
+  return fetchJson(`${API_BASE}/lessons/generate-question-package`, {
+    method: "POST",
+    body: JSON.stringify(params),
   });
 }
 
@@ -697,9 +809,10 @@ export interface VideoCoachTurnRequest {
   lastCoachQuestion?: string;
   askedCoachQuestions?: string[];
   timeRemainingSec?: number;
+  coachHelpStyle?: CoachHelpStyle;
 }
 
-export type VideoTurnKind = "FEEDBACK" | "PROBE" | "WRAP";
+export type VideoTurnKind = "FEEDBACK" | "PROBE" | "REFLECTION" | "WRAP";
 
 export interface VideoCoachTurnResponse {
   response: string;
@@ -710,6 +823,14 @@ export interface VideoCoachTurnResponse {
   turnKind: VideoTurnKind;
   coachActionTag?: string;
   deferredByCoach?: boolean;
+  wrapReason?: string;
+  studentIntent?: string;
+  criteriaStatus?: string;
+  teacherSummary?: { renderedSummary: string };
+  /** Pre-built instructional recap for client-side wraps when misconception detected */
+  instructionalRecap?: string;
+  /** Fraction of reasoning steps satisfied (0-1). Used client-side for near-success leniency. */
+  completionRatio?: number;
 }
 
 export async function getVideoCoachTurn(
@@ -1431,6 +1552,21 @@ export async function assignLessonToClass(
   return fetchJson(`${API_BASE}/lessons/${lessonId}/assign`, {
     method: "POST",
     body: JSON.stringify({ classId, studentIds, dueDate }),
+  });
+}
+
+/**
+ * Update the due date for an assignment.
+ * Pass null to clear the due date.
+ */
+export async function updateAssignmentDueDate(
+  lessonId: string,
+  classId: string,
+  dueDate: string | null
+): Promise<{ success: boolean; lessonId: string; classId: string; dueDate: string | null; updatedCount: number }> {
+  return fetchJson(`${API_BASE}/lessons/${lessonId}/due-date`, {
+    method: "PATCH",
+    body: JSON.stringify({ classId, dueDate }),
   });
 }
 

@@ -1,0 +1,39 @@
+{
+  "id": "planets-error-self-correction",
+  "tags": ["regression", "factual-error", "self-correction"],
+  "expectedVerdict": "PASS",
+  "expectedIssueCodes": [],
+  "notes": "Student says 'Jupiter is made of rock' (factual error), receives correction, then self-corrects and adds a second entity to reach mastery.",
+  "mode": "explanation",
+  "name": "planets: factual error → self-correction → mastery",
+  "promptInput": "What are planets made of? Give examples.",
+  "requiredEvidence": {
+    "minEntities": 2,
+    "entityLabel": "planets",
+    "attributeLabel": "materials",
+    "minAttributeTypes": 2,
+    "requirePairing": true
+  },
+  "referenceFacts": {
+    "Mercury": ["rock", "metal"],
+    "Venus": ["rock"],
+    "Earth": ["rock", "metal"],
+    "Mars": ["rock"],
+    "Jupiter": ["gas"],
+    "Saturn": ["gas"],
+    "Uranus": ["ice", "gas"],
+    "Neptune": ["ice", "gas"]
+  },
+  "successCriteria": [
+    "States that planets are made of different materials.",
+    "Names at least two specific planets.",
+    "Describes what each named planet is made of."
+  ],
+  "hints": [],
+  "transcript": [
+    { "role": "coach", "message": "What are planets made of?" },
+    { "role": "student", "message": "Jupiter is made of rock" },
+    { "role": "coach", "message": "Not quite — Jupiter is made of gas." },
+    { "role": "student", "message": "oh okay Jupiter is made of gas and Earth is made of rock" }
+  ]
+}

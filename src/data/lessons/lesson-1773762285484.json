@@ -1,0 +1,24 @@
+{
+  "id": "lesson-1773762285484",
+  "title": "Understanding Fractions in Real Life",
+  "description": "Students will learn what a fraction is and how to identify fractions in everyday situations.",
+  "difficulty": "intermediate",
+  "gradeLevel": "2",
+  "prompts": [
+    {
+      "id": "q1",
+      "type": "explain",
+      "input": "What is a fraction mostly made of? Name one part of a fraction.",
+      "hints": [
+        "Think about how a fraction is written.",
+        "Remember the two main parts of a fraction."
+      ],
+      "blueprintId": "identify_one_property",
+      "filledSlots": {
+        "object": "fraction"
+      }
+    }
+  ],
+  "subject": "Math",
+  "systemIndex": "Math 2.13"
+}

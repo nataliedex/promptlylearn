@@ -30,19 +30,12 @@ const GRADE_LEVELS = [
   "High school",
 ];
 
-const DIFFICULTIES = [
-  { value: "beginner" as const, label: "Beginner", description: "Simple questions, lots of scaffolding" },
-  { value: "intermediate" as const, label: "Intermediate", description: "More complex, some inference required" },
-  { value: "advanced" as const, label: "Advanced", description: "Challenging, requires deeper thinking" },
-];
-
 export default function LessonBuilder() {
   const navigate = useNavigate();
   const [step, setStep] = useState<Step>("mode");
   const [mode, setMode] = useState<CreationMode | null>(null);
   const [content, setContent] = useState("");
   const [gradeLevel, setGradeLevel] = useState("2nd grade");
-  const [difficulty, setDifficulty] = useState<"beginner" | "intermediate" | "advanced">("beginner");
   const [questionCount, setQuestionCount] = useState(3);
   const [lesson, setLesson] = useState<Lesson | null>(null);
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
@@ -74,7 +67,7 @@ export default function LessonBuilder() {
       const generatedLesson = await generateLesson({
         mode,
         content,
-        difficulty,
+        difficulty: "intermediate",
         questionCount,
         gradeLevel,
       });
@@ -108,7 +101,7 @@ export default function LessonBuilder() {
     setError("");
     try {
       const existingQuestions = lesson.prompts.map(p => p.input);
-      const newPrompt = await generateQuestion(content, existingQuestions, difficulty);
+      const newPrompt = await generateQuestion(content, existingQuestions);
       newPrompt.id = `q${lesson.prompts.length + 1}`;
       setLesson({
         ...lesson,
@@ -265,24 +258,6 @@ export default function LessonBuilder() {
 
           <div style={{ marginBottom: "24px" }}>
             <label style={{ display: "block", marginBottom: "8px", fontWeight: 600 }}>
-              Difficulty
-            </label>
-            <div style={{ display: "flex", gap: "12px", flexWrap: "wrap" }}>
-              {DIFFICULTIES.map((d) => (
-                <button
-                  key={d.value}
-                  className={`btn ${difficulty === d.value ? "btn-primary" : "btn-secondary"}`}
-                  onClick={() => setDifficulty(d.value)}
-                  style={{ flex: "1", minWidth: "120px" }}
-                >
-                  {d.label}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div style={{ marginBottom: "24px" }}>
-            <label style={{ display: "block", marginBottom: "8px", fontWeight: 600 }}>
               Number of Questions: {questionCount}
             </label>
             <input
@@ -325,12 +300,11 @@ export default function LessonBuilder() {
           <div className="card">
             <h2>{lesson.title}</h2>
             <p style={{ color: "var(--text-secondary)" }}>{lesson.description}</p>
-            <div style={{ display: "flex", gap: "8px", marginTop: "12px", flexWrap: "wrap", alignItems: "center" }}>
-              <span className={`difficulty-badge difficulty-${lesson.difficulty}`}>
-                {lesson.difficulty}
-              </span>
-              <span style={{ color: "var(--text-secondary)" }}>{lesson.gradeLevel}</span>
-            </div>
+            {lesson.gradeLevel && (
+              <div style={{ display: "flex", gap: "8px", marginTop: "12px", flexWrap: "wrap", alignItems: "center" }}>
+                <span style={{ color: "var(--text-secondary)" }}>{lesson.gradeLevel}</span>
+              </div>
+            )}
           </div>
 
           <div className="card">

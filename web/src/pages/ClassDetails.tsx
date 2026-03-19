@@ -296,6 +296,9 @@ export default function ClassDetails() {
                   {classData.gradeLevel && (
                     <span style={{ color: "var(--text-secondary)" }}>{classData.gradeLevel}</span>
                   )}
+                  {classData.subject && (
+                    <span style={{ color: "var(--text-secondary)" }}>{classData.subject}</span>
+                  )}
                   {classData.period && (
                     <span style={{ color: "var(--text-secondary)" }}>{classData.period}</span>
                   )}

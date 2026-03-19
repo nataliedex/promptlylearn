@@ -1,27 +1,171 @@
 import { Router } from "express";
 import OpenAI from "openai";
 import { getAllLessons } from "../../loaders/lessonLoader";
-import { Prompt, PromptAssessment } from "../../domain/prompt";
+import { Prompt, PromptAssessment, ConceptAnchor } from "../../domain/prompt";
+import { sanitizeProbe, isProbeValid, buildAnchoredFallback } from "../../domain/conceptAnchorValidator";
+import { buildTeacherSummary, buildMathTeacherSummary, type TeacherSummary } from "../../domain/teacherSummary";
+import { validateMathAnswer, boundMathScore, classifyMathExplanationState, accumulateMathStrategies, hasMathEvidence, accumulateReasoningStepEvidence, getFirstMissingStepProbe, stepAwareStatus, interpretMathUtterance, shouldWrapMathSession, extractFinalAnswer as extractFinalAnswerFromValidator, type MathValidationResult, type MathBoundingDecision, type MathExplanationState, type ReasoningStepAccumulation, type MathUtteranceInterpretation, type MathWrapDecision } from "../../domain/mathAnswerValidator";
+import { MathProblem } from "../../domain/mathProblem";
+import { buildDeterministicMathRubric } from "../../domain/mathProblemGenerator";
+import { getDeterministicRemediationMove, shouldUseDeterministicRemediation, buildInstructionalRecap, detectConversationMisconceptions, buildStepFailureRecap, detectPersistentStepFailure, detectActiveAnswerScope, getScopeExpression, applyMathStrategyEscalation, type RemediationMove } from "../../domain/deterministicRemediation";
+import { getNodeRemediationMove, accumulateNodeEvidence, shouldUseNodeRemediation } from "../../domain/nodeRemediation";
+import { shouldUseExplanationRemediation, classifyExplanationState, accumulateExplanationEvidence, getExplanationRemediationMove, shouldWrapExplanation, buildExplanationTeacherSummary, type AccumulatedExplanationEvidence, type ExplanationMove } from "../../domain/explanationRemediation";
+import {
+  validate as validateFacts,
+  boundScore,
+  buildEvidenceChecklist,
+  buildMissingEvidenceProbe,
+  containsFactualErrorPraise,
+  buildFactualCorrectionResponse,
+} from "../../domain/deterministicValidator";
+import { determineConversationStrategy, buildExplanationStrategyInput } from "../../domain/conversationStrategy";
 import { CoachActionTag } from "../../domain/coachAnalytics";
 import {
   resolvePostEvaluation,
+  checkMathMastery,
+  buildPerformanceAwareClose,
+  buildMathStrategyProbe,
+  buildMathRetryProbe,
+  promptRequiresMathExplanation,
+  isOffTopicResponse,
+  countOffTopicTurns,
+  detectHintFollowedByProgress,
   containsEndingLanguage,
   containsCorrectLanguage,
   buildRetryPrompt,
   buildProbeFromQuestion,
   enforceAllGuardrails,
   enforceQuestionContinueInvariant,
+  enforceDecisionEngineInvariants,
+  classifyStudentIntent,
   resolvePromptScope,
   generatePromptScope,
   buildSafeProbe,
+  classifyConceptType,
+  hasProceduralEvidence,
+  buildProceduralReflection,
+  evaluateExamplesMastery,
+  ensureProbeHasQuestion,
+  filterMetaUtterances,
+  extractDeterministicEvidence,
+  validateRubricClaims,
+  buildDeterministicOverall,
+  buildDeterministicSummary,
   CORRECT_THRESHOLD,
+  isPraiseOnly,
 } from "../../domain/videoCoachGuardrails";
 import type { PromptScope } from "../../domain/prompt";
 
 const router = Router();
 
-// Temporary debug flag - set to true to log answer verification
+// Debug flags — set to true for verbose diagnostics, false for production
 const DEBUG_ANSWER_VERIFICATION = true;
+const DEBUG_MATH_PIPELINE = false;  // Step-by-step math coaching diagnostics (also enable DEBUG_GUARDRAILS in videoCoachGuardrails.ts for full picture)
+
+/** Maximum student turns in a single question conversation before forcing close. */
+const MAX_COACH_EXCHANGES = 5;
+
+// ============================================
+// PRE-GENERATED PROBE SELECTION
+// ============================================
+
+/**
+ * Pick the next unused probe from the prompt's pre-generated allowedProbes list.
+ * Returns null if all probes have been used or no probes exist.
+ */
+function pickAllowedProbe(
+  prompt: Prompt,
+  askedCoachQuestions: string[],
+): string | null {
+  if (!prompt.allowedProbes?.length) return null;
+  const asked = new Set(askedCoachQuestions.map(q => q.toLowerCase().trim()));
+  for (const probe of prompt.allowedProbes) {
+    if (!asked.has(probe.toLowerCase().trim())) {
+      return probe;
+    }
+  }
+  // All probes used — return the first one as a fallback
+  return prompt.allowedProbes[0];
+}
+
+/**
+ * Pick a probe from the prompt's structured reasoning steps.
+ * Selects the first step whose expectedStatements haven't been demonstrated
+ * in the student's conversation history. Returns the step's probe question.
+ *
+ * Falls back to null if no reasoning steps exist or all have been probed.
+ */
+function pickReasoningStepProbe(
+  prompt: Prompt,
+  studentResponses: string[],
+  askedCoachQuestions: string[],
+): string | null {
+  const steps = prompt.assessment?.reasoningSteps;
+  if (!steps?.length) return null;
+
+  const allStudentText = studentResponses.join(" ").toLowerCase();
+  const asked = new Set(askedCoachQuestions.map(q => q.toLowerCase().trim()));
+
+  for (const step of steps) {
+    // Check if any of the expected statements appear in student responses
+    const demonstrated = step.expectedStatements.some(stmt => {
+      // Normalize: extract numbers and key terms for fuzzy matching
+      const nums = stmt.match(/\d+/g) || [];
+      if (nums.length >= 2) {
+        // For statements like "4 + 2 = 6", check if the student said the result
+        return nums.every(n => allStudentText.includes(n));
+      }
+      return allStudentText.includes(stmt.toLowerCase());
+    });
+
+    if (!demonstrated) {
+      // This step is missing — use its probe if not already asked
+      if (!asked.has(step.probe.toLowerCase().trim())) {
+        return step.probe;
+      }
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Pick a retry question from the prompt's pre-generated retryQuestions list.
+ * Returns null if no retry questions exist.
+ */
+function pickRetryQuestion(
+  prompt: Prompt,
+  askedCoachQuestions: string[],
+): string | null {
+  if (!prompt.retryQuestions?.length) return null;
+  const asked = new Set(askedCoachQuestions.map(q => q.toLowerCase().trim()));
+  for (const retry of prompt.retryQuestions) {
+    if (!asked.has(retry.toLowerCase().trim())) {
+      return retry;
+    }
+  }
+  // All retries used — return the first one
+  return prompt.retryQuestions[0];
+}
+
+/**
+ * Validate a proposed probe against the prompt's concept anchor.
+ * If the prompt has no anchor, passes through unchanged (backwards compatible).
+ * If the probe is off-topic or unanchored, replaces with a safe alternative.
+ */
+function anchorCheckProbe(
+  probe: string,
+  prompt: Prompt,
+  askedCoachQuestions: string[],
+): string {
+  const anchor = prompt.conceptAnchor;
+  if (!anchor) return probe; // No anchor data — backwards compatible
+  const result = sanitizeProbe(probe, anchor, prompt.allowedProbes, askedCoachQuestions);
+  if (result.wasReplaced) {
+    console.log(`[concept-anchor] Replaced off-topic probe: "${probe}" → "${result.probe}" (${result.reason})`);
+  }
+  return result.probe;
+}
 
 let openaiClient: OpenAI | null = null;
 
@@ -39,63 +183,15 @@ interface VerificationResult {
 
 /**
  * Extract the final numeric answer from a student's response.
- * Handles speech patterns like "um", "five", repeated numbers, etc.
+ *
+ * Delegates to the shared implementation in mathAnswerValidator.ts, which
+ * handles decomposition suppression, role-aware extraction, compound word
+ * numbers (twenty-five → 25), and conclusion-pattern matching.
+ *
+ * Previously this was a local duplicate with less comprehensive coverage.
  */
 function extractFinalAnswer(studentAnswer: string): number | null {
-  // Normalize: lowercase, remove fillers
-  let normalized = studentAnswer.toLowerCase();
-
-  // Remove common speech fillers
-  const fillers = [
-    /\bum+\b/g, /\buh+\b/g, /\blike\b/g, /\byou know\b/g, /\bwell\b/g,
-    /\bso\b/g, /\bbasically\b/g, /\bi think\b/g, /\bmaybe\b/g,
-  ];
-  for (const filler of fillers) {
-    normalized = normalized.replace(filler, " ");
-  }
-
-  // Word-to-number mapping
-  const wordNumbers: Record<string, number> = {
-    zero: 0, one: 1, two: 2, three: 3, four: 4, five: 5,
-    six: 6, seven: 7, eight: 8, nine: 9, ten: 10,
-    eleven: 11, twelve: 12, thirteen: 13, fourteen: 14, fifteen: 15,
-    sixteen: 16, seventeen: 17, eighteen: 18, nineteen: 19, twenty: 20,
-  };
-
-  // Replace word numbers with digits
-  for (const [word, num] of Object.entries(wordNumbers)) {
-    normalized = normalized.replace(new RegExp(`\\b${word}\\b`, "g"), String(num));
-  }
-
-  // Look for explicit answer patterns first (highest priority)
-  const answerPatterns = [
-    /(?:the answer is|answer is|it'?s|that'?s|equals?|=)\s*(\d+)/i,
-    /(\d+)\s*(?:is the answer|is my answer|apples?|left|remaining|total)/i,
-    /(?:she|he|they|it)\s*(?:has|have|got)\s*(\d+)/i,
-    /(?:there are|there'?s)\s*(\d+)/i,
-  ];
-
-  for (const pattern of answerPatterns) {
-    const match = normalized.match(pattern);
-    if (match) {
-      return parseInt(match[1], 10);
-    }
-  }
-
-  // Extract all numbers from the response
-  const numbers = normalized.match(/\d+/g);
-  if (!numbers || numbers.length === 0) {
-    return null;
-  }
-
-  // If only one number mentioned, that's likely the answer
-  if (numbers.length === 1) {
-    return parseInt(numbers[0], 10);
-  }
-
-  // Multiple numbers: prefer the last one (often the conclusion)
-  // But filter out numbers that appear in the original problem context
-  return parseInt(numbers[numbers.length - 1], 10);
+  return extractFinalAnswerFromValidator(studentAnswer);
 }
 
 /**
@@ -215,7 +311,11 @@ function parseArithmeticProblem(question: string): {
  * Non-math prompts (science, ELA, open-ended) always go through the LLM
  * so the coach can probe for deeper understanding via Path B.
  */
-function allowDeterministicShortCircuit(promptInput: string): boolean {
+function allowDeterministicShortCircuit(promptInput: string, mathProblem?: MathProblem): boolean {
+  // Explanation prompts never short-circuit on numeric correctness alone —
+  // the full evaluation pipeline must run to assess explanation quality.
+  if (promptRequiresMathExplanation(promptInput)) return false;
+  if (mathProblem) return true;
   return parseArithmeticProblem(promptInput) !== null;
 }
 
@@ -413,8 +513,38 @@ shouldContinue MUST be true. followUpQuestion MUST contain a question.
   return context;
 }
 
-function verifyAnswer(question: string, studentAnswer: string): VerificationResult {
+function verifyAnswer(question: string, studentAnswer: string, mathProblem?: MathProblem): VerificationResult {
   const extractedAnswer = extractFinalAnswer(studentAnswer);
+
+  // Highest confidence: use mathProblem ground truth directly
+  if (mathProblem) {
+    if (DEBUG_ANSWER_VERIFICATION) {
+      console.log("[coach-verify] mathProblem.correctAnswer:", mathProblem.correctAnswer);
+      console.log("[coach-verify] extractedFinalAnswer:", extractedAnswer);
+    }
+    if (extractedAnswer === null) {
+      return {
+        extractedAnswer: null,
+        expectedAnswer: mathProblem.correctAnswer,
+        isVerified: false,
+        confidence: "low",
+        method: "none",
+      };
+    }
+    const isCorrect = extractedAnswer === mathProblem.correctAnswer;
+    if (DEBUG_ANSWER_VERIFICATION) {
+      console.log("[coach-verify] evaluationConfidence:", isCorrect ? "high (mathProblem match)" : "high (mathProblem mismatch)");
+    }
+    return {
+      extractedAnswer,
+      expectedAnswer: mathProblem.correctAnswer,
+      isVerified: isCorrect,
+      confidence: "high",
+      method: "arithmetic",
+    };
+  }
+
+  // Fallback: parse from question text
   const parsed = parseArithmeticProblem(question);
 
   if (DEBUG_ANSWER_VERIFICATION) {
@@ -636,7 +766,7 @@ router.post("/continue", async (req, res) => {
 // so the coach can evaluate against rubric criteria.
 // ============================================
 
-function buildAssessmentContext(assessment?: PromptAssessment): string {
+function buildAssessmentContext(assessment?: PromptAssessment, gradeLevel?: string): string {
   if (!assessment) return "";
 
   const hasObjective = !!assessment.learningObjective;
@@ -650,6 +780,25 @@ function buildAssessmentContext(assessment?: PromptAssessment): string {
 
   if (hasObjective) {
     block += `Learning Objective: ${assessment.learningObjective}\n\n`;
+  }
+
+  // Expected Concepts
+  if (assessment.expectedConcepts && assessment.expectedConcepts.length > 0) {
+    block += `Expected Concepts (student should express these ideas):\n`;
+    assessment.expectedConcepts.forEach((c, i) => {
+      block += `  ${i + 1}. ${c}\n`;
+    });
+    block += `\n`;
+  }
+
+  // Required Examples
+  if (assessment.requiredExamples) {
+    block += `Required Examples: ${assessment.requiredExamples}\n\n`;
+  }
+
+  // Valid Vocabulary
+  if (assessment.validVocabulary && assessment.validVocabulary.length > 0) {
+    block += `Valid Vocabulary: ${assessment.validVocabulary.join(", ")}\n\n`;
   }
 
   if (hasCriteria) {
@@ -668,9 +817,20 @@ function buildAssessmentContext(assessment?: PromptAssessment): string {
     block += `\n`;
   }
 
+  // Scoring Levels
+  if (assessment.scoringLevels) {
+    block += `Scoring Levels:\n`;
+    block += `  Strong: ${assessment.scoringLevels.strong}\n`;
+    block += `  Developing: ${assessment.scoringLevels.developing}\n`;
+    block += `  Needs Support: ${assessment.scoringLevels.needsSupport}\n\n`;
+  }
+
   if (hasFocus) {
     block += `Evaluation Focus: ${assessment.evaluationFocus!.join(", ")}\n\n`;
   }
+
+  // Add grade-level scoring expectations
+  block += buildGradeScoringExpectations(gradeLevel);
 
   block += `=== CRITERIA-BASED EVALUATION (MANDATORY when rubric is present) ===
 
@@ -684,30 +844,111 @@ Before generating your response, evaluate the student's transcript against each 
 
 2) If ALL success criteria are met (overallStatus = "strong"):
    - Acknowledge specifically: cite what the student said that demonstrates mastery
-   - Inform them they have met the goal
-   - Offer an OPTIONAL continuation: "We can stop here — or if you'd like, we can explore this more deeply."
+   - Give brief confirmation + one enrichment fact or optional extension question
+   - Set shouldContinue = false (student may choose to continue)
    - Do NOT ask a new required question
    - Do NOT introduce unrelated probing questions
-   - Set shouldContinue = false (student may choose to continue)
 
 3) If SOME criteria are missing (overallStatus = "developing"):
-   - Ask ONE targeted question addressing the highest-priority missing criterion
-   - Do not ask generic meta-questions — be specific to the missing criterion
-   - Keep the question aligned to the learning objective
+   Use this EXACT rubric-gap-driven probing format:
+   a) Acknowledge what IS correct (1 sentence — e.g., "Good start—you've got the big idea.")
+   b) State what is MISSING (1 sentence — name the specific rubric gap)
+   c) Ask ONE specific follow-up question that directly fills the biggest missing rubric item
+   Do NOT ask generic meta-questions ("What was your first step?", "Tell me more", "What else?")
+   Do NOT use process/procedure templates unless the question is explicitly a multi-step procedure problem
 
 4) If student needs support (overallStatus = "needs_support"):
    - Use Mode D (Redirect) or Mode E (Support) as appropriate
    - Target the most foundational missing criterion first
 
+=== NO PREMATURE COMPLETION (HARD RULE) ===
+
+Do NOT use completion language ("Great work!", "You're done", "Excellent explanation!", "That wraps up this question") UNLESS the student has met ALL rubric criteria listed above.
+- If criteria are missing → the student is NOT done, regardless of how good the partial answer is
+- Partial credit answers get: "Good start" / "You're on the right track" + what's missing + follow-up
+- ONLY when ALL criteria are met → brief confirmation + enrichment fact or optional extension
+
+=== PRAISE CALIBRATION ===
+
+Praise must be proportional to rubric progress:
+- INCOMPLETE (missing criteria): "Good start." / "You're on the right track." + state what's missing + one follow-up
+- COMPLETE (all criteria met): "That's it." / "Nice explanation." + brief confirmation of key ideas
+- NEVER use superlatives ("Excellent!", "Amazing!", "Perfect!") for partial answers
+- NEVER say "Great work on this assignment!" mid-question
+
 HARD CONSTRAINTS:
-- No random probing — every follow-up must target a specific missing criterion
+- Every follow-up MUST target a specific missing criterion from the rubric
+- No random probing — if you can't name which criterion your question targets, don't ask it
 - No regression to simpler questions unless misconceptionsDetected indicates confusion
 - No new required questions once all criteria are met
-- Offer student agency when mastery is achieved
+- No generic process templates ("What was your first step and what did you get?") for non-procedure questions
 
 `;
 
   return block;
+}
+
+/**
+ * Build grade-level scoring expectations for the evaluation prompt.
+ * Tells the LLM what level of sophistication to expect from student answers.
+ */
+function buildGradeScoringExpectations(gradeLevel?: string): string {
+  if (!gradeLevel) return "";
+
+  const normalized = gradeLevel.toLowerCase().trim();
+  let gradeNum = 2; // default
+  if (normalized === "k" || normalized === "kindergarten") gradeNum = 0;
+  else {
+    const match = normalized.match(/^(\d+)/);
+    if (match) gradeNum = parseInt(match[1], 10);
+    else {
+      const gradeMatch = normalized.match(/grade\s*(\d+)/);
+      if (gradeMatch) gradeNum = parseInt(gradeMatch[1], 10);
+    }
+  }
+
+  if (gradeNum <= 1) {
+    return `=== GRADE-LEVEL SCORING EXPECTATIONS (${gradeLevel}) ===
+
+This is a K-1 student. Adjust scoring expectations accordingly:
+- Accept simple, concrete language — do NOT penalize for lack of academic vocabulary
+- A correct answer in a child's own words ("you take some away") is full credit
+- Do NOT expect terms like "subtraction", "addition", "equals" — everyday language is sufficient
+- Do NOT expect multi-step reasoning or strategy comparison
+- "I had 5 and took away 2" is a strong answer for this grade level
+- Prioritize: Does the student show they understand the basic concept?
+
+`;
+  }
+
+  if (gradeNum <= 3) {
+    return `=== GRADE-LEVEL SCORING EXPECTATIONS (${gradeLevel}) ===
+
+This is a grade 2-3 student. Adjust scoring expectations accordingly:
+- Accept concrete examples and simple reasoning
+- Grade-level vocabulary is a plus but not required for mastery
+- "Because you need to regroup" is sufficient — no need for formal property names
+- Do NOT expect: formal mathematical properties, abstract reasoning, multi-strategy comparison
+- Do NOT penalize for: informal language, short answers with correct reasoning, using "stuff" or "things"
+- Prioritize: Does the student show understanding and give a relevant reason or example?
+
+`;
+  }
+
+  if (gradeNum <= 5) {
+    return `=== GRADE-LEVEL SCORING EXPECTATIONS (${gradeLevel}) ===
+
+This is a grade 4-5 student. Scoring expectations:
+- Expect use of some domain vocabulary when introduced in the lesson
+- Expect basic reasoning ("because...") and simple comparisons
+- Do NOT expect: formal proofs, abstract generalizations, synthesis of multiple principles
+- Prioritize: Does the student explain their thinking with grade-appropriate reasoning?
+
+`;
+  }
+
+  // Grade 6+ — no special adjustment needed, default expectations apply
+  return "";
 }
 
 /** Build the criteriaEvaluation JSON schema fragment for system prompts. */
@@ -729,19 +970,20 @@ async function generateCoachFeedback(
   gradeLevel: string,
   lessonTitle: string,
   isFinalQuestion: boolean = false,
-  promptScope?: PromptScope | null
+  promptScope?: PromptScope | null,
+  coachStyleDirective?: string
 ): Promise<CoachResponse> {
   // ============================================
   // ANSWER VERIFICATION (run before LLM call)
   // ============================================
-  const verification = verifyAnswer(prompt.input, studentAnswer);
+  const verification = verifyAnswer(prompt.input, studentAnswer, prompt.mathProblem);
 
   // ============================================
   // DETERMINISTIC SHORT-CIRCUIT FOR VERIFIED CORRECT (ARITHMETIC ONLY)
   // Only arithmetic prompts bypass the LLM. Non-math prompts always go
   // through the LLM so the coach can probe for deeper understanding.
   // ============================================
-  if (verification.confidence === "high" && verification.isVerified && allowDeterministicShortCircuit(prompt.input)) {
+  if (verification.confidence === "high" && verification.isVerified && allowDeterministicShortCircuit(prompt.input, prompt.mathProblem)) {
     if (DEBUG_ANSWER_VERIFICATION) {
       console.log("[coach-verify] SHORT-CIRCUIT: Returning deterministic Path A response (arithmetic)");
     }
@@ -761,7 +1003,7 @@ async function generateCoachFeedback(
     };
   }
 
-  if (verification.confidence === "high" && verification.isVerified && !allowDeterministicShortCircuit(prompt.input)) {
+  if (verification.confidence === "high" && verification.isVerified && !allowDeterministicShortCircuit(prompt.input, prompt.mathProblem)) {
     if (DEBUG_ANSWER_VERIFICATION) {
       console.log("[coach-verify] Non-math verified correct — sending to LLM for Path B probing");
     }
@@ -773,12 +1015,20 @@ async function generateCoachFeedback(
   // Build verification context for the prompt (only for mismatch cases now)
   let verificationContext = "";
   if (verification.confidence === "high" && !verification.isVerified && verification.expectedAnswer !== null) {
+    // Check for known misconception from deterministic math validation
+    let misconceptionHint = "";
+    if (prompt.mathProblem) {
+      const mathValidation = validateMathAnswer(studentAnswer, prompt.mathProblem);
+      if (mathValidation.matchedMisconception) {
+        misconceptionHint = `\nLIKELY MISCONCEPTION: "${mathValidation.matchedMisconception}". Address this specific error in your feedback.\n`;
+      }
+    }
     verificationContext = `
 === ANSWER VERIFICATION (informational) ===
 
 VERIFIED MISMATCH: The student's extracted answer (${verification.extractedAnswer}) does not match the expected answer (${verification.expectedAnswer}).
 You may use Path C to guide correction, but be specific about the discrepancy.
-
+${misconceptionHint}
 `;
   }
 
@@ -815,7 +1065,7 @@ Do NOT ask for steps/details of off-scope processes.
   // ============================================
   // ASSESSMENT CONTEXT (criteria-based evaluation)
   // ============================================
-  const assessmentContext = buildAssessmentContext(prompt.assessment);
+  const assessmentContext = buildAssessmentContext(prompt.assessment, gradeLevel);
 
   // ============================================
   // FOUR-PATH TURN DECISION FRAMEWORK
@@ -826,7 +1076,7 @@ Lesson: "${lessonTitle}"
 Question: "${prompt.input}"
 ${prompt.hints?.length ? `Hints available: ${prompt.hints.join("; ")}` : ""}
 ${isFinalQuestion ? `\n*** THIS IS THE FINAL QUESTION IN THE ASSIGNMENT ***\n` : ""}
-${verificationContext}${preLLMContext}${scopeContext}${assessmentContext}=== ROLE ===
+${verificationContext}${preLLMContext}${scopeContext}${assessmentContext}${coachStyleDirective ? coachStyleDirective + "\n" : ""}=== ROLE ===
 
 You are a conversational tutor assessing holistic understanding — not a grader checking correctness.
 Your goal: understand what the student knows and deepen it through short, focused dialogue.
@@ -852,7 +1102,7 @@ Uncertainty signals: hedging ("I think", "maybe"), explicit doubt ("I'm not sure
 Declarative answer + fillers = MEDIUM-TO-HIGH confidence.
 
 Adjust by confidence + correctness:
-- HIGH + incorrect → Challenge directly: "You said 14. Are you adding or subtracting?"
+- HIGH + incorrect → Challenge directly: "Hmm, are you adding or subtracting here?"
 - MEDIUM + incorrect → Guide: "What operation does 'take away' mean?"
 - LOW + incorrect → Simplify: "What's the first number in the problem?"
 - CORRECT + uncertain → Confirm and move on. No probing.
@@ -876,9 +1126,10 @@ Strong uncertainty ("I don't know", "I give up", "I can't") → close immediatel
 
 === TRANSITIONS ===
 
-Normal progression: "Let's go to the next question." / "Let's continue."
+Normal progression (ALL rubric criteria met): "Let's go to the next question." / "Let's continue."
 Stagnation move-on: "We'll move on for now. You can come back to this later." (set deferredByCoach=true)
 NEVER say: "That's enough for now."
+NEVER use transition/completion language while rubric criteria are still missing — keep probing.
 ${isFinalQuestion ? `
 This is the FINAL QUESTION. Use completion language only:
 - "You've completed this assignment." / "That wraps up this lesson."
@@ -915,29 +1166,38 @@ Mode C (Affirm+Bridge) is ONLY for answers that already include reasoning or des
 
 === CONVERSATIONAL TURN FORMAT (choose ONE mode) ===
 
-MODE A — REFLECT + PROBE
+MODE A — REFLECT + PROBE (rubric-gap-driven when rubric exists)
 When: Student gave an on-topic answer that can be deepened.
-  1. Reflect: Paraphrase the student's core IDEA in your own words (1 sentence). Reference the MEANING, not the words.
-  2. Probe: ONE targeted follow-up question.
-Example: Student says "gravity pulls them" →
-  "So there's a force holding the planets in place. What would happen without it?"
-BAD: "You said gravity pulls them. Why?" (echoes words)
-BAD: "Great job! What else?" (generic praise, no meaning)
 
-IMPORTANT — Match probe to concept type:
-- Observable phenomena (weather, animals, objects): "What would you see/hear/feel?" or "What does that look like?"
-- Abstract processes (photosynthesis, gravity, evaporation, math reasoning): "What are the steps?" / "What goes in and comes out?" / "How would you know it happened?" — NEVER ask "what does that look/feel like" for invisible processes.
-- Opinion/affect: "What makes you feel that way?"
+When assessment rubric IS present, use this format:
+  1. Acknowledge what's correct (1 sentence — reference the MEANING, not the words)
+  2. State the missing rubric item (1 sentence)
+  3. Ask ONE specific follow-up that fills that gap
+Example (science explanation + examples rubric):
+  Student: "closest planets are rocks, farther are gas or ice"
+  Coach: "Good start—you've got the big idea about inner vs outer planets. To finish, name two planets (one rocky and one gas/ice) and tell me what each is made of."
+BAD: "You said inner planets are rocks. What was your first step?" (generic process template)
+BAD: "Great job! What else do you know?" (generic praise, no rubric gap targeted)
 
-Choose ONE probing dimension per turn:
-- Mechanism: "Why does that happen?" / "What are the steps?"
-- Evidence: "How would you know?" / "What goes in and comes out?"
-- Example: "What's an example of that?"
-- Description: "What would you notice?" (observable only)
-- Contrast: "How is that different from ___?"
-- Vocabulary: "What does that word mean?"
-- Transfer: "Would that still work if ___?"
-Do NOT repeat the original question or use vague prompts ("tell me more").
+When assessment rubric is NOT present, use the general probe format:
+  1. Paraphrase the student's core IDEA in your own words (1 sentence)
+  2. ONE targeted follow-up question
+
+IMPORTANT — Match probe to the QUESTION TYPE (stay in domain):
+- If the question asks to explain a concept + give examples → probe for missing examples or missing explanation
+- If the question asks for a procedure/steps → probe for missing steps
+- If the question asks "why" → probe for reasoning
+- Do NOT use generic math/process templates ("What was your first step and what did you get?") unless the question is explicitly a multi-step math/procedure problem
+- Do NOT cross domains — a science explanation question gets science probes, not procedure probes
+
+Choose ONE probing dimension per turn (match to what's missing):
+- Example: "Can you name a specific example?" (when rubric requires examples)
+- Detail: "What is [thing] made of?" (when rubric requires materials/descriptions)
+- Mechanism: "Why does that happen?" / "What are the steps?" (procedure questions only)
+- Evidence: "How would you know?" (when rubric requires evidence)
+- Contrast: "How is that different from ___?" (when rubric requires comparison)
+- Vocabulary: "What does that word mean?" (when rubric requires vocabulary)
+Do NOT repeat the original question or use vague prompts ("tell me more", "what else").
 
 MODE B — CLARIFY + PROBE
 When: Student response is clipped, garbled, or incomplete but on-topic.
@@ -973,6 +1233,8 @@ Response: Normalize + ONE concrete starting point.
 - No robotic phrasing ("Correct." alone). No over-praise. No meta-language ("This demonstrates mastery").
 - Speak like a thoughtful tutor: direct, warm, concise. Use contractions naturally.
 - Vary acknowledgments: "Good start." / "That works." / "Makes sense." / "Got it."
+- Praise is PROPORTIONAL: incomplete answers get "Good start" + what's missing, NOT "Excellent!" or "Great work!"
+- Reserve strong affirmation ("That's it." / "Nice explanation.") for when ALL rubric criteria are met.
 
 === SINGLE-QUESTION RULE (HARD CONSTRAINT) ===
 
@@ -1233,7 +1495,8 @@ async function continueConversation(
   history: ConversationMessage[],
   gradeLevel: string,
   isFinalQuestion: boolean = false,
-  promptScope?: PromptScope | null
+  promptScope?: PromptScope | null,
+  coachStyleDirective?: string
 ): Promise<{
   feedback: string;
   followUpQuestion?: string;
@@ -1246,12 +1509,12 @@ async function continueConversation(
   // ============================================
   // ANSWER VERIFICATION (check latest response)
   // ============================================
-  const verification = verifyAnswer(prompt.input, studentResponse);
+  const verification = verifyAnswer(prompt.input, studentResponse, prompt.mathProblem);
 
   // ============================================
   // DETERMINISTIC SHORT-CIRCUIT FOR VERIFIED CORRECT (ARITHMETIC ONLY)
   // ============================================
-  if (verification.confidence === "high" && verification.isVerified && allowDeterministicShortCircuit(prompt.input)) {
+  if (verification.confidence === "high" && verification.isVerified && allowDeterministicShortCircuit(prompt.input, prompt.mathProblem)) {
     if (DEBUG_ANSWER_VERIFICATION) {
       console.log("[coach-verify] continueConversation: SHORT-CIRCUIT Path A (arithmetic)");
     }
@@ -1268,7 +1531,7 @@ async function continueConversation(
     };
   }
 
-  if (verification.confidence === "high" && verification.isVerified && !allowDeterministicShortCircuit(prompt.input)) {
+  if (verification.confidence === "high" && verification.isVerified && !allowDeterministicShortCircuit(prompt.input, prompt.mathProblem)) {
     if (DEBUG_ANSWER_VERIFICATION) {
       console.log("[coach-verify] continueConversation: Non-math verified correct — using LLM for follow-up evaluation");
     }
@@ -1277,12 +1540,19 @@ async function continueConversation(
   // Build verification context (only for mismatch)
   let verificationContext = "";
   if (verification.confidence === "high" && !verification.isVerified && verification.expectedAnswer !== null) {
+    let misconceptionHint = "";
+    if (prompt.mathProblem) {
+      const mathValidation = validateMathAnswer(studentResponse, prompt.mathProblem);
+      if (mathValidation.matchedMisconception) {
+        misconceptionHint = `\nLIKELY MISCONCEPTION: "${mathValidation.matchedMisconception}". Address this specific error in your feedback.\n`;
+      }
+    }
     verificationContext = `
 === ANSWER VERIFICATION (informational) ===
 
 VERIFIED MISMATCH: Student's answer (${verification.extractedAnswer}) ≠ expected (${verification.expectedAnswer}).
 You may guide correction if appropriate.
-
+${misconceptionHint}
 `;
   }
 
@@ -1298,9 +1568,9 @@ You may guide correction if appropriate.
     console.log("[coach-pre-llm] continueConversation:", { completeness, repairIntent, preserveIntent });
   }
 
-  // Determine conversation depth - after 2-3 exchanges, wrap up
+  // Determine conversation depth - encourage wrapping after several exchanges
   const turnCount = history.filter((h) => h.role === "student").length;
-  const shouldWrapUp = turnCount >= 2;
+  const shouldWrapUp = turnCount >= 4;
 
   const historyText = history
     .map((h) => `${h.role === "coach" ? "Coach" : "Student"}: ${h.message}`)
@@ -1322,7 +1592,7 @@ Do NOT ask for steps/details of off-scope processes.
   }
 
   // Assessment context (criteria-based evaluation)
-  const assessmentContext = buildAssessmentContext(prompt.assessment);
+  const assessmentContext = buildAssessmentContext(prompt.assessment, gradeLevel);
 
   // Four-path framework applies here too:
   // Path A: Student clarified well → end conversation
@@ -1332,7 +1602,7 @@ Do NOT ask for steps/details of off-scope processes.
 Original question: "${prompt.input}"
 Student's original answer: "${originalAnswer}"
 ${isFinalQuestion ? `\n*** THIS IS THE FINAL QUESTION IN THE ASSIGNMENT ***\n` : ""}
-${verificationContext}${preLLMContext}${scopeContext}${assessmentContext}
+${verificationContext}${preLLMContext}${scopeContext}${assessmentContext}${coachStyleDirective ? coachStyleDirective + "\n" : ""}
 Conversation so far:
 ${historyText}
 
@@ -1356,24 +1626,26 @@ This is the FINAL QUESTION. Use completion language only:
 ` : ""}
 === FOLLOW-UP EVALUATION ===
 
-If the student adequately answered the probe (added detail, reasoning, or example):
-→ Affirm and close (Mode C). "Good. Let's go to the next question."
+If assessment rubric is present, evaluate the FULL conversation (original answer + all follow-ups) against rubric criteria:
+→ If ALL criteria now met across conversation: affirm and close (Mode C). "That's it. Let's go to the next question."
+→ If criteria still missing: use rubric-gap-driven probing (acknowledge correct → state missing → ask follow-up)
+→ Do NOT close while rubric criteria are still missing unless stagnation
 
-If the follow-up is still thin but shows effort (productive struggle):
-→ Allow ONE more probe if responses are evolving. Max 2 turns total.
-
-If no improvement after 2 attempts:
-→ Accept and close. "Let's go to the next question."
+If no rubric, evaluate depth:
+→ If student adequately added detail, reasoning, or example: Affirm and close (Mode C)
+→ If thin but shows effort: allow ONE more probe if evolving. Max 2 turns total.
+→ If no improvement after 2 attempts: Accept and close.
 
 === ANSWER DEPTH ===
 
 DETAILED (reasoning, example, description) → Mode C (Affirm+Bridge), close.
 MINIMAL (list, label, short phrase) → Mode A (Reflect+Probe), probe ONE dimension.
 
-Match probe to concept type:
-- Observable (weather, animals, objects): Description / Example — "What would you notice?"
-- Abstract (photosynthesis, gravity, math): Mechanism / Evidence — "What are the steps?" / "What goes in and comes out?"
-- Opinion/affect: "What makes you feel that way?"
+Match probe to the QUESTION TYPE (stay in domain):
+- If the question asks to explain + give examples → probe for missing examples or explanation
+- If the question asks for procedure/steps → probe for missing steps
+- If the question asks "why" → probe for reasoning
+- Do NOT use generic math/process templates ("What was your first step?") unless the question is explicitly a procedure problem
 NEVER ask "what does that look/feel like" for abstract/invisible processes.
 
 === CLARIFY-AND-CLOSE ===
@@ -1410,26 +1682,33 @@ UNPRODUCTIVE (move on): Same idea repeated, stagnation, random guessing.
 
 ${shouldWrapUp ? `This is turn 3+. Prefer closing unless clear productive struggle is evident.` : `Choose the appropriate mode:
 
-MODE A — REFLECT + PROBE: On-topic answer that can be deepened → Paraphrase the student's IDEA (not their words), then ONE targeted follow-up question.
+MODE A — REFLECT + PROBE (rubric-gap-driven when rubric exists):
+  When rubric present: Acknowledge what's correct → state missing criterion → ONE follow-up targeting that gap.
+  When no rubric: Paraphrase the student's IDEA (not their words) → ONE targeted follow-up question.
+  Stay in domain — match probe to what the question asks for, not generic templates.
 MODE B — CLARIFY + PROBE: Clipped/garbled but on-topic → Show you caught the gist, ask to restate or complete a thought. Do NOT say "try a different angle."
-MODE C — AFFIRM + BRIDGE: Detailed correct answer, or time to transition → Briefly affirm (1 sentence), bridge to next idea or close.
+MODE C — AFFIRM + BRIDGE: ALL rubric criteria met (or detailed correct answer without rubric) → Briefly affirm (1 sentence), close or offer optional extension.
 MODE D — REDIRECT: Incorrect but shows effort → Adjust by confidence. ONE question max.
 MOVE ON — Unproductive struggle → Clean transition. No question. Set deferredByCoach=true.
 
-RULE: A correct MINIMAL answer must trigger Mode A (Reflect+Probe), not Mode C.`}
+RULE: A correct MINIMAL answer must trigger Mode A (Reflect+Probe), not Mode C.
+RULE: Do NOT use Mode C while rubric criteria are still missing.`}
 
 === TRANSITIONS ===
 
-Normal: "Let's go to the next question." / "Let's continue."
+Normal (ALL rubric criteria met): "Let's go to the next question." / "Let's continue."
 ${isFinalQuestion ? `Final question: "You've completed this assignment." / "That wraps up this lesson."` : ""}
 Stagnation: "We'll move on for now. You can come back to this later." (set deferredByCoach=true)
 NEVER: "That's enough for now."
+NEVER use transition/completion language while rubric criteria are still missing.
 
 === TONE ===
 
 - 1–2 sentences max. ONE question max (none if closing).
 - No robotic phrasing, no over-praise, no meta-language.
 - Direct, warm, concise.
+- Praise is PROPORTIONAL: incomplete answers → "Good start." / "You're on the right track." Complete → "That's it." / "Nice."
+- NEVER use superlatives ("Excellent!", "Amazing!") for partial answers.
 
 === SINGLE-QUESTION RULE (HARD CONSTRAINT) ===
 
@@ -1486,10 +1765,11 @@ Respond in JSON:
       resolvedScope,
     });
 
-    // Hard cap: after 3+ student turns, always close to prevent infinite loops
-    if (turnCount >= 3 && result.shouldContinue) {
+    // Hard cap: after 5+ student turns, always close to prevent infinite loops.
+    // Increased from 3 to allow rubric-gap probing to complete before wrapping.
+    if (turnCount >= MAX_COACH_EXCHANGES && result.shouldContinue) {
       if (DEBUG_ANSWER_VERIFICATION) {
-        console.log("[coach-enforce] Hard cap: turnCount=" + turnCount + ", forcing shouldContinue=false");
+        console.log("[coach-enforce] Hard cap: turnCount=" + turnCount + " >= " + MAX_COACH_EXCHANGES + ", forcing shouldContinue=false");
       }
       result.shouldContinue = false;
       result.followUpQuestion = "";
@@ -2129,6 +2409,7 @@ interface VideoTurnRequest {
   lastCoachQuestion?: string; // DEPRECATED: use askedCoachQuestions instead
   askedCoachQuestions?: string[]; // all coach questions asked so far (for probe dedup)
   timeRemainingSec?: number; // seconds remaining in session (for closing-window backstop)
+  coachHelpStyle?: string; // student preference: "hints_first" | "examples_first" | "ask_me_questions"
 }
 
 /** Server-side closing window threshold — matches client CLOSING_WINDOW_SEC */
@@ -2137,7 +2418,7 @@ const SERVER_CLOSING_WINDOW_SEC = 15;
 /** No-new-question window: strip open-ended questions when 15s <= timeRemaining < 25s */
 const SERVER_NO_NEW_QUESTION_SEC = 25;
 
-type VideoTurnKind = "FEEDBACK" | "PROBE" | "WRAP";
+type VideoTurnKind = "FEEDBACK" | "PROBE" | "REFLECTION" | "WRAP";
 
 interface VideoTurnResponse {
   response: string;
@@ -2149,6 +2430,14 @@ interface VideoTurnResponse {
   coachActionTag?: CoachActionTag;
   deferredByCoach?: boolean;
   criteriaEvaluation?: CriteriaEvaluation;
+  teacherSummary?: TeacherSummary;
+  wrapReason?: string;
+  studentIntent?: string;
+  criteriaStatus?: string;
+  /** Pre-built instructional recap for client-side wraps when misconception detected */
+  instructionalRecap?: string;
+  /** Fraction of reasoning steps satisfied (0-1). Used client-side for near-success leniency. */
+  completionRatio?: number;
 }
 
 router.post("/video-turn", async (req, res) => {
@@ -2158,14 +2447,15 @@ router.post("/video-turn", async (req, res) => {
       promptId,
       studentAnswer,
       studentResponse,
-      conversationHistory = [],
+      conversationHistory: rawConversationHistory = [],
       gradeLevel = "2nd grade",
       attemptCount,
       maxAttempts,
       followUpCount,
       lastCoachQuestion,
-      askedCoachQuestions,
+      askedCoachQuestions = [],
       timeRemainingSec,
+      coachHelpStyle,
     } = req.body as VideoTurnRequest;
 
     if (!lessonId || !promptId || !studentResponse) {
@@ -2174,8 +2464,21 @@ router.post("/video-turn", async (req, res) => {
       });
     }
 
+    // DEFENSE: If the frontend included the current student turn in
+    // conversationHistory, strip it to prevent double-counting in
+    // off-topic detection, step accumulation, and isFirstTurn logic.
+    const conversationHistory = [...rawConversationHistory];
+    const lastStudentIdx = conversationHistory.map((h: any) => h.role).lastIndexOf("student");
+    if (
+      lastStudentIdx >= 0 &&
+      conversationHistory[lastStudentIdx].message === studentResponse
+    ) {
+      conversationHistory.splice(lastStudentIdx, 1);
+    }
+
     const client = getClient();
     if (!client) {
+      console.log(`[WRAP-SITE-A] no-client | studentResponse="${studentResponse.slice(0, 40)}"`);
       return res.json({
         response: "Great effort! Keep thinking about this.",
         shouldContinue: false,
@@ -2200,6 +2503,25 @@ router.post("/video-turn", async (req, res) => {
     const prompt = lesson.prompts[promptIndex];
     const isFinalQuestion = promptIndex === lesson.prompts.length - 1;
 
+    // ── RUNTIME BACKFILL: derive reasoningSteps from mathProblem ──
+    // Older lessons were saved without reasoningSteps. If the prompt
+    // has a mathProblem but no reasoningSteps, derive them now so the
+    // step accumulation system works for ALL math prompts.
+    if (prompt.mathProblem && !prompt.assessment?.reasoningSteps?.length) {
+      const rubric = buildDeterministicMathRubric(prompt.mathProblem);
+      if (!prompt.assessment) {
+        prompt.assessment = {};
+      }
+      prompt.assessment.reasoningSteps = rubric.reasoningSteps;
+      // Also backfill allowedProbes and retryQuestions if missing
+      if (!prompt.allowedProbes?.length) {
+        prompt.allowedProbes = rubric.allowedProbes;
+      }
+      if (!prompt.retryQuestions?.length) {
+        prompt.retryQuestions = rubric.retryQuestions;
+      }
+    }
+
     // Resolve scope ONCE for this prompt — threaded to all guardrail calls.
     // Priority: prompt.scope (authored) > cached (LLM-generated) > legacy regex
     const scope = resolvePromptScope(prompt.input, prompt.scope);
@@ -2210,50 +2532,552 @@ router.post("/video-turn", async (req, res) => {
       generatePromptScope(client, prompt.input, gradeLevel).catch(() => {});
     }
 
-    // THE KEY OPTIMIZATION: run both LLM calls in parallel (~1.5-2s saved)
-    const [feedbackResult, wordingResult] = await Promise.all([
-      generateCoachFeedback(
-        client,
-        prompt,
-        studentResponse,
-        gradeLevel,
-        lesson.title,
-        isFinalQuestion,
-        scope
-      ),
-      continueConversation(
-        client,
-        prompt,
-        studentAnswer,
-        studentResponse,
-        conversationHistory,
-        gradeLevel,
-        isFinalQuestion,
-        scope
-      ),
-    ]);
+    // Build coach style directive from student preference (if provided)
+    let coachStyleDirective: string | undefined;
+    if (coachHelpStyle === "hints_first") {
+      coachStyleDirective =
+        "=== STUDENT PREFERENCE: HINTS FIRST ===\n" +
+        "Before asking the student to retry, offer a concrete hint drawn from the hint list.\n" +
+        "Only ask for a new attempt after the hint has been delivered.\n";
+    } else if (coachHelpStyle === "examples_first") {
+      coachStyleDirective =
+        "=== STUDENT PREFERENCE: EXAMPLES FIRST ===\n" +
+        "When the student is stuck or gave a partial answer, provide a brief worked example\n" +
+        "of a SIMILAR (not identical) problem before asking for another attempt.\n" +
+        "Keep examples to 1–2 sentences.\n";
+    } else if (coachHelpStyle === "ask_me_questions") {
+      coachStyleDirective =
+        "=== STUDENT PREFERENCE: SOCRATIC ===\n" +
+        "Use a Socratic approach: guide with questions rather than explanations.\n" +
+        "Instead of telling the student what to do, ask one focused question\n" +
+        "that helps them discover the next step themselves.\n";
+    }
+
+    // SINGLE-PATH ROUTING: Only one LLM interpretation per turn.
+    // First turn → generateCoachFeedback (scoring + criteria + feedback text)
+    // Continuation → continueConversation (context-aware follow-up text)
+    const isFirstTurn = !conversationHistory?.length
+      || conversationHistory.filter((h: any) => h.role === "student").length === 0;
+
+    let feedbackResult: Awaited<ReturnType<typeof generateCoachFeedback>>;
+    let wordingResult: {
+      feedback: string;
+      followUpQuestion?: string;
+      shouldContinue: boolean;
+      encouragement: string;
+      deferredByCoach?: boolean;
+      deferralReason?: "stagnation";
+      deferralContext?: { pattern?: string; turnCount?: number };
+    };
+
+    if (isFirstTurn) {
+      // First student response: generateCoachFeedback provides scoring + criteria + text
+      feedbackResult = await generateCoachFeedback(
+        client, prompt, studentResponse, gradeLevel, lesson.title, isFinalQuestion, scope, coachStyleDirective
+      );
+      wordingResult = {
+        feedback: feedbackResult.feedback,
+        followUpQuestion: feedbackResult.followUpQuestion,
+        shouldContinue: feedbackResult.shouldContinue,
+        encouragement: feedbackResult.encouragement,
+        deferredByCoach: feedbackResult.deferredByCoach,
+        deferralReason: feedbackResult.deferralReason,
+        deferralContext: feedbackResult.deferralContext,
+      };
+    } else {
+      // Continuation turn: conversation history matters for wording
+      const continuationResult = await continueConversation(
+        client, prompt, studentAnswer, studentResponse,
+        conversationHistory, gradeLevel, isFinalQuestion, scope, coachStyleDirective
+      );
+      wordingResult = continuationResult;
+
+      // For scoring/criteria, use deterministic validators when available.
+      // For open-ended prompts without deterministic ground truth, run
+      // generateCoachFeedback for scoring (its feedback text is discarded).
+      const hasDeterministicScoring = !!prompt.mathProblem
+        || (prompt.assessment?.requiredEvidence && prompt.assessment?.referenceFacts);
+
+      if (hasDeterministicScoring) {
+        // Deterministic path: build minimal feedbackResult — downstream validators will bound scores
+        feedbackResult = {
+          feedback: continuationResult.feedback,
+          score: 60, // placeholder — math/factual validators below will override
+          isCorrect: false,
+          shouldContinue: continuationResult.shouldContinue,
+          encouragement: continuationResult.encouragement,
+        };
+      } else {
+        // LLM scoring for open-ended prompts (no math/factual ground truth)
+        feedbackResult = await generateCoachFeedback(
+          client, prompt, studentResponse, gradeLevel, lesson.title, isFinalQuestion, scope, coachStyleDirective
+        );
+      }
+    }
 
     // Extract criteria evaluation from LLM result (if assessment rubric was present)
     const criteriaEval = feedbackResult.criteriaEvaluation;
 
-    // Apply post-evaluation guardrail (criteria-aware)
-    const resolved = resolvePostEvaluation(
+    // DETERMINISTIC FACTUAL VALIDATION: Bound LLM scoring using referenceFacts
+    // when the prompt has structured evidence requirements. Works for ANY topic.
+    // Can both UPGRADE (student met bar but LLM under-rated) and DOWNGRADE
+    // (student has factual errors but LLM over-rated).
+    let factValidation: ReturnType<typeof validateFacts> | null = null;
+    let evidenceChecklist: ReturnType<typeof buildEvidenceChecklist> | null = null;
+    let explanationAccumulation: AccumulatedExplanationEvidence | null = null;
+
+    if (criteriaEval && prompt.assessment?.requiredEvidence && prompt.assessment?.referenceFacts) {
+      const fullTranscript = [
+        ...conversationHistory.filter(h => h.role === "student").map(h => h.message),
+        studentResponse,
+      ].join(" ");
+
+      factValidation = validateFacts(
+        fullTranscript,
+        prompt.assessment.requiredEvidence,
+        prompt.assessment.referenceFacts
+      );
+
+      // Build evidence checklist for tracking and probe generation
+      evidenceChecklist = buildEvidenceChecklist(
+        factValidation,
+        prompt.assessment.requiredEvidence,
+        prompt.assessment.referenceFacts,
+        prompt.assessment.successCriteria,
+        criteriaEval.missingCriteria,
+      );
+
+      // MASTERY GUARD: If checklist has unsatisfied items, block "strong"
+      const hasUnsatisfiedEvidence = evidenceChecklist.some(item => !item.satisfied);
+      if (hasUnsatisfiedEvidence && criteriaEval.overallStatus === "strong") {
+        if (DEBUG_MATH_PIPELINE) console.log(`[evidence-checklist] Blocking strong: unsatisfied items: ${evidenceChecklist.filter(i => !i.satisfied).map(i => i.label).join(", ")}`);
+        criteriaEval.overallStatus = "developing";
+        if (feedbackResult.score >= CORRECT_THRESHOLD) {
+          feedbackResult.score = CORRECT_THRESHOLD - 1;
+          feedbackResult.isCorrect = false;
+        }
+      }
+
+      const bounding = boundScore(
+        criteriaEval.overallStatus,
+        feedbackResult.score,
+        factValidation,
+        CORRECT_THRESHOLD
+      );
+
+      if (bounding.wasAdjusted) {
+        if (DEBUG_MATH_PIPELINE) console.log(`[factual-validation] ${bounding.direction}: ${criteriaEval.overallStatus} → ${bounding.boundedStatus} (score: ${feedbackResult.score} → ${bounding.boundedScore}) reason: ${bounding.reason}`);
+        criteriaEval.overallStatus = bounding.boundedStatus;
+        feedbackResult.score = bounding.boundedScore;
+        feedbackResult.isCorrect = bounding.boundedScore >= CORRECT_THRESHOLD;
+
+        if (bounding.direction === "upgrade") {
+          criteriaEval.missingCriteria = [];
+        }
+      }
+    }
+    // LEGACY FALLBACK: Keep evaluateExamplesMastery for prompts without referenceFacts
+    else if (criteriaEval && criteriaEval.overallStatus !== "strong") {
+      const fullTranscript = [
+        ...conversationHistory.filter(h => h.role === "student").map(h => h.message),
+        studentResponse,
+      ].join(" ");
+      const examplesMastery = evaluateExamplesMastery(prompt.input, fullTranscript, gradeLevel);
+      if (examplesMastery === "strong") {
+        if (DEBUG_MATH_PIPELINE) console.log(`[examples-mastery] Legacy upgrade: ${criteriaEval.overallStatus} → strong (score: ${feedbackResult.score})`);
+        criteriaEval.overallStatus = "strong";
+        criteriaEval.missingCriteria = [];
+        if (feedbackResult.score < CORRECT_THRESHOLD) {
+          feedbackResult.score = CORRECT_THRESHOLD;
+          feedbackResult.isCorrect = true;
+        }
+      }
+    }
+
+    // EXPLANATION REMEDIATION: When the prompt has structured evidence requirements
+    // (requiredEvidence + referenceFacts + successCriteria) and no mathProblem,
+    // accumulate evidence and classify the student's state deterministically.
+    if (shouldUseExplanationRemediation(prompt) && factValidation) {
+      explanationAccumulation = accumulateExplanationEvidence(
+        factValidation,
+        studentResponse,
+        null, // TODO: thread prior accumulation through session state if needed
+        prompt.assessment!.requiredEvidence!,
+        prompt.assessment!.referenceFacts!,
+        prompt.assessment!.successCriteria!,
+        criteriaEval?.missingCriteria,
+      );
+    }
+
+    // DETERMINISTIC MATH VALIDATION: Bound LLM scoring using MathProblem ground truth.
+    // Analogous to science factual validation above, but for math computation prompts.
+    let mathValidation: MathValidationResult | null = null;
+    let mathBounding: MathBoundingDecision | null = null;
+    let mathMasteryOverride = false;
+
+    if (prompt.mathProblem) {
+      const fullMathTranscript = [
+        ...conversationHistory.filter(h => h.role === "student").map(h => h.message),
+        studentResponse,
+      ].join(" ");
+
+      mathValidation = validateMathAnswer(fullMathTranscript, prompt.mathProblem);
+
+      // PER-TURN ANSWER CORRECTION: validateMathAnswer on a concatenated transcript
+      // can extract the wrong answer (e.g., "25 you get five" → extracts 5 instead of 25).
+      // Check each turn individually; if ANY turn had the correct answer, override.
+      if (mathValidation.status !== "correct") {
+        const perTurnMessages = [
+          ...conversationHistory.filter(h => h.role === "student").map(h => h.message),
+          studentResponse,
+        ];
+        for (const turn of perTurnMessages) {
+          const turnValidation = validateMathAnswer(turn, prompt.mathProblem);
+          if (turnValidation.status === "correct") {
+            // Merge: keep the broader strategy detection from full transcript,
+            // but fix the answer status
+            const allStrategies = new Set([
+              ...mathValidation.demonstratedStrategies,
+              ...turnValidation.demonstratedStrategies,
+            ]);
+            mathValidation = {
+              ...mathValidation,
+              status: "correct",
+              extractedAnswer: turnValidation.extractedAnswer,
+              demonstratedStrategies: Array.from(allStrategies),
+              hasPartialStrategy: allStrategies.size > 0,
+            };
+            if (DEBUG_MATH_PIPELINE) console.log(`[math-validation] Per-turn correction: turn "${turn.slice(0, 40)}" had correct answer ${turnValidation.extractedAnswer}`);
+            break;
+          }
+        }
+      }
+
+      mathBounding = boundMathScore(feedbackResult.score, mathValidation);
+
+      // Override LLM score with deterministic bounding
+      if (mathBounding.wasAdjusted) {
+        if (DEBUG_MATH_PIPELINE) console.log(`[math-validation] ${mathBounding.boundedStatus}: score ${feedbackResult.score} → ${mathBounding.boundedScore} (${mathBounding.reason})`);
+        feedbackResult.score = mathBounding.boundedScore;
+        feedbackResult.isCorrect = mathBounding.boundedScore >= CORRECT_THRESHOLD;
+      }
+
+      // Override criteria status to match math bounding
+      if (criteriaEval) {
+        criteriaEval.overallStatus = mathBounding.boundedStatus;
+      }
+
+      mathMasteryOverride = checkMathMastery(mathValidation, mathBounding);
+      if (mathMasteryOverride) {
+        if (DEBUG_MATH_PIPELINE) console.log(`[math-mastery] Deterministic mastery: answer=${mathValidation.extractedAnswer}, strategies=${mathValidation.demonstratedStrategies.join(",")}`);
+      }
+    }
+
+    // 3-STATE CLASSIFICATION for math explanation prompts
+    let mathExplanationState: MathExplanationState | null = null;
+    if (prompt.mathProblem && mathValidation) {
+      const requiresExplanation = promptRequiresMathExplanation(prompt.input);
+      mathExplanationState = classifyMathExplanationState(mathValidation, requiresExplanation);
+      if (DEBUG_MATH_PIPELINE) console.log(`[math-classification] state=${mathExplanationState}, requiresExplanation=${requiresExplanation}, strategies=[${mathValidation.demonstratedStrategies.join(",")}]`);
+    }
+
+    // CONVERSATION-LEVEL STRATEGY ACCUMULATION:
+    // Gather strategies demonstrated across ALL student turns (not just the current one).
+    let combinedStrategies: string[] = mathValidation?.demonstratedStrategies ?? [];
+    if (prompt.mathProblem && conversationHistory?.length) {
+      const priorStrategies = accumulateMathStrategies(conversationHistory, prompt.mathProblem);
+      combinedStrategies = [...new Set([...combinedStrategies, ...priorStrategies])];
+      if (priorStrategies.length > 0) {
+        if (DEBUG_MATH_PIPELINE) console.log(`[math-accumulate] prior=[${priorStrategies.join(",")}] combined=[${combinedStrategies.join(",")}]`);
+      }
+    }
+
+    // CONVERSATION-LEVEL REASONING STEP ACCUMULATION:
+    // For prompts with structured reasoningSteps, track which steps have been
+    // demonstrated across ALL student turns. This drives probe selection,
+    // wrap decisions, and teacher summaries.
+    let stepAccumulation: ReasoningStepAccumulation | null = null;
+    let mathInterpretation: MathUtteranceInterpretation | null = null;
+    let mathDecisionSource: string | null = null; // tracks which block made the math decision
+    let mathDecisionAction: string | null = null; // the action taken
+    let explanationMove: ExplanationMove | null = null;
+
+    // Wrap res.json to automatically inject completionRatio on every
+    // VideoTurnResponse. This ensures ALL early-return paths include
+    // the latest step-progress ratio, so the client can make correct
+    // near-success leniency decisions.
+    const originalJson = res.json.bind(res);
+    res.json = ((body: unknown) => {
+      if (body && typeof body === "object" && "shouldContinue" in body) {
+        const ratio = stepAccumulation?.completionRatio ?? 0;
+        (body as Record<string, unknown>).completionRatio = ratio;
+        const b = body as Record<string, unknown>;
+        if (DEBUG_MATH_PIPELINE) {
+          console.log(
+            `[VIDEO-TURN-RESPONSE] turnKind=${b.turnKind ?? "unknown"} shouldContinue=${b.shouldContinue}` +
+            ` completionRatio=${ratio.toFixed(2)}` +
+            ` satisfiedSteps=[${stepAccumulation?.satisfiedStepIds?.join(",") ?? ""}]` +
+            ` studentResponse="${studentResponse.slice(0, 60)}"`,
+          );
+          // Universal math decision log — exactly one per math turn
+          if (mathInterpretation && stepAccumulation) {
+            const src = mathDecisionSource ?? "no_decision_block";
+            const act = mathDecisionAction ?? (b.shouldContinue ? "continue" : "wrap");
+            console.log(
+              `[math-decision] source=${src} action=${act}` +
+              ` utteranceKind=${mathInterpretation.utteranceKind}` +
+              ` finalAnswer=${mathInterpretation.finalAnswerCandidate}` +
+              ` wholeProblem=${mathInterpretation.likelyWholeProblemAnswer}` +
+              ` substepOnly=${mathInterpretation.likelySubstepOnly}` +
+              ` decompOnly=${mathInterpretation.isDecompositionOnly}` +
+              ` altChain=${mathInterpretation.isAlternateStrategyChain}` +
+              ` answerCorrect=${stepAccumulation.answerCorrect}` +
+              ` satisfied=${stepAccumulation.satisfiedStepIds.length}` +
+              ` missing=${stepAccumulation.missingStepIds.length}`,
+            );
+          }
+        }
+      }
+      return originalJson(body);
+    }) as typeof res.json;
+    if (prompt.mathProblem && prompt.assessment?.reasoningSteps?.length) {
+      stepAccumulation = accumulateReasoningStepEvidence(
+        prompt.assessment.reasoningSteps,
+        conversationHistory,
+        studentResponse,
+        prompt.mathProblem.correctAnswer,
+      );
+      if (DEBUG_MATH_PIPELINE) console.log(`[step-accumulate] satisfied=[${stepAccumulation.satisfiedStepIds.join(",")}] missing=[${stepAccumulation.missingStepIds.join(",")}] new=[${stepAccumulation.newlySatisfiedStepIds.join(",")}] ratio=${stepAccumulation.completionRatio.toFixed(2)} answer=${stepAccumulation.answerCorrect ? "correct" : "wrong"} altStrategy=${stepAccumulation.alternateStrategyDetected}`);
+
+      // Compute shared utterance interpretation once for downstream use.
+      // This object is the single source of truth for how the student's
+      // utterance should be understood — prevents subsystems from disagreeing.
+      const problemOp = prompt.mathProblem.skill === "two_digit_subtraction" ? "-" as const
+        : prompt.mathProblem.skill === "two_digit_addition" ? "+" as const
+        : undefined;
+      mathInterpretation = interpretMathUtterance(
+        studentResponse,
+        prompt.mathProblem.correctAnswer,
+        conversationHistory?.slice(-1)?.[0]?.role === "coach" ? conversationHistory.slice(-1)[0].message : undefined,
+        prompt.mathProblem.b !== undefined ? [prompt.mathProblem.a, prompt.mathProblem.b] : undefined,
+        problemOp,
+      );
+      // STEP-AWARE BOUNDING OVERRIDE:
+      // When reasoning steps exist, use step-aware status to override bounding.
+      // This fixes the bug where a student who says "36" then "4 + 2 = 6"
+      // gets "needs_support" instead of "developing".
+      if (mathBounding) {
+        const stepStatus = stepAwareStatus(stepAccumulation);
+        if (stepStatus !== mathBounding.boundedStatus) {
+          if (DEBUG_MATH_PIPELINE) console.log(`[step-aware-bound] Overriding ${mathBounding.boundedStatus} → ${stepStatus} (steps: ${stepAccumulation.satisfiedStepIds.length}/${stepAccumulation.satisfiedStepIds.length + stepAccumulation.missingStepIds.length}, answer=${stepAccumulation.answerCorrect})`);
+          mathBounding = {
+            ...mathBounding,
+            boundedStatus: stepStatus,
+            wasAdjusted: true,
+            reason: `step-aware: ${stepAccumulation.satisfiedStepIds.length} of ${stepAccumulation.satisfiedStepIds.length + stepAccumulation.missingStepIds.length} steps + answer ${stepAccumulation.answerCorrect ? "correct" : "incorrect"}`,
+          };
+          // Update score to match new status
+          if (stepStatus === "strong") {
+            feedbackResult.score = Math.max(feedbackResult.score, 90);
+            feedbackResult.isCorrect = true;
+          } else if (stepStatus === "developing") {
+            feedbackResult.score = Math.max(Math.min(feedbackResult.score, 79), 60);
+          }
+          if (criteriaEval) {
+            criteriaEval.overallStatus = stepStatus;
+          }
+        }
+
+        // Re-check math mastery with step-aware status
+        if (stepAccumulation.missingStepIds.length === 0 && stepAccumulation.answerCorrect) {
+          mathMasteryOverride = true;
+          if (DEBUG_MATH_PIPELINE) console.log(`[step-mastery] All reasoning steps satisfied + correct answer → mastery`);
+        } else if (stepAccumulation.alternateStrategyDetected && stepAccumulation.answerCorrect) {
+          // Student demonstrated a valid alternate decomposition — treat as mastery
+          // so the system doesn't force them back into canonical steps.
+          mathMasteryOverride = true;
+          if (DEBUG_MATH_PIPELINE) console.log(`[step-mastery] Alternate strategy detected + correct answer → mastery (canonical coverage: ${stepAccumulation.satisfiedStepIds.length}/${stepAccumulation.satisfiedStepIds.length + stepAccumulation.missingStepIds.length})`);
+        } else if (mathMasteryOverride && stepAccumulation.missingStepIds.length > 0 && !stepAccumulation.alternateStrategyDetected) {
+          // Strategy-based mastery was triggered, but reasoning steps say there are gaps
+          // AND no alternate strategy was detected. Keep coaching.
+          mathMasteryOverride = false;
+          if (DEBUG_MATH_PIPELINE) console.log(`[step-mastery] Strategy mastery overridden: ${stepAccumulation.missingStepIds.length} reasoning steps still missing`);
+        }
+      }
+
+      // STEP-AWARE EXPLANATION STATE: Re-classify after step accumulation.
+      // If prior turns demonstrated strategies OR an alternate strategy was detected,
+      // the current turn has sufficient explanation evidence.
+      if (mathExplanationState === "correct_incomplete" && (stepAccumulation.satisfiedStepIds.length > 0 || stepAccumulation.alternateStrategyDetected)) {
+        mathExplanationState = "correct_explained";
+        if (DEBUG_MATH_PIPELINE) console.log(`[step-classification] Upgraded correct_incomplete → correct_explained (${stepAccumulation.satisfiedStepIds.length} steps satisfied${stepAccumulation.alternateStrategyDetected ? " + alternate strategy" : ""} across turns)`);
+      }
+    }
+
+    // BUILD TEACHER SUMMARY: Deterministic, template-based summary for teacher view.
+    let teacherSummary: TeacherSummary | undefined;
+
+    // Math path: use math validation results for summary
+    if (mathValidation && mathBounding && prompt.mathProblem) {
+      const mathFullTranscript = [
+        ...conversationHistory.filter(h => h.role === "student").map(h => h.message),
+        studentResponse,
+      ].join(" ");
+      teacherSummary = buildMathTeacherSummary({
+        mathValidation,
+        mathBounding,
+        mathProblem: prompt.mathProblem,
+        cleanedStudentResponse: studentResponse,
+        combinedStrategies,
+        reasoningSteps: prompt.assessment?.reasoningSteps,
+        fullTranscript: mathFullTranscript,
+        stepAccumulation: stepAccumulation ?? undefined,
+      });
+    }
+    // Science/general path: use factual validation results
+    else if (factValidation && evidenceChecklist && prompt.assessment?.requiredEvidence && prompt.assessment?.referenceFacts && criteriaEval) {
+      teacherSummary = buildTeacherSummary({
+        validation: factValidation,
+        checklist: evidenceChecklist,
+        overallStatus: criteriaEval.overallStatus,
+        requiredEvidence: prompt.assessment.requiredEvidence,
+        referenceFacts: prompt.assessment.referenceFacts,
+        rubricTarget: prompt.assessment.learningObjective,
+        cleanedStudentResponse: studentResponse,
+      });
+    }
+
+    // Classify student intent for decision-engine invariants
+    const studentIntent = classifyStudentIntent(studentResponse);
+
+    // OFF-TOPIC EXIT: If 2+ student turns are off-topic, stop coaching early.
+    // For math: check accumulated evidence before labeling "not_enough_evidence".
+    // EXCEPTION: If step accumulation found new evidence on this turn (e.g., "you get five"
+    // satisfies a reasoning step via number word normalization + coach question context),
+    // do NOT treat as off-topic even if the raw text lacks digits/math vocab.
+    const stepHasNewEvidence = stepAccumulation && stepAccumulation.newlySatisfiedStepIds.length > 0;
+    const currentOffTopic = stepHasNewEvidence ? false : isOffTopicResponse(studentResponse, prompt.mathProblem);
+    const priorOffTopicCount = countOffTopicTurns(conversationHistory, prompt.mathProblem);
+    if (priorOffTopicCount + (currentOffTopic ? 1 : 0) >= 2) {
+      console.log(`[off-topic-exit] ${priorOffTopicCount} prior + ${currentOffTopic ? 1 : 0} current = ${priorOffTopicCount + (currentOffTopic ? 1 : 0)} off-topic turns — exiting`);
+      // If the student provided math evidence somewhere in the conversation,
+      // use "needs_support" instead of "not_enough_evidence".
+      const hasEvidence = prompt.mathProblem
+        ? hasMathEvidence(studentResponse, conversationHistory, prompt.mathProblem)
+        : false;
+      const closeStatus = hasEvidence ? "needs_support" : "not_enough_evidence";
+      const closeMsg = buildPerformanceAwareClose(closeStatus);
+      console.log(`[WRAP-SITE-B] off-topic-exit | studentResponse="${studentResponse.slice(0, 40)}"`);
+      mathDecisionSource = "off_topic_exit";
+      mathDecisionAction = "wrap";
+      return res.json({
+        response: closeMsg,
+        shouldContinue: false,
+        score: feedbackResult.score,
+        isCorrect: false,
+        probeFirst: false,
+        turnKind: "WRAP",
+        coachActionTag: feedbackResult.coachActionTag,
+        deferredByCoach: false,
+        criteriaEvaluation: criteriaEval,
+        teacherSummary,
+        wrapReason: "off_topic_exit",
+        studentIntent,
+        criteriaStatus: "needs_support",
+      } as VideoTurnResponse);
+    }
+
+    // Apply post-evaluation guardrail (criteria-aware, math-mastery-aware)
+    const mathAnswerCorrect = mathValidation?.status === "correct" || false;
+    let resolved = resolvePostEvaluation(
       feedbackResult,
       attemptCount,
       maxAttempts,
       followUpCount,
       criteriaEval?.overallStatus,
       timeRemainingSec,
+      mathMasteryOverride,
+      mathAnswerCorrect,
     );
+    console.log(`[resolve-post-eval] score=${feedbackResult.score} attemptCount=${attemptCount} maxAttempts=${maxAttempts} followUpCount=${followUpCount} criteriaStatus=${criteriaEval?.overallStatus ?? "none"} mathAnswerCorrect=${mathAnswerCorrect} mathMastery=${mathMasteryOverride} → shouldContinue=${resolved.shouldContinue} probeFirst=${resolved.probeFirst}`);
+    // Set baseline decision source from resolvePostEvaluation — overridden if any block below fires
+    if (prompt.mathProblem) {
+      mathDecisionSource = `resolve_post_eval`;
+      mathDecisionAction = resolved.shouldContinue
+        ? (resolved.probeFirst ? "continue_probing" : "continue")
+        : "wrap";
+    }
+
+    // HINT-FOLLOWED-BY-PROGRESS: If student said "I don't know" then got a hint
+    // and now provides a math-relevant answer, force one more follow-up before closing.
+    if (
+      prompt.mathProblem &&
+      !resolved.shouldContinue &&
+      !mathMasteryOverride &&
+      detectHintFollowedByProgress(conversationHistory, studentResponse, prompt.mathProblem)
+    ) {
+      if (DEBUG_MATH_PIPELINE) console.log("[hint-progress] Student progressed after hint — allowing one more follow-up");
+      resolved = { shouldContinue: true, probeFirst: false };
+      mathDecisionSource = "hint_followed_by_progress";
+      mathDecisionAction = "continue_probing";
+    }
+
+    // STEP-AWARE WRAP PREVENTION: If reasoning steps exist and the student has
+    // any evidence (newly satisfied OR previously satisfied) with missing steps
+    // remaining, force continuation. Partial progress must never wrap.
+    if (
+      stepAccumulation &&
+      !mathMasteryOverride &&
+      !resolved.shouldContinue &&
+      stepAccumulation.missingStepIds.length > 0 &&
+      (stepAccumulation.newlySatisfiedStepIds.length > 0 || stepAccumulation.satisfiedStepIds.length > 0 || stepAccumulation.answerCorrect) &&
+      (!timeRemainingSec || timeRemainingSec > 15) // Don't override closing window
+    ) {
+      if (DEBUG_MATH_PIPELINE) console.log(`[step-wrap-prevent] Evidence (satisfied=[${stepAccumulation.satisfiedStepIds.join(",")}] new=[${stepAccumulation.newlySatisfiedStepIds.join(",")}] answerCorrect=${stepAccumulation.answerCorrect}) + ${stepAccumulation.missingStepIds.length} missing steps → forcing continuation`);
+      resolved = { shouldContinue: true, probeFirst: true };
+      mathDecisionSource = "step_wrap_prevention";
+      mathDecisionAction = "continue_probing";
+    }
+
+    // STEP-AWARE CONTINUATION: Even if resolvePostEvaluation says to continue without
+    // probeFirst, upgrade to probeFirst when we have a specific step to ask about.
+    // Skip if alternate strategy mastery was already granted — don't force canonical probes.
+    if (
+      stepAccumulation &&
+      !mathMasteryOverride &&
+      resolved.shouldContinue &&
+      !resolved.probeFirst &&
+      stepAccumulation.missingStepIds.length > 0 &&
+      stepAccumulation.answerCorrect
+    ) {
+      if (DEBUG_MATH_PIPELINE) console.log(`[step-probe-upgrade] Answer correct + ${stepAccumulation.missingStepIds.length} missing steps → upgrading to probeFirst`);
+      resolved = { shouldContinue: true, probeFirst: true };
+      if (!mathDecisionSource) {
+        mathDecisionSource = "step_probe_upgrade";
+        mathDecisionAction = "continue_probing";
+      }
+    }
 
     // MASTERY WRAP: Student demonstrated mastery — end with submit instruction.
-    const isStrongMastery = criteriaEval?.overallStatus === "strong" && feedbackResult.score >= CORRECT_THRESHOLD;
+    // For math: mathMasteryOverride bypasses science-specific checklist/criteria checks.
+    // For non-math: requires no unsatisfied evidence checklist items and no missing criteria.
+    const hasMissingCriteria = criteriaEval?.missingCriteria && criteriaEval.missingCriteria.length > 0;
+    const hasUnsatisfiedChecklist = evidenceChecklist?.some(item => !item.satisfied) ?? false;
+    const isStrongMastery = mathMasteryOverride || (
+      criteriaEval?.overallStatus === "strong"
+      && feedbackResult.score >= CORRECT_THRESHOLD
+      && !hasMissingCriteria
+      && !hasUnsatisfiedChecklist
+    );
     if (isStrongMastery && !resolved.shouldContinue && !resolved.probeFirst) {
       const feedbackPrefix = wordingResult.feedback.length <= 60 && !wordingResult.feedback.includes("?")
         ? wordingResult.feedback.replace(/[.!]\s*$/, "")
-        : "Nice work";
-      const masteryResponse = `${feedbackPrefix}! You've met the goal. Please click Submit Response.`;
-      console.log(`[mastery-wrap] criteriaStatus=strong — deterministic wrap`);
+        : undefined;
+      const masteryResponse = buildPerformanceAwareClose("strong", feedbackPrefix);
+      if (DEBUG_MATH_PIPELINE) console.log(`[mastery-wrap] ${mathMasteryOverride ? "mathMastery" : "criteriaStatus=strong"} — deterministic wrap`);
+      console.log(`[WRAP-SITE-C] mastery-wrap | studentResponse="${studentResponse.slice(0, 40)}"`);
+      mathDecisionSource = "mastery_wrap";
+      mathDecisionAction = "wrap_mastery";
       return res.json({
         response: masteryResponse,
         shouldContinue: false,
@@ -2264,6 +3088,7 @@ router.post("/video-turn", async (req, res) => {
         coachActionTag: feedbackResult.coachActionTag,
         deferredByCoach: false,
         criteriaEvaluation: criteriaEval,
+        teacherSummary,
       } as VideoTurnResponse);
     }
 
@@ -2272,16 +3097,528 @@ router.post("/video-turn", async (req, res) => {
       ? `${wordingResult.feedback} ${wordingResult.followUpQuestion}`
       : wordingResult.feedback;
 
+    // FACTUAL-ERROR CORRECTION: If deterministic validation found incorrect pairings,
+    // block praise and replace with explicit correction + targeted retry question.
+    // This runs BEFORE probe generation so the response is corrected first.
+    if (factValidation?.incorrectPairs?.length && prompt.assessment?.requiredEvidence) {
+      if (containsFactualErrorPraise(response)) {
+        if (DEBUG_MATH_PIPELINE) console.log(`[factual-correction] Blocking praise for factual error: ${factValidation.incorrectPairs.map(p => `${p.entity}≠${p.claimed}`).join(", ")}`);
+        // RESPONSE TYPE: Correct + Retry — use pre-generated retryQuestions when available
+        const pregenRetry = pickRetryQuestion(prompt, askedCoachQuestions);
+        if (pregenRetry) {
+          // Anchor-check the retry question
+          const checkedRetry = anchorCheckProbe(pregenRetry, prompt, askedCoachQuestions);
+          // Build correction prefix from incorrect pairs, then append pre-generated retry
+          const corrections = factValidation.incorrectPairs
+            .map(p => `${p.entity} is made of ${p.acceptable.join(" and ")}, not ${p.claimed}`)
+            .join(". ");
+          response = `Not quite — ${corrections}. ${checkedRetry}`;
+          if (DEBUG_MATH_PIPELINE) console.log(`[factual-correction] Using pre-generated retry: ${checkedRetry}`);
+        } else {
+          // Backwards compatibility: fall back to dynamic correction
+          if (DEBUG_MATH_PIPELINE) console.log(`[factual-correction] No pre-generated retryQuestions — using dynamic fallback`);
+          response = buildFactualCorrectionResponse(
+            factValidation.incorrectPairs,
+            prompt.assessment.requiredEvidence,
+            evidenceChecklist || undefined,
+          );
+        }
+      }
+    }
+
     // If probeFirst: correct answer but coach should ask one Socratic follow-up
+    // Collect all student responses for reasoning step probe selection
+    const studentResponseHistory = [
+      ...conversationHistory.filter(h => h.role === "student").map(h => h.message),
+      studentResponse,
+    ];
+
     if (resolved.probeFirst) {
+      // PROCEDURAL MASTERY: If score >= 85 and student already demonstrated
+      // clear procedural steps, use a REFLECTION ("why") instead of a PROBE ("what").
+      const conceptType = classifyConceptType(prompt.input, studentResponse);
+      if (
+        conceptType === "procedural" &&
+        feedbackResult.score >= 85 &&
+        hasProceduralEvidence(studentResponse)
+      ) {
+        const reflection = buildProceduralReflection(prompt.input, studentResponse);
+        const reflectionResponse = enforceAllGuardrails(
+          reflection, studentResponse, prompt.input, "probeFirst", scope,
+          lastCoachQuestion, askedCoachQuestions, timeRemainingSec
+        );
+        if (DEBUG_MATH_PIPELINE) console.log(`[procedural-mastery] score=${feedbackResult.score} — reflection instead of probe`);
+        return res.json({
+          response: reflectionResponse,
+          shouldContinue: true,
+          score: feedbackResult.score,
+          isCorrect: feedbackResult.isCorrect,
+          probeFirst: true,
+          turnKind: "REFLECTION",
+          coachActionTag: feedbackResult.coachActionTag,
+          deferredByCoach: false,
+          criteriaEvaluation: criteriaEval,
+          teacherSummary,
+        } as VideoTurnResponse);
+      }
+
+      // NODE REMEDIATION: For prompts with a generalized reasoning graph,
+      // use the node engine for structured coaching across any subject.
+      if (prompt.reasoningGraph && !prompt.mathProblem) {
+        const nodeAcc = accumulateNodeEvidence(
+          prompt.reasoningGraph,
+          conversationHistory,
+          studentResponse,
+        );
+        if (shouldUseNodeRemediation(prompt.reasoningGraph, nodeAcc)) {
+          const nodeMove = getNodeRemediationMove(prompt.reasoningGraph, nodeAcc, studentResponse);
+          if (nodeMove) {
+            if (DEBUG_MATH_PIPELINE) console.log(`[node-remediation] probeFirst: type=${nodeMove.type} node=${nodeMove.targetNodeId} state=${nodeMove.studentState} | ${nodeMove.explanation}`);
+
+            if (nodeMove.type === "WRAP_SUCCESS") {
+              const masteryClose = buildPerformanceAwareClose("strong");
+              console.log(`[WRAP-SITE-D] node-wrap-success-probeFirst | studentResponse="${studentResponse.slice(0, 40)}"`);
+              return res.json({
+                response: masteryClose,
+                shouldContinue: false,
+                score: feedbackResult.score,
+                isCorrect: feedbackResult.isCorrect,
+                probeFirst: false,
+                turnKind: "WRAP",
+                coachActionTag: feedbackResult.coachActionTag,
+                deferredByCoach: false,
+                criteriaEvaluation: criteriaEval,
+                teacherSummary,
+              } as VideoTurnResponse);
+            }
+
+            return res.json({
+              response: nodeMove.text,
+              shouldContinue: true,
+              score: feedbackResult.score,
+              isCorrect: feedbackResult.isCorrect,
+              probeFirst: true,
+              turnKind: "PROBE",
+              coachActionTag: feedbackResult.coachActionTag,
+              deferredByCoach: false,
+              criteriaEvaluation: criteriaEval,
+              teacherSummary,
+            } as VideoTurnResponse);
+          }
+        }
+      }
+
+      // EXPLANATION REMEDIATION (probeFirst): For non-math prompts with structured
+      // evidence requirements, use deterministic classification + move selection.
+      if (shouldUseExplanationRemediation(prompt) && explanationAccumulation && factValidation) {
+        const explState = classifyExplanationState(studentResponse, factValidation, explanationAccumulation);
+        explanationMove = getExplanationRemediationMove(
+          explState, explanationAccumulation, factValidation,
+          prompt.assessment!.requiredEvidence!, prompt.assessment!.referenceFacts!,
+          prompt.assessment!.successCriteria!, prompt.input, prompt.hints,
+          conversationHistory as Array<{ role: string; message: string }>,
+        );
+        if (explanationMove) {
+          if (explanationMove.type === "WRAP_MASTERY") {
+            const masteryClose = buildPerformanceAwareClose("strong");
+            return res.json({
+              response: masteryClose,
+              shouldContinue: false,
+              score: feedbackResult.score,
+              isCorrect: true,
+              probeFirst: false,
+              turnKind: "WRAP",
+              coachActionTag: feedbackResult.coachActionTag,
+              deferredByCoach: false,
+              criteriaEvaluation: criteriaEval,
+              teacherSummary,
+            } as VideoTurnResponse);
+          }
+          if (explanationMove.type === "WRAP_SUPPORT") {
+            const supportClose = buildPerformanceAwareClose("needs_support");
+            return res.json({
+              response: supportClose,
+              shouldContinue: false,
+              score: feedbackResult.score,
+              isCorrect: feedbackResult.isCorrect,
+              probeFirst: false,
+              turnKind: "WRAP",
+              coachActionTag: feedbackResult.coachActionTag,
+              deferredByCoach: false,
+              criteriaEvaluation: criteriaEval,
+              teacherSummary,
+            } as VideoTurnResponse);
+          }
+          // Apply conversation strategy escalation for explanation
+          {
+            const strategyInput = buildExplanationStrategyInput({
+              conversationHistory: conversationHistory ?? [],
+              satisfiedCriteriaBefore: explanationAccumulation.satisfiedCriteriaIndices.length,
+              satisfiedCriteriaAfter: explanationAccumulation.satisfiedCriteriaIndices.length,
+              consecutiveNoProgressTurns: explanationAccumulation.consecutiveNoProgressTurns,
+              currentState: explanationMove.state,
+              latestMoveType: explanationMove.type,
+              targetCriterion: explanationMove.targetCriterion ?? null,
+              timeRemainingSec: timeRemainingSec ?? null,
+              attemptCount: attemptCount ?? 1,
+              maxAttempts: maxAttempts ?? 5,
+            });
+            const strategyDecision = determineConversationStrategy(strategyInput);
+            if (strategyDecision.strategy === "wrap_support") {
+              const supportClose = buildPerformanceAwareClose("needs_support");
+              return res.json({
+                response: supportClose,
+                shouldContinue: false,
+                score: feedbackResult.score,
+                isCorrect: feedbackResult.isCorrect,
+                probeFirst: false,
+                turnKind: "WRAP",
+                coachActionTag: feedbackResult.coachActionTag,
+                deferredByCoach: false,
+                criteriaEvaluation: criteriaEval,
+                teacherSummary,
+              } as VideoTurnResponse);
+            }
+          }
+
+          // Non-wrap move: use the deterministic probe text directly
+          return res.json({
+            response: explanationMove.text,
+            shouldContinue: true,
+            score: feedbackResult.score,
+            isCorrect: feedbackResult.isCorrect,
+            probeFirst: true,
+            turnKind: "PROBE",
+            coachActionTag: feedbackResult.coachActionTag,
+            deferredByCoach: false,
+            criteriaEvaluation: criteriaEval,
+            teacherSummary,
+          } as VideoTurnResponse);
+        }
+      }
+
+      // MATH PROBE: For deterministic math prompts, prefer deterministic remediation
+      // (step-tied moves) over generic LLM follow-ups. Falls back to strategy-based probes.
+      if (prompt.mathProblem && mathValidation) {
+        // DETERMINISTIC REMEDIATION: When reasoning steps exist, select the next
+        // response from the step-remediation policy instead of generic probes.
+        if (shouldUseDeterministicRemediation(prompt.assessment?.reasoningSteps, stepAccumulation)) {
+          const remediationMove = getDeterministicRemediationMove(
+            prompt.assessment!.reasoningSteps!,
+            stepAccumulation!,
+            studentResponse,
+            prompt.mathProblem,
+            conversationHistory,
+            mathInterpretation ?? undefined,
+          );
+
+          if (remediationMove) {
+            if (DEBUG_MATH_PIPELINE) {
+              console.log(`[DET-REMEDIATION-SELECTED] probeFirst: state=${remediationMove.studentState} nextMissingStep=${remediationMove.targetStepId} move.type=${remediationMove.type} move.text="${remediationMove.text.slice(0, 80)}" studentResponse="${studentResponse.slice(0, 40)}"`);
+              if (remediationMove.misconceptionCategory) {
+                console.log(`[misconception-detected] probeFirst: category=${remediationMove.misconceptionCategory} activeMathStep=${remediationMove.targetStepKind} studentResponse="${studentResponse.slice(0, 40)}"`);
+              }
+              console.log(`[deterministic-remediation] probeFirst: type=${remediationMove.type} step=${remediationMove.targetStepId} state=${remediationMove.studentState} | ${remediationMove.explanation}`);
+            }
+
+            if (remediationMove.type === "WRAP_SUCCESS") {
+              const masteryClose = buildPerformanceAwareClose("strong");
+              console.log(`[WRAP-SITE-E] det-wrap-success-probeFirst | studentResponse="${studentResponse.slice(0, 40)}"`);
+              mathDecisionSource = "det_remediation_probeFirst";
+              mathDecisionAction = "wrap_mastery";
+              return res.json({
+                response: masteryClose,
+                shouldContinue: false,
+                score: feedbackResult.score,
+                isCorrect: feedbackResult.isCorrect,
+                probeFirst: false,
+                turnKind: "WRAP",
+                coachActionTag: feedbackResult.coachActionTag,
+                deferredByCoach: false,
+                criteriaEvaluation: criteriaEval,
+                teacherSummary,
+              } as VideoTurnResponse);
+            }
+
+            // Apply conversation strategy escalation
+            const { move: escalatedMove, decision: strategyDecision } = applyMathStrategyEscalation(
+              remediationMove,
+              {
+                reasoningSteps: prompt.assessment!.reasoningSteps!,
+                stepAccumulation: stepAccumulation!,
+                mathProblem: prompt.mathProblem,
+                conversationHistory: conversationHistory ?? [],
+                timeRemainingSec: timeRemainingSec ?? null,
+                attemptCount: attemptCount ?? 1,
+                maxAttempts: maxAttempts ?? 5,
+              },
+            );
+            if (DEBUG_MATH_PIPELINE && strategyDecision.escalated) {
+              console.log(`[strategy-escalation] probeFirst: ${strategyDecision.reason} → ${strategyDecision.strategy} (${remediationMove.type} → ${escalatedMove.type})`);
+            }
+
+            if (escalatedMove.type === "WRAP_NEEDS_SUPPORT") {
+              const supportClose = buildPerformanceAwareClose("needs_support");
+              mathDecisionSource = "strategy_escalation_probeFirst";
+              mathDecisionAction = "wrap_support";
+              return res.json({
+                response: `${escalatedMove.text} ${supportClose}`,
+                shouldContinue: false,
+                score: feedbackResult.score,
+                isCorrect: feedbackResult.isCorrect,
+                probeFirst: false,
+                turnKind: "WRAP",
+                coachActionTag: feedbackResult.coachActionTag,
+                deferredByCoach: false,
+                criteriaEvaluation: criteriaEval,
+                teacherSummary,
+              } as VideoTurnResponse);
+            }
+
+            // Use the (possibly escalated) remediation text directly — these are
+            // pre-authored templates and must NOT be rewritten by guardrails.
+            mathDecisionSource = "det_remediation_probeFirst";
+            mathDecisionAction = "continue_probing";
+            return res.json({
+              response: escalatedMove.text,
+              shouldContinue: true,
+              score: feedbackResult.score,
+              isCorrect: feedbackResult.isCorrect,
+              probeFirst: true,
+              turnKind: "PROBE",
+              coachActionTag: feedbackResult.coachActionTag,
+              deferredByCoach: false,
+              criteriaEvaluation: criteriaEval,
+              teacherSummary,
+            } as VideoTurnResponse);
+          }
+        }
+
+        // LEGACY FALLBACK: No deterministic remediation available (no reasoning steps,
+        // or all steps satisfied without correct answer). Use strategy-based probes.
+        let mathProbe: string | null = null;
+
+        // Try reasoning step probe (accumulated across all turns)
+        if (stepAccumulation && prompt.assessment?.reasoningSteps?.length) {
+          const missingStep = getFirstMissingStepProbe(prompt.assessment.reasoningSteps, stepAccumulation);
+          if (missingStep) {
+            mathProbe = missingStep.probe;
+            if (DEBUG_MATH_PIPELINE) console.log(`[step-probe] First missing step: "${missingStep.label}" (${missingStep.stepId}) → probe: "${mathProbe}"`);
+          } else if (stepAccumulation.answerCorrect) {
+            if (DEBUG_MATH_PIPELINE) console.log(`[step-probe] All reasoning steps satisfied + correct answer → mastery wrap`);
+            const masteryClose = buildPerformanceAwareClose("strong");
+            console.log(`[WRAP-SITE-F] step-probe-all-satisfied | studentResponse="${studentResponse.slice(0, 40)}"`);
+            mathDecisionSource = "step_probe_all_satisfied";
+            mathDecisionAction = "wrap_mastery";
+            return res.json({
+              response: masteryClose,
+              shouldContinue: false,
+              score: feedbackResult.score,
+              isCorrect: feedbackResult.isCorrect,
+              probeFirst: false,
+              turnKind: "WRAP",
+              coachActionTag: feedbackResult.coachActionTag,
+              deferredByCoach: false,
+              criteriaEvaluation: criteriaEval,
+              teacherSummary,
+            } as VideoTurnResponse);
+          }
+        }
+
+        // Fall back to strategy-based probe if no reasoning step probe
+        if (!mathProbe) {
+          mathProbe = buildMathStrategyProbe(prompt.mathProblem, combinedStrategies);
+        }
+
+        if (!mathProbe) {
+          if (DEBUG_MATH_PIPELINE) console.log(`[math-strategy-probe] All strategies demonstrated — overriding to mastery wrap`);
+          const masteryClose = buildPerformanceAwareClose("strong");
+          console.log(`[WRAP-SITE-G] all-strategies | studentResponse="${studentResponse.slice(0, 40)}"`);
+          mathDecisionSource = "all_strategies_demonstrated";
+          mathDecisionAction = "wrap_mastery";
+          return res.json({
+            response: masteryClose,
+            shouldContinue: false,
+            score: feedbackResult.score,
+            isCorrect: feedbackResult.isCorrect,
+            probeFirst: false,
+            turnKind: "WRAP",
+            coachActionTag: feedbackResult.coachActionTag,
+            deferredByCoach: false,
+            criteriaEvaluation: criteriaEval,
+            teacherSummary,
+          } as VideoTurnResponse);
+        }
+
+        // Use the targeted probe — step probes are deterministic and on-topic,
+        // so they skip enforceAllGuardrails which can replace them with vague fallbacks.
+        const sentences = response.split(/(?<=[.!])\s+/).filter(s => s.trim().length > 0);
+        const ack = sentences.length > 0 && sentences[0].length <= 60 && !sentences[0].includes("?")
+          ? sentences[0]
+          : "";
+        const isStepProbe = stepAccumulation && prompt.assessment?.reasoningSteps?.length && mathProbe === getFirstMissingStepProbe(prompt.assessment.reasoningSteps, stepAccumulation)?.probe;
+        response = ack ? `${ack} ${mathProbe}` : mathProbe;
+        if (DEBUG_MATH_PIPELINE) console.log(`[math-probe] Using probe: ${mathProbe} (step-probe=${!!isStepProbe})`);
+
+        if (!isStepProbe) {
+          response = enforceAllGuardrails(response, studentResponse, prompt.input, "probeFirst", scope, lastCoachQuestion, askedCoachQuestions, timeRemainingSec);
+        }
+
+        if (!mathDecisionSource) {
+          mathDecisionSource = isStepProbe ? "step_probe_probeFirst" : "strategy_probe_probeFirst";
+          mathDecisionAction = "continue_probing";
+        }
+        return res.json({
+          response,
+          shouldContinue: true,
+          score: feedbackResult.score,
+          isCorrect: feedbackResult.isCorrect,
+          probeFirst: true,
+          turnKind: "PROBE",
+          coachActionTag: feedbackResult.coachActionTag,
+          deferredByCoach: false,
+          criteriaEvaluation: criteriaEval,
+          teacherSummary,
+        } as VideoTurnResponse);
+      }
+
+      // RESPONSE TYPE: Probe Missing Evidence — prefer structured reasoning steps, fall back to allowedProbes.
+      const reasoningProbe = pickReasoningStepProbe(prompt, studentResponseHistory, askedCoachQuestions);
+      const pregenProbe = reasoningProbe ?? pickAllowedProbe(prompt, askedCoachQuestions);
+      if (pregenProbe) {
+        // Anchor-check the probe
+        const checkedProbe = anchorCheckProbe(pregenProbe, prompt, askedCoachQuestions);
+        // Keep short acknowledgment from LLM if present, append pre-generated probe
+        const sentences = response.split(/(?<=[.!])\s+/).filter(s => s.trim().length > 0);
+        const ack = sentences.length > 0 && sentences[0].length <= 60 && !sentences[0].includes("?")
+          ? sentences[0]
+          : "";
+        response = ack ? `${ack} ${checkedProbe}` : checkedProbe;
+        if (DEBUG_MATH_PIPELINE) console.log(`[${reasoningProbe ? "reasoning-step-probe" : "allowed-probe"}] Using pre-generated probe: ${checkedProbe}`);
+
+        response = enforceAllGuardrails(response, studentResponse, prompt.input, "probeFirst", scope, lastCoachQuestion, askedCoachQuestions, timeRemainingSec);
+
+        return res.json({
+          response,
+          shouldContinue: true,
+          score: feedbackResult.score,
+          isCorrect: feedbackResult.isCorrect,
+          probeFirst: true,
+          turnKind: "PROBE",
+          coachActionTag: feedbackResult.coachActionTag,
+          deferredByCoach: false,
+          criteriaEvaluation: criteriaEval,
+          teacherSummary,
+        } as VideoTurnResponse);
+      }
+
+      // BACKWARDS COMPATIBILITY: No pre-generated probes — fall back to evidence-based or scope-aligned probes
+      if (!prompt.allowedProbes?.length) {
+        if (DEBUG_MATH_PIPELINE) console.log(`[probe-fallback] No allowedProbes on prompt — using legacy probe generation`);
+        if (evidenceChecklist && prompt.assessment?.requiredEvidence && prompt.assessment?.referenceFacts) {
+          const evidenceProbe = buildMissingEvidenceProbe(
+            evidenceChecklist,
+            prompt.assessment.requiredEvidence,
+            prompt.assessment.referenceFacts,
+          );
+          if (evidenceProbe) {
+            // Anchor-check legacy evidence probe
+            const checkedProbe = anchorCheckProbe(evidenceProbe, prompt, askedCoachQuestions);
+            const sentences = response.split(/(?<=[.!])\s+/).filter(s => s.trim().length > 0);
+            const ack = sentences.length > 0 && sentences[0].length <= 60 && !sentences[0].includes("?")
+              ? sentences[0]
+              : "";
+            response = ack ? `${ack} ${checkedProbe}` : checkedProbe;
+            if (DEBUG_MATH_PIPELINE) console.log(`[evidence-probe] Legacy missing-evidence probe: ${checkedProbe}`);
+
+            response = enforceAllGuardrails(response, studentResponse, prompt.input, "probeFirst", scope, lastCoachQuestion, askedCoachQuestions, timeRemainingSec);
+
+            return res.json({
+              response,
+              shouldContinue: true,
+              score: feedbackResult.score,
+              isCorrect: feedbackResult.isCorrect,
+              probeFirst: true,
+              turnKind: "PROBE",
+              coachActionTag: feedbackResult.coachActionTag,
+              deferredByCoach: false,
+              criteriaEvaluation: criteriaEval,
+              teacherSummary,
+            } as VideoTurnResponse);
+          }
+        }
+      }
+
       // If the LLM didn't include a probe (constraint violation), use deterministic fallback
       if (!response.includes("?")) {
-        response = buildProbeFromQuestion(prompt.input, studentResponse, scope);
+        if (prompt.mathProblem) {
+          // Math prompts: try step-accumulation probe before wrapping
+          const fallbackStepProbe = stepAccumulation && prompt.assessment?.reasoningSteps?.length
+            ? getFirstMissingStepProbe(prompt.assessment.reasoningSteps, stepAccumulation)?.probe ?? null
+            : null;
+          if (fallbackStepProbe) {
+            if (DEBUG_MATH_PIPELINE) console.log("[math-probe-guard] probeFirst: injecting step probe as fallback — " + fallbackStepProbe);
+            response = fallbackStepProbe;
+          } else {
+            if (DEBUG_MATH_PIPELINE) console.log("[math-probe-guard] probeFirst: no deterministic probe available — forcing wrap");
+            const closeMsg = buildPerformanceAwareClose(
+              mathBounding?.boundedStatus || criteriaEval?.overallStatus || "developing"
+            );
+            console.log(`[WRAP-SITE-H] no-question-no-probe | studentResponse="${studentResponse.slice(0, 40)}"`);
+            return res.json({
+              response: closeMsg,
+              shouldContinue: false,
+              score: feedbackResult.score,
+              isCorrect: feedbackResult.isCorrect,
+              probeFirst: false,
+              turnKind: "WRAP",
+              coachActionTag: feedbackResult.coachActionTag,
+              deferredByCoach: false,
+              criteriaEvaluation: criteriaEval,
+              teacherSummary,
+            } as VideoTurnResponse);
+          }
+        }
+        response = anchorCheckProbe(
+          buildProbeFromQuestion(prompt.input, studentResponse, scope),
+          prompt, askedCoachQuestions,
+        );
       }
 
       // Strip any "let's move on" language since we're continuing
       if (containsEndingLanguage(response)) {
-        response = buildProbeFromQuestion(prompt.input, studentResponse, scope);
+        if (prompt.mathProblem) {
+          // Math prompts: try step probe before wrapping
+          const endingStepProbe = stepAccumulation && prompt.assessment?.reasoningSteps?.length
+            ? getFirstMissingStepProbe(prompt.assessment.reasoningSteps, stepAccumulation)?.probe ?? null
+            : null;
+          if (endingStepProbe) {
+            if (DEBUG_MATH_PIPELINE) console.log("[math-probe-guard] probeFirst: ending language — replacing with step probe: " + endingStepProbe);
+            response = endingStepProbe;
+          } else {
+            if (DEBUG_MATH_PIPELINE) console.log("[math-probe-guard] probeFirst: ending language + math + no step probe — forcing wrap");
+            const closeMsg = buildPerformanceAwareClose(
+              mathBounding?.boundedStatus || criteriaEval?.overallStatus || "developing"
+            );
+            console.log(`[WRAP-SITE-I] ending-lang-no-probe | studentResponse="${studentResponse.slice(0, 40)}"`);
+            return res.json({
+              response: closeMsg,
+              shouldContinue: false,
+              score: feedbackResult.score,
+              isCorrect: feedbackResult.isCorrect,
+              probeFirst: false,
+              turnKind: "WRAP",
+              coachActionTag: feedbackResult.coachActionTag,
+              deferredByCoach: false,
+              criteriaEvaluation: criteriaEval,
+              teacherSummary,
+            } as VideoTurnResponse);
+          }
+        }
+        response = anchorCheckProbe(
+          buildProbeFromQuestion(prompt.input, studentResponse, scope),
+          prompt, askedCoachQuestions,
+        );
       }
 
       // Unified guardrails: echo + steps + scope + probe dedup
@@ -2297,18 +3634,411 @@ router.post("/video-turn", async (req, res) => {
         coachActionTag: feedbackResult.coachActionTag,
         deferredByCoach: false,
         criteriaEvaluation: criteriaEval,
+        teacherSummary,
       } as VideoTurnResponse);
+    }
+
+    // Track whether we used a deterministic step probe — these are pre-authored
+    // from buildDeterministicMathRubric and must not be rewritten by guardrails.
+    let usedStepProbe = false;
+
+    // RESPONSE TYPE: Probe Missing Evidence or Correct + Retry (non-probeFirst path)
+    // Use pre-generated probes/retries when available, fall back to legacy logic.
+    if (resolved.shouldContinue) {
+      // NODE REMEDIATION (continue path): For prompts with a generalized
+      // reasoning graph, use the node engine for structured coaching.
+      if (prompt.reasoningGraph && !prompt.mathProblem) {
+        const nodeAcc = accumulateNodeEvidence(
+          prompt.reasoningGraph,
+          conversationHistory,
+          studentResponse,
+        );
+        if (shouldUseNodeRemediation(prompt.reasoningGraph, nodeAcc)) {
+          const nodeMove = getNodeRemediationMove(prompt.reasoningGraph, nodeAcc, studentResponse);
+          if (nodeMove) {
+            if (DEBUG_MATH_PIPELINE) console.log(`[node-remediation] continue: type=${nodeMove.type} node=${nodeMove.targetNodeId} state=${nodeMove.studentState} | ${nodeMove.explanation}`);
+
+            if (nodeMove.type === "WRAP_SUCCESS") {
+              const masteryClose = buildPerformanceAwareClose("strong");
+              console.log(`[WRAP-SITE-J] node-wrap-success-continue | studentResponse="${studentResponse.slice(0, 40)}"`);
+              return res.json({
+                response: masteryClose,
+                shouldContinue: false,
+                score: feedbackResult.score,
+                isCorrect: feedbackResult.isCorrect,
+                probeFirst: false,
+                turnKind: "WRAP",
+                coachActionTag: feedbackResult.coachActionTag,
+                deferredByCoach: false,
+                criteriaEvaluation: criteriaEval,
+                teacherSummary,
+              } as VideoTurnResponse);
+            }
+
+            response = nodeMove.text;
+            usedStepProbe = true;
+            if (DEBUG_MATH_PIPELINE) console.log(`[node-remediation] Using: "${response.slice(0, 80)}"`);
+          }
+        }
+      }
+
+      // EXPLANATION REMEDIATION (continue path): For non-math prompts with
+      // structured evidence, use deterministic classification + move selection.
+      if (!usedStepProbe && shouldUseExplanationRemediation(prompt) && explanationAccumulation && factValidation) {
+        const explState = classifyExplanationState(studentResponse, factValidation, explanationAccumulation);
+        const explMove = getExplanationRemediationMove(
+          explState, explanationAccumulation, factValidation,
+          prompt.assessment!.requiredEvidence!, prompt.assessment!.referenceFacts!,
+          prompt.assessment!.successCriteria!, prompt.input, prompt.hints,
+          conversationHistory as Array<{ role: string; message: string }>,
+        );
+        if (explMove) {
+          if (explMove.type === "WRAP_MASTERY" || explMove.type === "WRAP_SUPPORT") {
+            const closeStatus = explMove.type === "WRAP_MASTERY" ? "strong" : "needs_support";
+            const closeMsg = buildPerformanceAwareClose(closeStatus);
+            return res.json({
+              response: closeMsg,
+              shouldContinue: false,
+              score: feedbackResult.score,
+              isCorrect: explMove.type === "WRAP_MASTERY" || feedbackResult.isCorrect,
+              probeFirst: false,
+              turnKind: "WRAP",
+              coachActionTag: feedbackResult.coachActionTag,
+              deferredByCoach: false,
+              criteriaEvaluation: criteriaEval,
+              teacherSummary,
+            } as VideoTurnResponse);
+          }
+          // Apply conversation strategy escalation for explanation continue path
+          {
+            const strategyInput = buildExplanationStrategyInput({
+              conversationHistory: conversationHistory ?? [],
+              satisfiedCriteriaBefore: explanationAccumulation.satisfiedCriteriaIndices.length,
+              satisfiedCriteriaAfter: explanationAccumulation.satisfiedCriteriaIndices.length,
+              consecutiveNoProgressTurns: explanationAccumulation.consecutiveNoProgressTurns,
+              currentState: explMove.state,
+              latestMoveType: explMove.type,
+              targetCriterion: explMove.targetCriterion ?? null,
+              timeRemainingSec: timeRemainingSec ?? null,
+              attemptCount: attemptCount ?? 1,
+              maxAttempts: maxAttempts ?? 5,
+            });
+            const strategyDecision = determineConversationStrategy(strategyInput);
+            if (strategyDecision.strategy === "wrap_support") {
+              const supportClose = buildPerformanceAwareClose("needs_support");
+              return res.json({
+                response: supportClose,
+                shouldContinue: false,
+                score: feedbackResult.score,
+                isCorrect: feedbackResult.isCorrect,
+                probeFirst: false,
+                turnKind: "WRAP",
+                coachActionTag: feedbackResult.coachActionTag,
+                deferredByCoach: false,
+                criteriaEvaluation: criteriaEval,
+                teacherSummary,
+              } as VideoTurnResponse);
+            }
+          }
+
+          response = explMove.text;
+          usedStepProbe = true;
+        }
+      }
+
+      // MATH ROUTING (continue path): Prefer DETERMINISTIC REMEDIATION when
+      // reasoning steps exist. This replaces generic LLM follow-ups with
+      // step-tied moves (direct probe, simpler probe, hint, misconception redirect).
+      if (prompt.mathProblem && mathValidation) {
+        // DETERMINISTIC REMEDIATION PATH (preferred when reasoning steps exist)
+        const canUseDeterministic = shouldUseDeterministicRemediation(prompt.assessment?.reasoningSteps, stepAccumulation);
+        if (DEBUG_MATH_PIPELINE) console.log(`[deterministic-remediation-debug] continue-path: mathProblem=true mathValidation=${mathValidation.status} canUseDeterministic=${canUseDeterministic} reasoningSteps=${prompt.assessment?.reasoningSteps?.length ?? 0} stepAccumulation=${stepAccumulation ? `missing=[${stepAccumulation.missingStepIds.join(",")}]` : "null"}`);
+        if (canUseDeterministic) {
+          const remediationMove = getDeterministicRemediationMove(
+            prompt.assessment!.reasoningSteps!,
+            stepAccumulation!,
+            studentResponse,
+            prompt.mathProblem,
+            conversationHistory,
+            mathInterpretation ?? undefined,
+          );
+
+          if (remediationMove) {
+            if (DEBUG_MATH_PIPELINE) {
+              console.log(`[DET-REMEDIATION-SELECTED] state=${remediationMove.studentState} nextMissingStep=${remediationMove.targetStepId} move.type=${remediationMove.type} move.text="${remediationMove.text.slice(0, 80)}" studentResponse="${studentResponse.slice(0, 40)}"`);
+              if (remediationMove.misconceptionCategory) {
+                console.log(`[misconception-detected] category=${remediationMove.misconceptionCategory} activeMathStep=${remediationMove.targetStepKind} studentResponse="${studentResponse.slice(0, 40)}"`);
+              }
+              console.log(`[deterministic-remediation] continue: type=${remediationMove.type} step=${remediationMove.targetStepId} state=${remediationMove.studentState} | ${remediationMove.explanation}`);
+            }
+
+            if (remediationMove.type === "WRAP_SUCCESS") {
+              const masteryClose = buildPerformanceAwareClose("strong");
+              console.log(`[WRAP-SITE-K] det-wrap-success-continue | studentResponse="${studentResponse.slice(0, 40)}"`);
+              mathDecisionSource = "det_remediation_continue";
+              mathDecisionAction = "wrap_mastery";
+              return res.json({
+                response: masteryClose,
+                shouldContinue: false,
+                score: feedbackResult.score,
+                isCorrect: feedbackResult.isCorrect,
+                probeFirst: false,
+                turnKind: "WRAP",
+                coachActionTag: feedbackResult.coachActionTag,
+                deferredByCoach: false,
+                criteriaEvaluation: criteriaEval,
+                teacherSummary,
+              } as VideoTurnResponse);
+            }
+
+            // Apply conversation strategy escalation
+            const { move: escalatedMoveCont, decision: strategyDecisionCont } = applyMathStrategyEscalation(
+              remediationMove,
+              {
+                reasoningSteps: prompt.assessment!.reasoningSteps!,
+                stepAccumulation: stepAccumulation!,
+                mathProblem: prompt.mathProblem,
+                conversationHistory: conversationHistory ?? [],
+                timeRemainingSec: timeRemainingSec ?? null,
+                attemptCount: attemptCount ?? 1,
+                maxAttempts: maxAttempts ?? 5,
+              },
+            );
+
+            // For correct_incomplete, prepend answer acknowledgment
+            if (mathExplanationState === "correct_incomplete" && mathValidation.status === "correct") {
+              response = `That's right, ${mathValidation.extractedAnswer} is correct! ${escalatedMoveCont.text}`;
+            } else {
+              response = escalatedMoveCont.text;
+            }
+            usedStepProbe = true;
+            if (DEBUG_MATH_PIPELINE) {
+              console.log(`[deterministic-remediation] Using: "${response.slice(0, 80)}"`);
+              if (strategyDecisionCont.escalated) {
+                console.log(`[strategy-escalation] continue: ${strategyDecisionCont.reason} → ${strategyDecisionCont.strategy} (${remediationMove.type} → ${escalatedMoveCont.type})`);
+              }
+            }
+
+            if (escalatedMoveCont.type === "WRAP_NEEDS_SUPPORT") {
+              const supportClose = buildPerformanceAwareClose("needs_support");
+              mathDecisionSource = "strategy_escalation_continue";
+              mathDecisionAction = "wrap_support";
+              return res.json({
+                response: `${escalatedMoveCont.text} ${supportClose}`,
+                shouldContinue: false,
+                score: feedbackResult.score,
+                isCorrect: feedbackResult.isCorrect,
+                probeFirst: false,
+                turnKind: "WRAP",
+                coachActionTag: feedbackResult.coachActionTag,
+                deferredByCoach: false,
+                criteriaEvaluation: criteriaEval,
+                teacherSummary,
+              } as VideoTurnResponse);
+            }
+
+            // EARLY RETURN: Deterministic remediation moves are pre-authored
+            // templates. Return immediately so no downstream guardrails,
+            // invariants, or safety nets can override the move with a generic
+            // WRAP. This fixes the bug where "I don't know" on a reasoning-step
+            // prompt gets wrapped instead of probed.
+            mathDecisionSource = "det_remediation_continue";
+            mathDecisionAction = "continue_probing";
+            return res.json({
+              response,
+              shouldContinue: true,
+              score: feedbackResult.score,
+              isCorrect: feedbackResult.isCorrect,
+              probeFirst: false,
+              turnKind: "PROBE",
+              coachActionTag: feedbackResult.coachActionTag,
+              deferredByCoach: false,
+              criteriaEvaluation: criteriaEval,
+              teacherSummary,
+            } as VideoTurnResponse);
+          } else {
+            if (DEBUG_MATH_PIPELINE) console.log(`[deterministic-remediation-debug] continue-path: getDeterministicRemediationMove returned null`);
+          }
+        }
+
+        // LEGACY FALLBACK: No deterministic remediation (no reasoning steps or no move returned).
+        // Fall back to strategy-based probes and operand-specific retries.
+        if (!usedStepProbe) {
+          const isHintProgress = detectHintFollowedByProgress(conversationHistory, studentResponse, prompt.mathProblem);
+
+          // Try step-accumulation probe
+          let stepProbe: string | null = null;
+          if (stepAccumulation && prompt.assessment?.reasoningSteps?.length) {
+            const missingStep = getFirstMissingStepProbe(prompt.assessment.reasoningSteps, stepAccumulation);
+            if (missingStep) {
+              stepProbe = missingStep.probe;
+              if (DEBUG_MATH_PIPELINE) console.log(`[step-probe-continue] First missing step: "${missingStep.label}" → "${stepProbe}"`);
+            }
+          }
+
+          if (mathExplanationState === "correct_incomplete") {
+            const probe = stepProbe
+              || buildMathStrategyProbe(prompt.mathProblem, combinedStrategies)
+              || "Can you explain how you solved it?";
+            response = `That's right, ${mathValidation.extractedAnswer} is correct! ${probe}`;
+            if (stepProbe) usedStepProbe = true;
+            if (DEBUG_MATH_PIPELINE) console.log(`[math-correct-incomplete] Acknowledging correct answer, probing for explanation`);
+          } else if (mathExplanationState === "incorrect") {
+            if (stepProbe) {
+              const ack = isHintProgress ? "Good start!" : "Let's try step by step.";
+              response = `${ack} ${stepProbe}`;
+              usedStepProbe = true;
+              if (DEBUG_MATH_PIPELINE) console.log(`[step-probe-retry] Using step probe for incorrect answer: ${stepProbe}`);
+            } else {
+              const retryProbe = buildMathRetryProbe(prompt.mathProblem, combinedStrategies, mathValidation.matchedMisconception);
+              if (retryProbe) {
+                const ack = isHintProgress
+                  ? "Good start!"
+                  : mathValidation.matchedMisconception
+                    ? "Not quite. Let's work through it step by step."
+                    : "Let's try again step by step.";
+                response = `${ack} ${retryProbe}`;
+                if (DEBUG_MATH_PIPELINE) console.log(`[math-retry-probe] Using operand-specific retry (hint-progress=${isHintProgress}): ${retryProbe}`);
+              } else {
+                const mathProbe = buildMathStrategyProbe(prompt.mathProblem, combinedStrategies);
+                if (mathProbe) {
+                  response = isHintProgress ? `Good start! ${mathProbe}` : mathProbe;
+                }
+              }
+            }
+          } else {
+            // correct_explained in shouldContinue — use step probe when available
+            const probe = stepProbe;
+          if (probe) {
+            const sentences = response.split(/(?<=[.!])\s+/).filter(s => s.trim().length > 0);
+            const ack = sentences.length > 0 && sentences[0].length <= 60 && !sentences[0].includes("?")
+              ? sentences[0]
+              : "";
+            response = ack ? `${ack} ${probe}` : probe;
+            usedStepProbe = true;
+            if (DEBUG_MATH_PIPELINE) console.log(`[math-probe-continue] Using step probe (continue path): ${probe}`);
+          } else {
+            // No missing steps — this is mastery, wrap it
+            if (DEBUG_MATH_PIPELINE) console.log(`[math-probe-continue] No missing steps in correct_explained — wrapping as mastery`);
+            const masteryClose = buildPerformanceAwareClose("strong");
+            console.log(`[WRAP-SITE-L] correct-explained-no-missing | studentResponse="${studentResponse.slice(0, 40)}"`);
+            mathDecisionSource = "correct_explained_no_missing";
+            mathDecisionAction = "wrap_mastery";
+            return res.json({
+              response: masteryClose,
+              shouldContinue: false,
+              score: feedbackResult.score,
+              isCorrect: feedbackResult.isCorrect,
+              probeFirst: false,
+              turnKind: "WRAP",
+              coachActionTag: feedbackResult.coachActionTag,
+              deferredByCoach: false,
+              criteriaEvaluation: criteriaEval,
+              teacherSummary,
+            } as VideoTurnResponse);
+          }
+        }
+        } // end if (!usedStepProbe)
+      }
+
+      // Try pre-generated retryQuestions first (for incorrect answers)
+      const retryQ = (!prompt.mathProblem && feedbackResult.score < CORRECT_THRESHOLD)
+        ? pickRetryQuestion(prompt, askedCoachQuestions)
+        : null;
+      // Try structured reasoning steps first, then flat allowedProbes (for partial answers)
+      const probeQ = !retryQ && !prompt.mathProblem
+        ? (pickReasoningStepProbe(prompt, studentResponseHistory, askedCoachQuestions)
+           ?? pickAllowedProbe(prompt, askedCoachQuestions))
+        : null;
+
+      if (retryQ) {
+        const checkedRetry = anchorCheckProbe(retryQ, prompt, askedCoachQuestions);
+        const sentences = response.split(/(?<=[.!])\s+/).filter(s => s.trim().length > 0);
+        const ack = sentences.length > 0 && sentences[0].length <= 60 && !sentences[0].includes("?")
+          ? sentences[0]
+          : "";
+        response = ack ? `${ack} ${checkedRetry}` : checkedRetry;
+        if (DEBUG_MATH_PIPELINE) console.log(`[allowed-retry] Using pre-generated retry: ${checkedRetry}`);
+      } else if (probeQ) {
+        const checkedProbe = anchorCheckProbe(probeQ, prompt, askedCoachQuestions);
+        const sentences = response.split(/(?<=[.!])\s+/).filter(s => s.trim().length > 0);
+        const ack = sentences.length > 0 && sentences[0].length <= 60 && !sentences[0].includes("?")
+          ? sentences[0]
+          : "";
+        response = ack ? `${ack} ${checkedProbe}` : checkedProbe;
+        if (DEBUG_MATH_PIPELINE) console.log(`[allowed-probe] Using pre-generated probe (continue path): ${checkedProbe}`);
+      } else if (evidenceChecklist && prompt.assessment?.requiredEvidence && prompt.assessment?.referenceFacts) {
+        // BACKWARDS COMPATIBILITY: No pre-generated probes — use legacy evidence probes
+        if (!prompt.allowedProbes?.length && !prompt.retryQuestions?.length) {
+          if (DEBUG_MATH_PIPELINE) console.log(`[probe-fallback] No allowedProbes/retryQuestions — using legacy probe generation`);
+        }
+        const evidenceProbe = buildMissingEvidenceProbe(
+          evidenceChecklist,
+          prompt.assessment.requiredEvidence,
+          prompt.assessment.referenceFacts,
+        );
+        if (evidenceProbe) {
+          // Anchor-check legacy evidence probe
+          const checkedProbe = anchorCheckProbe(evidenceProbe, prompt, askedCoachQuestions);
+          const sentences = response.split(/(?<=[.!])\s+/).filter(s => s.trim().length > 0);
+          const ack = sentences.length > 0 && sentences[0].length <= 60 && !sentences[0].includes("?")
+            ? sentences[0]
+            : "";
+          response = ack ? `${ack} ${checkedProbe}` : checkedProbe;
+          if (DEBUG_MATH_PIPELINE) console.log(`[evidence-probe] Legacy scope-locked retry probe: ${checkedProbe}`);
+        }
+      }
     }
 
     // GUARDRAIL: If we're continuing but the LLM wording implies ending,
     // override with a deterministic retry prompt
     if (resolved.shouldContinue && containsEndingLanguage(response)) {
-      response = buildRetryPrompt(prompt.input, attemptCount, studentResponse, scope);
+      // Prefer step-accumulation probe for math, then retry, then reasoning step, then allowed
+      const stepProbeForGuardrail = stepAccumulation && prompt.assessment?.reasoningSteps?.length
+        ? getFirstMissingStepProbe(prompt.assessment.reasoningSteps, stepAccumulation)?.probe ?? null
+        : null;
+      const retryQ = stepProbeForGuardrail
+        || pickRetryQuestion(prompt, askedCoachQuestions)
+        || pickReasoningStepProbe(prompt, studentResponseHistory, askedCoachQuestions)
+        || pickAllowedProbe(prompt, askedCoachQuestions);
+      if (retryQ) {
+        response = anchorCheckProbe(retryQ, prompt, askedCoachQuestions);
+      } else if (prompt.mathProblem) {
+        // Math prompts: no deterministic retry available — force wrap
+        if (DEBUG_MATH_PIPELINE) console.log("[math-probe-guard] shouldContinue: ending language + no deterministic probe — forcing wrap");
+        const closeMsg = buildPerformanceAwareClose(
+          mathBounding?.boundedStatus || criteriaEval?.overallStatus || "developing"
+        );
+        console.log(`[WRAP-SITE-M] ending-lang-continue-math | studentResponse="${studentResponse.slice(0, 40)}"`);
+        return res.json({
+          response: closeMsg,
+          shouldContinue: false,
+          score: feedbackResult.score,
+          isCorrect: feedbackResult.isCorrect,
+          probeFirst: false,
+          turnKind: "WRAP",
+          coachActionTag: feedbackResult.coachActionTag,
+          deferredByCoach: false,
+          criteriaEvaluation: criteriaEval,
+          teacherSummary,
+        } as VideoTurnResponse);
+      } else {
+        response = anchorCheckProbe(
+          buildRetryPrompt(prompt.input, attemptCount, studentResponse, scope),
+          prompt, askedCoachQuestions,
+        );
+      }
     }
 
     // GUARDRAIL: If score < 80 but wording says "correct"/"great job"/etc,
-    // override to avoid confusing the student
-    if (feedbackResult.score < CORRECT_THRESHOLD && containsCorrectLanguage(response)) {
+    // override to avoid confusing the student.
+    // EXCEPTION: When the math answer IS correct but explanation is missing
+    // (correct_incomplete), do NOT tell the student they got it wrong.
+    if (
+      feedbackResult.score < CORRECT_THRESHOLD &&
+      containsCorrectLanguage(response) &&
+      mathExplanationState !== "correct_incomplete"
+    ) {
       if (resolved.shouldContinue) {
         response = "Not quite yet — give it another try. What do you think the answer is?";
       } else {
@@ -2316,11 +4046,16 @@ router.post("/video-turn", async (req, res) => {
       }
     }
 
-    // UNIFIED GUARDRAILS: echo + steps + scope + probe dedup on combined response
-    response = enforceAllGuardrails(response, studentResponse, prompt.input, "response", scope, lastCoachQuestion, askedCoachQuestions, timeRemainingSec);
+    // UNIFIED GUARDRAILS: echo + steps + scope + probe dedup on combined response.
+    // Skip for step probes — they are pre-authored from buildDeterministicMathRubric
+    // and must not be rewritten with vague fallbacks.
+    if (!usedStepProbe) {
+      response = enforceAllGuardrails(response, studentResponse, prompt.input, "response", scope, lastCoachQuestion, askedCoachQuestions, timeRemainingSec);
+    }
 
     // NO-NEW-QUESTION WINDOW (15s <= timeRemaining < 25s):
     // Strip open-ended questions to wind down, force shouldContinue=false.
+    // Preserve evaluation feedback — only strip the trailing question.
     let finalShouldContinue = resolved.shouldContinue;
     if (
       timeRemainingSec !== undefined &&
@@ -2331,15 +4066,21 @@ router.post("/video-turn", async (req, res) => {
       if (response.includes("?")) {
         const sentences = response.split(/(?<=[.!?])\s+/);
         const nonQuestions = sentences.filter(s => !s.includes("?"));
-        response = nonQuestions.length > 0
-          ? nonQuestions.join(" ").trim()
-          : "Good thinking on this!";
+        if (nonQuestions.length > 0) {
+          response = nonQuestions.join(" ").trim();
+        } else {
+          // Performance-aware close based on evaluated status
+          const timeCloseStatus = feedbackResult.score >= CORRECT_THRESHOLD ? "strong" as const
+            : (mathBounding?.boundedStatus || criteriaEval?.overallStatus || "needs_support") as "strong" | "developing" | "needs_support" | "not_enough_evidence";
+          response = buildPerformanceAwareClose(timeCloseStatus);
+        }
       }
       finalShouldContinue = false;
     }
 
     // CLOSING-WINDOW BACKSTOP: if client reports < 15s remaining,
     // force shouldContinue=false and strip any probing questions.
+    // Preserve evaluation feedback to give honest closing, not generic praise.
     if (
       timeRemainingSec !== undefined &&
       timeRemainingSec < SERVER_CLOSING_WINDOW_SEC
@@ -2351,9 +4092,42 @@ router.post("/video-turn", async (req, res) => {
       if (nonQuestions.length > 0) {
         response = nonQuestions.join(" ").trim();
       } else {
-        response = "Great thinking on this topic!";
+        const closingStatus = feedbackResult.score >= CORRECT_THRESHOLD ? "strong" as const
+          : (mathBounding?.boundedStatus || criteriaEval?.overallStatus || "needs_support") as "strong" | "developing" | "needs_support" | "not_enough_evidence";
+        response = buildPerformanceAwareClose(closingStatus);
       }
     }
+
+    // DECISION ENGINE INVARIANTS: enforce no-premature-completion, meta/confusion repair, explicit-end labeling.
+    const criteriaMet = criteriaEval?.overallStatus === "strong" && feedbackResult.score >= CORRECT_THRESHOLD;
+    // Compute answer scope for attribution guard
+    const currentAnswerScope = prompt.mathProblem
+      ? detectActiveAnswerScope(conversationHistory, prompt.assessment?.reasoningSteps, prompt.mathProblem, studentResponse)
+      : undefined;
+    const currentScopeExpression = (currentAnswerScope && prompt.mathProblem)
+      ? getScopeExpression(currentAnswerScope, prompt.assessment?.reasoningSteps, prompt.mathProblem)
+      : undefined;
+    const engineResult = enforceDecisionEngineInvariants({
+      response,
+      shouldContinue: finalShouldContinue,
+      criteriaMet,
+      studentIntent,
+      timeRemainingSec,
+      questionText: prompt.input,
+      studentResponse,
+      isFinalQuestion,
+      resolvedScope: scope,
+      missingCriteria: criteriaEval?.missingCriteria,
+      score: feedbackResult.score,
+      criteriaStatus: criteriaEval?.overallStatus,
+      mathProblem: prompt.mathProblem,
+      mathValidation: mathValidation ?? undefined,
+      answerScope: currentAnswerScope,
+      scopeExpression: currentScopeExpression,
+    });
+    response = engineResult.response;
+    finalShouldContinue = engineResult.shouldContinue;
+    const wrapReason = engineResult.wrapReason;
 
     // FINAL INVARIANT: enforce question ↔ shouldContinue contract.
     let finalResponse = response;
@@ -2361,10 +4135,174 @@ router.post("/video-turn", async (req, res) => {
       response,
       finalShouldContinue,
       undefined,
-      isFinalQuestion
+      isFinalQuestion,
+      mathBounding?.boundedStatus || criteriaEval?.overallStatus,
     );
     finalResponse = contract.response;
     finalShouldContinue = contract.shouldContinue;
+
+    // FINAL PROBE SAFETY NET: if shouldContinue=true but no question after all
+    // guardrails, force a deterministic probe so every PROBE has a question.
+    if (finalShouldContinue && !finalResponse.includes("?")) {
+      if (prompt.mathProblem) {
+        // Math prompts: try step-accumulation probe first, only wrap if no probe available.
+        const safetyStepProbe = stepAccumulation && prompt.assessment?.reasoningSteps?.length
+          ? getFirstMissingStepProbe(prompt.assessment.reasoningSteps, stepAccumulation)?.probe ?? null
+          : null;
+        if (safetyStepProbe) {
+          if (DEBUG_MATH_PIPELINE) console.log("[math-probe-guard] safety-net: injecting step probe — " + safetyStepProbe);
+          finalResponse = safetyStepProbe;
+        } else {
+          // No deterministic probe available — force wrap.
+          if (DEBUG_MATH_PIPELINE) console.log("[math-probe-guard] safety-net: no question for math prompt — forcing wrap");
+          console.log(`[WRAP-SITE-O] math-probe-guard-safety-net | studentResponse="${studentResponse.slice(0, 40)}"`);
+          finalShouldContinue = false;
+          const hasEvidence = hasMathEvidence(studentResponse, conversationHistory, prompt.mathProblem);
+          const closeStatus = hasEvidence
+            ? (mathBounding?.boundedStatus || criteriaEval?.overallStatus || "needs_support")
+            : "not_enough_evidence";
+          finalResponse = buildPerformanceAwareClose(
+            closeStatus as "strong" | "developing" | "needs_support" | "not_enough_evidence"
+          );
+        }
+      } else {
+        if (DEBUG_MATH_PIPELINE) console.log("[probe-safety-net] shouldContinue=true but no question — appending probe");
+        finalResponse = ensureProbeHasQuestion(finalResponse, prompt.input, studentResponse, scope);
+      }
+    }
+
+    // ========================================================================
+    // CONSOLIDATED MATH WRAP DECISION
+    //
+    // Uses shouldWrapMathSession() for the primary decision, then falls back
+    // to misconception redirect and answer-correct backstop for text generation.
+    // Replaces 4 separate anti-wrap guards with one principled flow:
+    //
+    //   wrap_mastery      → let wrap proceed (mastery)
+    //   wrap_support      → let wrap proceed (no evidence / time constraint)
+    //   continue_probing  → inject step probe or misconception redirect
+    //   continue_decomposition → inject step probe (decomposition setup)
+    // ========================================================================
+    if (
+      !finalShouldContinue &&
+      stepAccumulation &&
+      prompt.mathProblem &&
+      prompt.assessment?.reasoningSteps?.length &&
+      mathInterpretation
+    ) {
+      const wrapDecision = shouldWrapMathSession(
+        stepAccumulation,
+        mathInterpretation,
+        attemptCount,
+        maxAttempts,
+        timeRemainingSec,
+        feedbackResult.score,
+      );
+      mathDecisionSource = `wrap_policy:${wrapDecision.reason}`;
+      mathDecisionAction = wrapDecision.action;
+
+      if (wrapDecision.action === "continue_probing" || wrapDecision.action === "continue_decomposition") {
+        // Try deterministic remediation first (misconception redirect, model instruction, etc.)
+        const misconceptionMove = getDeterministicRemediationMove(
+          prompt.assessment.reasoningSteps, stepAccumulation, studentResponse,
+          prompt.mathProblem, conversationHistory, mathInterpretation,
+        );
+        if (misconceptionMove && misconceptionMove.type !== "WRAP_SUCCESS" && misconceptionMove.type !== "WRAP_NEEDS_SUPPORT") {
+          if (DEBUG_MATH_PIPELINE) console.log(`[math-wrap-override] Using deterministic move: type=${misconceptionMove.type} — "${misconceptionMove.text.slice(0, 80)}"`);
+          finalShouldContinue = true;
+          finalResponse = misconceptionMove.text;
+        } else {
+          // Fall back to step probe
+          const probe = getFirstMissingStepProbe(prompt.assessment.reasoningSteps, stepAccumulation)?.probe ?? null;
+          if (probe) {
+            // If answer is correct, acknowledge it before probing
+            if (mathAnswerCorrect && feedbackResult.score < CORRECT_THRESHOLD && !stepAccumulation.alternateStrategyDetected) {
+              if (DEBUG_MATH_PIPELINE) console.log(`[math-wrap-override] Answer correct but explanation missing — probing: "${probe}"`);
+              finalShouldContinue = true;
+              finalResponse = `That's right, ${mathValidation!.extractedAnswer} is the answer! ${probe}`;
+            } else {
+              if (DEBUG_MATH_PIPELINE) console.log(`[math-wrap-override] Injecting step probe: "${probe}" (reason=${wrapDecision.reason})`);
+              finalShouldContinue = true;
+              finalResponse = probe;
+            }
+          }
+        }
+      }
+      // wrap_mastery and wrap_support: let the existing wrap proceed
+    }
+
+    // NON-REASONING-STEP math backstop: answer correct but no reasoning steps to probe.
+    // Uses strategy-based probe as fallback.
+    if (
+      !finalShouldContinue &&
+      mathAnswerCorrect &&
+      prompt.mathProblem &&
+      !prompt.assessment?.reasoningSteps?.length &&
+      feedbackResult.score < CORRECT_THRESHOLD &&
+      (!timeRemainingSec || timeRemainingSec > SERVER_CLOSING_WINDOW_SEC)
+    ) {
+      const strategyProbe = buildMathStrategyProbe(prompt.mathProblem, combinedStrategies);
+      if (strategyProbe) {
+        if (DEBUG_MATH_PIPELINE) console.log(`[math-answer-backstop] Answer correct but no reasoning steps — strategy probe: "${strategyProbe}"`);
+        mathDecisionSource = "non_reasoning_step_backstop";
+        mathDecisionAction = "continue_probing";
+        finalShouldContinue = true;
+        finalResponse = `That's right, ${mathValidation!.extractedAnswer} is the answer! ${strategyProbe}`;
+      }
+    }
+
+    // FINAL PRAISE-ONLY GUARD: If we're about to WRAP but the response is just
+    // praise (e.g., "Good thinking.") and the student's answer was wrong/partial,
+    // replace with performance-aware close. This catches any path that produced
+    // praise-only wrap text without going through enforceQuestionContinueInvariant.
+    if (
+      !finalShouldContinue &&
+      isPraiseOnly(finalResponse) &&
+      feedbackResult.score < CORRECT_THRESHOLD
+    ) {
+      const praiseStatus = mathBounding?.boundedStatus || criteriaEval?.overallStatus || "needs_support";
+      const closeStatus = praiseStatus === "strong" ? "developing" : praiseStatus;
+      if (DEBUG_MATH_PIPELINE) console.log(`[praise-only-final-guard] Replacing praise-only "${finalResponse}" with close (status=${closeStatus})`);
+      finalResponse = buildPerformanceAwareClose(
+        closeStatus as "strong" | "developing" | "needs_support" | "not_enough_evidence"
+      );
+    }
+
+    // INSTRUCTIONAL RECAP: When wrapping after a detected misconception or
+    // persistent step failure on a reasoning-step math prompt, replace generic
+    // close with a concrete instructional recap that models the correct steps.
+    if (
+      !finalShouldContinue &&
+      prompt.mathProblem &&
+      prompt.assessment?.reasoningSteps?.length &&
+      stepAccumulation &&
+      stepAccumulation.missingStepIds.length > 0 &&
+      feedbackResult.score < CORRECT_THRESHOLD
+    ) {
+      // 1. Check for named misconception first (highest priority)
+      const misconceptionCategory = detectConversationMisconceptions(
+        conversationHistory, studentResponse, prompt.mathProblem, stepAccumulation, prompt.assessment?.reasoningSteps,
+      );
+      if (misconceptionCategory) {
+        const recap = buildInstructionalRecap(
+          prompt.assessment.reasoningSteps, prompt.mathProblem, misconceptionCategory,
+        );
+        if (DEBUG_MATH_PIPELINE) console.log(`[instructional-recap] Misconception "${misconceptionCategory}" detected in conversation — replacing wrap with instructional recap`);
+        finalResponse = recap;
+      } else {
+        // 2. Check for persistent step failure (no named misconception)
+        const stepFailure = detectPersistentStepFailure(
+          prompt.assessment.reasoningSteps, stepAccumulation, conversationHistory, prompt.mathProblem,
+        );
+        if (stepFailure) {
+          const recap = buildStepFailureRecap(
+            prompt.assessment.reasoningSteps, stepFailure.step, prompt.mathProblem,
+          );
+          if (DEBUG_MATH_PIPELINE) console.log(`[instructional-recap] Persistent failure on step "${stepFailure.step.label}" (${stepFailure.failures} failures) — replacing wrap with step-specific recap`);
+          finalResponse = recap;
+        }
+      }
+    }
 
     // Compute turnKind
     let turnKind: VideoTurnKind = "FEEDBACK";
@@ -2372,9 +4310,40 @@ router.post("/video-turn", async (req, res) => {
       turnKind = "PROBE";
     } else if (!finalShouldContinue) {
       turnKind = "WRAP";
+      console.log(`[WRAP-SITE-N] final-computed-wrap | studentResponse="${studentResponse.slice(0, 40)}"`);
     }
 
-    console.log(`[video-turn] turnKind=${turnKind} shouldContinue=${finalShouldContinue} timeRemaining=${timeRemainingSec}s criteriaStatus=${criteriaEval?.overallStatus ?? "none"}`);
+    // Pre-compute instructional recap for client-side wraps (probing_cutoff, etc.)
+    // Sent on every turn so the client always has the latest recap available.
+    let instructionalRecap: string | undefined;
+    if (
+      prompt.mathProblem &&
+      prompt.assessment?.reasoningSteps?.length &&
+      stepAccumulation &&
+      stepAccumulation.missingStepIds.length > 0
+    ) {
+      // 1. Named misconception recap
+      const recapCategory = detectConversationMisconceptions(
+        conversationHistory, studentResponse, prompt.mathProblem, stepAccumulation, prompt.assessment?.reasoningSteps,
+      );
+      if (recapCategory) {
+        instructionalRecap = buildInstructionalRecap(
+          prompt.assessment.reasoningSteps, prompt.mathProblem, recapCategory,
+        );
+      } else {
+        // 2. Persistent step failure recap
+        const stepFailure = detectPersistentStepFailure(
+          prompt.assessment.reasoningSteps, stepAccumulation, conversationHistory, prompt.mathProblem,
+        );
+        if (stepFailure) {
+          instructionalRecap = buildStepFailureRecap(
+            prompt.assessment.reasoningSteps, stepFailure.step, prompt.mathProblem,
+          );
+        }
+      }
+    }
+
+    console.log(`[video-turn] turnKind=${turnKind} shouldContinue=${finalShouldContinue} timeRemaining=${timeRemainingSec}s criteriaStatus=${criteriaEval?.overallStatus ?? "none"} wrapReason=${wrapReason} studentIntent=${studentIntent}`);
 
     return res.json({
       response: finalResponse,
@@ -2386,6 +4355,11 @@ router.post("/video-turn", async (req, res) => {
       coachActionTag: feedbackResult.coachActionTag,
       deferredByCoach: wordingResult.deferredByCoach || false,
       criteriaEvaluation: criteriaEval,
+      teacherSummary,
+      wrapReason,
+      studentIntent,
+      criteriaStatus: criteriaEval?.overallStatus,
+      instructionalRecap,
     } as VideoTurnResponse);
   } catch (error) {
     console.error("Error in video-turn:", error);
@@ -2408,6 +4382,10 @@ interface SessionSummaryRequest {
     message: string;
     timestampSec?: number;
   }>;
+  criteriaEvaluation?: {
+    overallStatus?: string;   // "strong" | "partial" | "weak" | "off_topic"
+    missingCriteria?: string[];
+  };
 }
 
 interface SessionSummaryResponse {
@@ -2417,7 +4395,7 @@ interface SessionSummaryResponse {
 }
 
 /** Bump this when changing grounding logic — logged client-side for verification. */
-const SUMMARY_GUARDRAILS_VERSION = "grounding-v2";
+const SUMMARY_GUARDRAILS_VERSION = "deterministic-v2";
 
 router.post("/session-summary", async (req, res) => {
   try {
@@ -2426,6 +4404,7 @@ router.post("/session-summary", async (req, res) => {
       learningObjective,
       successCriteria,
       conversationTurns,
+      criteriaEvaluation,
     } = req.body as SessionSummaryRequest;
 
     if (!questionText || !conversationTurns || conversationTurns.length === 0) {
@@ -2448,7 +4427,8 @@ router.post("/session-summary", async (req, res) => {
       questionText,
       conversationTurns,
       learningObjective,
-      successCriteria
+      successCriteria,
+      criteriaEvaluation
     );
 
     res.json(result);
@@ -2473,7 +4453,8 @@ async function generateSessionSummary(
   questionText: string,
   turns: Array<{ role: "coach" | "student"; message: string; timestampSec?: number }>,
   learningObjective?: string,
-  successCriteria?: string[]
+  successCriteria?: string[],
+  criteriaEvaluation?: { overallStatus?: string; missingCriteria?: string[] }
 ): Promise<SessionSummaryResponse> {
   // Separate student utterances for grounding verification
   const studentUtterances = turns
@@ -2502,13 +4483,68 @@ async function generateSessionSummary(
     };
   }
 
+  // Filter out meta/confusion utterances that shouldn't count as evidence
+  const { content: contentUtterances, metaCount } = filterMetaUtterances(substantiveUtterances);
+
+  // If ALL substantive utterances are meta/confusion, return honest summary
+  if (contentUtterances.length === 0) {
+    const attemptBullets: string[] = [];
+    if (metaCount > 0) {
+      attemptBullets.push("Student expressed confusion or asked meta-questions rather than answering.");
+    }
+    attemptBullets.push(
+      `The student had ${substantiveUtterances.length} response${substantiveUtterances.length !== 1 ? "s" : ""}, ` +
+      `but none contained topic-relevant content.`
+    );
+    return {
+      bullets: attemptBullets,
+      overall: "The student attempted the question but did not provide enough verbal evidence to evaluate.",
+      guardrailsVersion: SUMMARY_GUARDRAILS_VERSION,
+    };
+  }
+  const evidenceUtterances = contentUtterances;
+
+  // Deterministic evidence extraction for post-processing validation
+  const evidence = extractDeterministicEvidence(evidenceUtterances);
+  const deterministicEvidence = {
+    ...evidence,
+    contentTurnCount: contentUtterances.length,
+    metaTurnCount: metaCount,
+    criteriaStatus: criteriaEvaluation?.overallStatus || "unknown",
+    missingCriteria: criteriaEvaluation?.missingCriteria || [],
+  };
+  if (DEBUG_MATH_PIPELINE) console.log(`[session-summary] Deterministic evidence: ${JSON.stringify(deterministicEvidence)}`);
+
+  // DETERMINISTIC FAST-PATH: when criteriaEvaluation is available,
+  // build the summary entirely from extracted evidence — no LLM call.
+  // This eliminates generic/awkward phrasing and guarantees grounding.
+  if (criteriaEvaluation?.overallStatus) {
+    if (DEBUG_MATH_PIPELINE) console.log(`[session-summary] Using deterministic fast-path (status=${criteriaEvaluation.overallStatus})`);
+    const summary = buildDeterministicSummary({
+      evidenceUtterances,
+      substantiveCount: substantiveUtterances.length,
+      metaTurnCount: metaCount,
+      questionText,
+      criteriaEvaluation,
+      successCriteria,
+    });
+    return {
+      ...summary,
+      guardrailsVersion: SUMMARY_GUARDRAILS_VERSION,
+    };
+  }
+
+  // LLM FALLBACK: when no criteriaEvaluation is provided, use the
+  // LLM-based approach with post-processing grounding checks.
+
   // Format full transcript (coach + student) for context
   const transcript = turns
     .map((t) => `${t.role === "coach" ? "Coach" : "Student"}: ${t.message}`)
     .join("\n");
 
-  // Format student-only utterances as a separate verification block
-  const studentBlock = studentUtterances
+  // Format content-only student utterances as the evidence block
+  // (excludes meta/confusion turns to prevent the LLM from counting them as evidence)
+  const studentBlock = evidenceUtterances
     .map((u, i) => `  [S${i + 1}]: "${u}"`)
     .join("\n");
 
@@ -2707,12 +4743,35 @@ RULE 6 — HONESTY: If the student gave minimal, unclear, or off-topic responses
       }
     }
 
+    // DETERMINISTIC RUBRIC CLAIM VALIDATION
+    parsed.bullets = validateRubricClaims(parsed.bullets, evidence);
+
+    // DETERMINISTIC OVERALL SENTENCE: use criteriaEvaluation when available
+    if (overallForeign.length === 0) {
+      const deterministicOverall = buildDeterministicOverall(criteriaEvaluation, !!(successCriteria?.length));
+      if (deterministicOverall) {
+        parsed.overall = deterministicOverall;
+      }
+    }
+
+    // Add meta-turn context if there were confusion/meta turns
+    if (deterministicEvidence.metaTurnCount > 0 && parsed.bullets.length < 4) {
+      parsed.bullets.push(
+        `${deterministicEvidence.metaTurnCount} of the student's ${substantiveUtterances.length} responses were meta-comments or expressions of confusion rather than content answers.`
+      );
+    }
+
     // Ensure at least 2 bullets
     if (parsed.bullets.length < 2) {
       parsed.bullets = parsed.bullets.slice(0, 1);
       parsed.bullets.push(
-        `The student provided ${substantiveUtterances.length} substantive response${substantiveUtterances.length !== 1 ? "s" : ""} during the coaching conversation.`
+        `The student provided ${contentUtterances.length} content-focused response${contentUtterances.length !== 1 ? "s" : ""} during the coaching conversation.`
       );
+    }
+
+    // Clamp to 4 bullets (meta bullet may have pushed over)
+    if (parsed.bullets.length > 4) {
+      parsed.bullets = parsed.bullets.slice(0, 4);
     }
 
     return { ...parsed, guardrailsVersion: SUMMARY_GUARDRAILS_VERSION };

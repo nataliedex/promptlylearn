@@ -9,7 +9,7 @@
  * - Page shows completion when all flagged students are addressed
  */
 
-import { useState, useEffect, useRef, useMemo } from "react";
+import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { useParams, Link, useNavigate, useLocation } from "react-router-dom";
 import EducatorAppHeader from "../components/EducatorAppHeader";
 import { useToast } from "../components/Toast";
@@ -25,13 +25,13 @@ import {
   getTeacherTodos,
   getStudentProgressStatus,
   unassignLessonFromClass,
-  saveLesson,
+  assignLessonToClass,
+  updateAssignmentDueDate,
   deleteLesson,
-  generateQuestion,
+  updateLessonSubject,
   STUDENT_PROGRESS_LABELS,
   STUDENT_PROGRESS_CONFIG,
   type Lesson,
-  type Prompt,
   type Student,
   type StudentActionStatus,
   type AssignmentReviewStatus,
@@ -52,7 +52,6 @@ import type {
   AssignmentReviewData,
   StudentAssignmentRow,
 } from "../types/teacherDashboard";
-import AssignmentPreviewPanel from "../components/AssignmentPreviewPanel";
 import InsightsDrawer from "../components/InsightsDrawer";
 
 // ============================================
@@ -66,9 +65,10 @@ const UNDERSTANDING_PRIORITY: Record<string, number> = {
 };
 
 const COACH_SUPPORT_PRIORITY: Record<string, number> = {
-  significant: 1,
-  some: 2,
+  high: 1,
+  moderate: 2,
   minimal: 3,
+  none: 4,
 };
 
 function sortByReviewPriority(students: StudentAssignmentRow[]): StudentAssignmentRow[] {
@@ -93,7 +93,7 @@ function sortByReviewPriority(students: StudentAssignmentRow[]): StudentAssignme
 // Sorting Types (must be before component for SortableHeader)
 // ============================================
 
-type SortColumn = "student" | "progress" | "understanding" | "coachSupport" | "attempts" | "teacherStatus" | "insights";
+type SortColumn = "student" | "attempts" | "understanding" | "teacherStatus";
 type SortDirection = "asc" | "desc";
 
 // ============================================
@@ -140,7 +140,6 @@ export default function AssignmentReview() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<"needs-review" | "all">("all");
-  const [showPreview, setShowPreview] = useState(false);
 
   // Recommendations and Teacher Todos state
   const [recommendationsByStudent, setRecommendationsByStudent] = useState<Map<string, Recommendation[]>>(new Map());
@@ -153,13 +152,25 @@ export default function AssignmentReview() {
   const [unassigning, setUnassigning] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
-  // Edit Lesson modal state
-  const [showEditModal, setShowEditModal] = useState(false);
-  const [editingLesson, setEditingLesson] = useState<Lesson | null>(null);
-  const [savingLesson, setSavingLesson] = useState(false);
+  // Inline subject edit state
+  const [editingSubject, setEditingSubject] = useState(false);
+  const [subjectValue, setSubjectValue] = useState("");
+  const [subjectSaving, setSubjectSaving] = useState(false);
+  const [subjectError, setSubjectError] = useState<string | null>(null);
+
+  // Due date editing state
+  const [dueDateSaving, setDueDateSaving] = useState(false);
+  const dueDateInputRef = useRef<HTMLInputElement>(null);
+
+  // Add student modal state
+  const [showAddStudentModal, setShowAddStudentModal] = useState(false);
+  const [allStudentsList, setAllStudentsList] = useState<Student[]>([]);
+  const [addStudentSearch, setAddStudentSearch] = useState("");
+  const [addStudentSelected, setAddStudentSelected] = useState<Set<string>>(new Set());
+  const [addingStudents, setAddingStudents] = useState(false);
 
   // Sorting state
-  const [sortColumn, setSortColumn] = useState<SortColumn>("student");
+  const [sortColumn, setSortColumn] = useState<SortColumn>("teacherStatus");
   const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
 
   const handleSort = (column: SortColumn) => {
@@ -219,6 +230,8 @@ export default function AssignmentReview() {
 
       const lessonSessions = sessions.filter((s) => s.lessonId === lessonId);
       const assignedStudentIds = assignedData.studentIds;
+
+      setAllStudentsList(allStudents);
 
       const studentNames: Record<string, string> = {};
       allStudents.forEach((s: Student) => {
@@ -290,13 +303,9 @@ export default function AssignmentReview() {
     switch (column) {
       case "student":
         return student.studentName.toLowerCase();
-      case "progress":
-        // Sort by completion status, then by questions answered
-        if (student.isComplete) return 1000 + student.questionsAnswered;
-        if (student.questionsAnswered > 0) return student.questionsAnswered;
-        return -1; // Not started
-      case "understanding":
-        // Map understanding levels to numbers
+      case "attempts":
+        return student.attempts;
+      case "understanding": {
         const understandingOrder: Record<string, number> = {
           "strong": 3,
           "developing": 2,
@@ -304,18 +313,8 @@ export default function AssignmentReview() {
           "needs-support": 0,
         };
         return understandingOrder[student.understanding] ?? -1;
-      case "coachSupport":
-        // Map coach support levels to numbers
-        const coachOrder: Record<string, number> = {
-          "significant": 2,
-          "moderate": 1,
-          "minimal": 0,
-        };
-        return coachOrder[student.coachSupport] ?? -1;
-      case "attempts":
-        return student.attempts;
-      case "teacherStatus":
-        // Sort by reviewState (single source of truth)
+      }
+      case "teacherStatus": {
         const reviewStateOrder: Record<ReviewState, number> = {
           "resolved": 5,
           "followup_scheduled": 4,
@@ -324,11 +323,7 @@ export default function AssignmentReview() {
           "not_started": 1,
         };
         return reviewStateOrder[student.reviewState] ?? 0;
-      case "insights":
-        // Sort by number of insights + todos
-        const recs = recommendationsByStudent.get(student.studentId) || [];
-        const todos = todosByStudent.get(student.studentId) || [];
-        return recs.filter(r => r.status === "active").length + todos.filter(t => t.status === "open").length;
+      }
       default:
         return 0;
     }
@@ -361,7 +356,7 @@ export default function AssignmentReview() {
     });
 
     return students;
-  }, [activeTab, reviewData, unaddressedStudents, sortColumn, sortDirection, recommendationsByStudent, todosByStudent]);
+  }, [activeTab, reviewData, unaddressedStudents, sortColumn, sortDirection]);
 
   // Check if any student has started work (used for guarding destructive actions)
   const anyStudentStarted = useMemo(() => {
@@ -386,6 +381,59 @@ export default function AssignmentReview() {
     }
   };
 
+  const handleDueDateChange = useCallback(async (newDate: string | null) => {
+    if (!lessonId || !classId) return;
+    // Ensure YYYY-MM-DD format (no timestamp)
+    const dateOnly = newDate ? newDate.split("T")[0] : null;
+    console.log("[due-date] saving:", { lessonId, classId, dueDate: dateOnly });
+    setDueDateSaving(true);
+    try {
+      const result = await updateAssignmentDueDate(lessonId, classId, dateOnly);
+      console.log("[due-date] saved:", result);
+      setReviewData((prev) => prev ? { ...prev, dueDate: dateOnly || undefined } : prev);
+      showSuccess(dateOnly ? `Due date set to ${new Date(dateOnly + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" })}` : "Due date removed");
+    } catch (err) {
+      console.error("[due-date] error:", err);
+      showError("Failed to update due date");
+    } finally {
+      setDueDateSaving(false);
+    }
+  }, [lessonId, classId]);
+
+  // Students available to add (not already assigned)
+  const unassignedStudents = useMemo(() => {
+    if (!reviewData) return [];
+    const assignedIds = new Set(reviewData.students.map((s) => s.studentId));
+    return allStudentsList
+      .filter((s) => !assignedIds.has(s.id))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [allStudentsList, reviewData]);
+
+  const filteredUnassignedStudents = useMemo(() => {
+    if (!addStudentSearch.trim()) return unassignedStudents;
+    const q = addStudentSearch.toLowerCase();
+    return unassignedStudents.filter((s) => s.name.toLowerCase().includes(q));
+  }, [unassignedStudents, addStudentSearch]);
+
+  // Handle adding selected students to the assignment
+  const handleAddStudents = async () => {
+    if (!lessonId || !classId || addStudentSelected.size === 0) return;
+    setAddingStudents(true);
+    try {
+      await assignLessonToClass(lessonId, classId, [...addStudentSelected]);
+      showSuccess(`Added ${addStudentSelected.size} student${addStudentSelected.size > 1 ? "s" : ""}`);
+      setShowAddStudentModal(false);
+      setAddStudentSelected(new Set());
+      setAddStudentSearch("");
+      await loadData();
+    } catch (err) {
+      console.error("Failed to add students:", err);
+      showError("Failed to add students");
+    } finally {
+      setAddingStudents(false);
+    }
+  };
+
   // Handle delete assignment
   const handleDelete = async () => {
     if (!lessonId) return;
@@ -404,31 +452,9 @@ export default function AssignmentReview() {
   };
 
   // Handle opening Edit Lesson modal
-  const handleOpenEditModal = () => {
-    if (lesson) {
-      setEditingLesson({ ...lesson, prompts: lesson.prompts.map(p => ({ ...p })) });
-      setShowEditModal(true);
-    }
-  };
-
-  // Handle saving lesson edits
-  const handleSaveLesson = async () => {
-    if (!editingLesson) return;
-    setSavingLesson(true);
-    try {
-      await saveLesson(editingLesson);
-      setLesson(editingLesson);
-      // Update review data title if changed
-      if (reviewData && editingLesson.title !== reviewData.title) {
-        setReviewData({ ...reviewData, title: editingLesson.title });
-      }
-      setShowEditModal(false);
-      showSuccess("Lesson saved.");
-    } catch (err) {
-      console.error("Failed to save lesson:", err);
-      showError("Failed to save lesson");
-    } finally {
-      setSavingLesson(false);
+  const handleEditLesson = () => {
+    if (lessonId) {
+      navigate(`/educator/lesson/${lessonId}/edit`);
     }
   };
 
@@ -460,14 +486,6 @@ export default function AssignmentReview() {
     } catch (err) {
       console.error("Failed to mark action:", err);
     }
-  };
-
-  // Handle "View Flagged Students" - switch tab and scroll
-  const handleViewAllFlagged = () => {
-    setActiveTab("needs-review");
-    setTimeout(() => {
-      tableRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-    }, 100);
   };
 
   // Loading state
@@ -522,22 +540,7 @@ export default function AssignmentReview() {
     });
   }
 
-  // 3. Skill Level (Beginner, Intermediate, Advanced)
-  if (lesson?.difficulty) {
-    const difficultyLabel = lesson.difficulty.charAt(0).toUpperCase() + lesson.difficulty.slice(1);
-    const difficultyParams = new URLSearchParams({
-      drawer: "assignments",
-      ...(lesson?.gradeLevel && { grade: lesson.gradeLevel }),
-      ...(lesson?.subject && { subject: lesson.subject }),
-      difficulty: lesson.difficulty,
-    });
-    breadcrumbs.push({
-      label: difficultyLabel,
-      to: `/educator?${difficultyParams.toString()}`,
-    });
-  }
-
-  // 4. Assignment title (current page - no link)
+  // 3. Assignment title (current page - no link)
   breadcrumbs.push({ label: reviewData?.title || "Assignment" });
 
   // Error state
@@ -586,54 +589,20 @@ export default function AssignmentReview() {
         <EducatorAppHeader mode="slim" breadcrumbs={breadcrumbs} />
 
         <div className="header">
-          <div>
-            <h1>{reviewData.title}</h1>
-            {(reviewData.assignedAt || reviewData.dueDate) && (
-              <p style={{ color: "var(--text-muted)", margin: "4px 0 0 0", fontSize: "0.9rem" }}>
-                {[formatAssignedDate(reviewData.assignedAt), formatDueDate(reviewData.dueDate)].filter(Boolean).join(" · ")}
-              </p>
-            )}
-          </div>
-          <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-            <button
-              onClick={handleOpenEditModal}
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: "6px",
-                background: "rgba(255, 255, 255, 0.95)",
-                border: "none",
-                padding: "8px 14px",
-                font: "inherit",
-                color: "#4a5568",
-                cursor: "pointer",
-                borderRadius: "6px",
-                fontSize: "0.9rem",
-                boxShadow: "0 1px 3px rgba(0,0,0,0.1)",
-                fontWeight: 500,
-              }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.background = "#ffffff";
-                e.currentTarget.style.boxShadow = "0 2px 4px rgba(0,0,0,0.15)";
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.background = "rgba(255, 255, 255, 0.95)";
-                e.currentTarget.style.boxShadow = "0 1px 3px rgba(0,0,0,0.1)";
-              }}
-            >
-              Edit Lesson
-            </button>
-            <ViewAssignmentToggle
-              questionCount={reviewData.questionCount}
-              showPreview={showPreview}
-              onToggle={() => setShowPreview(!showPreview)}
+          <div style={{ display: "flex", justifyContent: "center", alignItems: "center", gap: "8px" }}>
+            <h1 style={{ margin: 0 }}>{reviewData.title}</h1>
+            <AssignmentActions
+              anyStudentStarted={false}
+              anyStudentSubmitted={false}
+              onEditLesson={handleEditLesson}
             />
           </div>
+          {(reviewData.assignedAt || reviewData.dueDate) && (
+            <p style={{ color: "var(--text-muted)", margin: "4px 0 0 0", fontSize: "0.9rem" }}>
+              {[formatAssignedDate(reviewData.assignedAt), formatDueDate(reviewData.dueDate)].filter(Boolean).join(" · ")}
+            </p>
+          )}
         </div>
-
-        {showPreview && lesson && (
-          <AssignmentPreviewPanel lesson={lesson} onClose={() => setShowPreview(false)} />
-        )}
 
         <div className="card" style={{ textAlign: "center", padding: "48px" }}>
           <h3 style={{ margin: 0, marginBottom: "8px" }}>No students assigned yet</h3>
@@ -661,66 +630,228 @@ export default function AssignmentReview() {
       {/* Header */}
       <div className="header">
         <div>
-          <h1>{reviewData.title}</h1>
-          {/* Lesson metadata line: "Math 1.3 · Grade 1 · Beginner" */}
-          {lesson && (lesson.systemIndex || lesson.gradeLevel || lesson.difficulty) && (
-            <p style={{ color: "var(--text-secondary)", margin: "4px 0 0 0", fontSize: "0.9rem" }}>
-              {[
-                lesson.systemIndex,
-                lesson.gradeLevel ? `Grade ${lesson.gradeLevel}` : null,
-                lesson.difficulty ? lesson.difficulty.charAt(0).toUpperCase() + lesson.difficulty.slice(1) : null,
-              ].filter(Boolean).join(" · ")}
-            </p>
-          )}
-          {(reviewData.assignedAt || reviewData.dueDate) && (
-            <p style={{ color: "var(--text-muted)", margin: "4px 0 0 0", fontSize: "0.85rem" }}>
-              {[formatAssignedDate(reviewData.assignedAt), formatDueDate(reviewData.dueDate)].filter(Boolean).join(" · ")}
-            </p>
-          )}
-        </div>
-        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-          <button
-            onClick={handleOpenEditModal}
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: "6px",
-              background: "rgba(255, 255, 255, 0.95)",
-              border: "none",
-              padding: "8px 14px",
-              font: "inherit",
-              color: "#4a5568",
-              cursor: "pointer",
-              borderRadius: "6px",
-              transition: "background 0.15s, box-shadow 0.15s",
-              fontSize: "0.9rem",
-              boxShadow: "0 1px 3px rgba(0,0,0,0.1)",
-              fontWeight: 500,
-            }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.background = "#ffffff";
-              e.currentTarget.style.boxShadow = "0 2px 4px rgba(0,0,0,0.15)";
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.background = "rgba(255, 255, 255, 0.95)";
-              e.currentTarget.style.boxShadow = "0 1px 3px rgba(0,0,0,0.1)";
-            }}
-          >
-            Edit Lesson
-          </button>
-          <ViewAssignmentToggle
-            questionCount={reviewData.questionCount}
-            showPreview={showPreview}
-            onToggle={() => setShowPreview(!showPreview)}
-          />
-          {/* Actions dropdown for lifecycle operations */}
-          {classId && (
+          {/* Title row: centered with actions beside */}
+          <div style={{ display: "flex", justifyContent: "center", alignItems: "center", gap: "8px" }}>
+            <h1 style={{ margin: 0 }}>{reviewData.title}</h1>
             <AssignmentActions
               anyStudentStarted={anyStudentStarted}
               anyStudentSubmitted={reviewData.students.some(s => s.isComplete)}
-              onUnassign={() => setShowUnassignConfirm(true)}
-              onDelete={() => setShowDeleteConfirm(true)}
+              onEditLesson={handleEditLesson}
+              onUnassign={classId ? () => setShowUnassignConfirm(true) : undefined}
+              onDelete={classId ? () => setShowDeleteConfirm(true) : undefined}
             />
+          </div>
+          {/* Metadata pills bar */}
+          {lesson && (
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "8px", marginTop: "8px", alignItems: "center", justifyContent: "center" }}>
+              {/* Subject pill — editable */}
+              {editingSubject ? (
+                <span style={{ display: "inline-flex", alignItems: "center", gap: "4px" }}>
+                  <select
+                    value={subjectValue}
+                    onChange={(e) => setSubjectValue(e.target.value)}
+                    disabled={subjectSaving}
+                    style={{
+                      padding: "3px 8px",
+                      fontSize: "12px",
+                      border: "1px solid #d1d5db",
+                      borderRadius: "16px",
+                      background: "white",
+                    }}
+                  >
+                    <option value="Math">Math</option>
+                    <option value="Science">Science</option>
+                    <option value="English / Language Arts">English / Language Arts</option>
+                    <option value="Reading">Reading</option>
+                    <option value="Writing">Writing</option>
+                    <option value="Social Studies">Social Studies</option>
+                    <option value="Other">Other</option>
+                  </select>
+                  <button
+                    onClick={async () => {
+                      setSubjectSaving(true);
+                      setSubjectError(null);
+                      try {
+                        await updateLessonSubject(lesson.id, subjectValue);
+                        setLesson({ ...lesson, subject: subjectValue });
+                        setEditingSubject(false);
+                      } catch {
+                        setSubjectError("Failed to save");
+                      } finally {
+                        setSubjectSaving(false);
+                      }
+                    }}
+                    disabled={subjectSaving}
+                    style={{
+                      padding: "3px 8px",
+                      fontSize: "12px",
+                      fontWeight: 500,
+                      background: subjectSaving ? "#e2e8f0" : "#3d5a80",
+                      color: subjectSaving ? "var(--text-muted)" : "white",
+                      border: "none",
+                      borderRadius: "16px",
+                      cursor: subjectSaving ? "not-allowed" : "pointer",
+                    }}
+                  >
+                    {subjectSaving ? "Saving..." : "Save"}
+                  </button>
+                  <button
+                    onClick={() => { setEditingSubject(false); setSubjectError(null); }}
+                    disabled={subjectSaving}
+                    style={{
+                      padding: "3px 8px",
+                      fontSize: "12px",
+                      background: "none",
+                      color: "var(--text-muted)",
+                      border: "1px solid #e2e8f0",
+                      borderRadius: "16px",
+                      cursor: "pointer",
+                    }}
+                  >
+                    Cancel
+                  </button>
+                  {subjectError && (
+                    <span style={{ color: "#dc2626", fontSize: "12px" }}>{subjectError}</span>
+                  )}
+                </span>
+              ) : (
+                <button
+                  onClick={() => {
+                    setSubjectValue(lesson.subject || "Other");
+                    setEditingSubject(true);
+                    setSubjectError(null);
+                  }}
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: "4px",
+                    padding: "4px 10px",
+                    borderRadius: "16px",
+                    fontSize: "12px",
+                    fontWeight: 500,
+                    background: "#F3F4F6",
+                    color: "#374151",
+                    border: "none",
+                    cursor: "pointer",
+                    whiteSpace: "nowrap",
+                    transition: "background 0.15s",
+                  }}
+                  onMouseEnter={(e) => e.currentTarget.style.background = "#E5E7EB"}
+                  onMouseLeave={(e) => e.currentTarget.style.background = "#F3F4F6"}
+                  title="Click to edit subject"
+                >
+                  {lesson.subject || "Other"} <span style={{ fontSize: "10px", opacity: 0.5 }}>✎</span>
+                </button>
+              )}
+
+              {/* Grade pill */}
+              {lesson.gradeLevel && (
+                <span style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  padding: "4px 10px",
+                  borderRadius: "16px",
+                  fontSize: "12px",
+                  fontWeight: 500,
+                  background: "#F3F4F6",
+                  color: "#374151",
+                  whiteSpace: "nowrap",
+                }}>
+                  Grade {lesson.gradeLevel}
+                </span>
+              )}
+
+              {/* Lesson code pill */}
+              {lesson.systemIndex && (
+                <span style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  padding: "4px 10px",
+                  borderRadius: "16px",
+                  fontSize: "12px",
+                  fontWeight: 500,
+                  background: "#F3F4F6",
+                  color: "#374151",
+                  whiteSpace: "nowrap",
+                }}>
+                  Lesson {lesson.systemIndex.replace(/^[^\d]+(?=\d)/, "")}
+                </span>
+              )}
+
+              {/* Assigned date pill */}
+              {reviewData.assignedAt && (
+                <span style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  padding: "4px 10px",
+                  borderRadius: "16px",
+                  fontSize: "12px",
+                  fontWeight: 500,
+                  background: "#F3F4F6",
+                  color: "#374151",
+                  whiteSpace: "nowrap",
+                }}>
+                  {formatAssignedDate(reviewData.assignedAt)}
+                </span>
+              )}
+
+              {/* Due date — plain text, click opens native calendar */}
+              <div style={{ position: "relative", display: "inline-flex", alignItems: "center" }}>
+                <button
+                  onClick={() => {
+                    if (dueDateSaving) return;
+                    try {
+                      dueDateInputRef.current?.showPicker();
+                    } catch {
+                      dueDateInputRef.current?.click();
+                    }
+                  }}
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: "4px",
+                    padding: "4px 10px",
+                    borderRadius: "16px",
+                    fontSize: "12px",
+                    fontWeight: 500,
+                    background: "#F3F4F6",
+                    color: (() => {
+                      if (!reviewData.dueDate) return "#64748b";
+                      const due = new Date(reviewData.dueDate + "T23:59:59");
+                      return due < new Date() ? "#dc2626" : "#374151";
+                    })(),
+                    whiteSpace: "nowrap",
+                    border: "none",
+                    cursor: dueDateSaving ? "not-allowed" : "pointer",
+                  }}
+                  title={reviewData.dueDate ? "Click to change due date" : "Click to set due date"}
+                >
+                  {reviewData.dueDate ? formatDueDate(reviewData.dueDate) : "No due date"}
+                  <span style={{ fontSize: "10px", opacity: 0.5 }}>✎</span>
+                </button>
+
+                {/* Hidden native date input — calendar opens directly */}
+                <input
+                  ref={dueDateInputRef}
+                  type="date"
+                  value={reviewData.dueDate || ""}
+                  onChange={(e) => {
+                    handleDueDateChange(e.target.value || null);
+                  }}
+                  style={{
+                    position: "absolute",
+                    top: 0,
+                    left: 0,
+                    width: "100%",
+                    height: "100%",
+                    opacity: 0,
+                    cursor: "pointer",
+                    pointerEvents: "none",
+                  }}
+                  tabIndex={-1}
+                />
+              </div>
+            </div>
           )}
         </div>
       </div>
@@ -865,32 +996,14 @@ export default function AssignmentReview() {
         </div>
       )}
 
-      {/* Edit Lesson Modal */}
-      {showEditModal && editingLesson && (
-        <EditLessonModal
-          lesson={editingLesson}
-          onChange={setEditingLesson}
-          onSave={handleSaveLesson}
-          onClose={() => setShowEditModal(false)}
-          saving={savingLesson}
-          hasStudentSubmissions={reviewData.students.some(s => s.isComplete)}
-        />
-      )}
-
-      {/* Assignment Preview Panel */}
-      {showPreview && lesson && (
-        <AssignmentPreviewPanel lesson={lesson} onClose={() => setShowPreview(false)} />
-      )}
-
       {/* Status Tiles - Contextual summary, de-emphasized */}
       <div
         style={{
           display: "grid",
           gridTemplateColumns: "repeat(4, 1fr)",
           gap: "8px",
-          marginBottom: showPreview ? "12px" : "20px",
-          opacity: showPreview ? 0.5 : 0.9,
-          transition: "opacity 0.2s, margin-bottom 0.2s",
+          marginBottom: "20px",
+          opacity: 0.9,
         }}
       >
         <StatusTile
@@ -915,124 +1028,42 @@ export default function AssignmentReview() {
         />
       </div>
 
-      {/* Action Banner - Uses derived state counts */}
-      {hasNoCompletions ? (
-        // No submissions yet
+      {/* Inline status row */}
+      {(hasNoCompletions || isFullyReviewed) && (
         <div
           style={{
             display: "flex",
             alignItems: "center",
-            gap: "12px",
-            padding: "16px 20px",
-            background: "#fafafa",
-            border: "1px solid #e8e8e8",
-            borderLeft: "4px solid #9ca3af",
-            borderRadius: "8px",
-            marginBottom: "24px",
+            gap: "6px",
+            fontSize: "0.82rem",
+            color: "var(--text-secondary)",
+            marginBottom: "16px",
+            paddingLeft: "2px",
           }}
         >
-          <div style={{ flex: 1 }}>
-            <div style={{ fontWeight: 500, color: "var(--text-secondary)", fontSize: "1rem" }}>No submissions yet</div>
-            <div style={{ fontSize: "0.85rem", color: "var(--text-muted)", marginTop: "4px" }}>
-              {stats.inProgress > 0 ? `${stats.inProgress} in progress` : "Waiting for students to start"}
-            </div>
-          </div>
+          {hasNoCompletions ? (
+            <>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#9ca3af" strokeWidth="2" strokeLinecap="round">
+                <circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" />
+              </svg>
+              <span>
+                {stats.inProgress > 0 ? `No submissions yet · ${stats.inProgress} in progress` : "Waiting for students to start"}
+              </span>
+            </>
+          ) : (
+            <>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={followupCount > 0 ? "#d97706" : "#16a34a"} strokeWidth="2" strokeLinecap="round">
+                <polyline points="20 6 9 17 4 12" />
+              </svg>
+              <span>
+                {followupCount > 0
+                  ? `All reviewed · ${followupCount} follow-up${followupCount !== 1 ? "s" : ""} scheduled`
+                  : "All reviewed"}
+              </span>
+            </>
+          )}
         </div>
-      ) : pendingReviewCount > 0 ? (
-        // X submission(s) awaiting review
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-            padding: "16px 20px",
-            background: "#fff7ed",
-            border: "1px solid #fed7aa",
-            borderLeft: "4px solid #ea580c",
-            borderRadius: "8px",
-            marginBottom: "24px",
-            flexWrap: "wrap",
-            gap: "12px",
-          }}
-        >
-          <div style={{ flex: 1, minWidth: "200px" }}>
-            <div style={{ fontWeight: 600, color: "#c2410c", marginBottom: "4px", fontSize: "1rem" }}>
-              {pendingReviewCount} submission{pendingReviewCount !== 1 ? "s" : ""} awaiting review
-            </div>
-            <div style={{ fontSize: "0.85rem", color: "var(--text-secondary)", lineHeight: 1.4 }}>
-              {distribution.needsSupport > 0 && distribution.developing > 0 ? (
-                <>
-                  {distribution.needsSupport} struggling with concepts · {distribution.developing} still developing understanding
-                </>
-              ) : distribution.needsSupport > 0 ? (
-                <>Students are struggling and may need direct support</>
-              ) : distribution.developing > 0 ? (
-                <>Students are making progress but haven't fully demonstrated understanding</>
-              ) : (
-                <>Review their work and provide feedback</>
-              )}
-            </div>
-          </div>
-          <div style={{ flexShrink: 0 }}>
-            <button
-              onClick={handleViewAllFlagged}
-              style={{
-                padding: "10px 18px",
-                background: "#667eea",
-                color: "white",
-                border: "none",
-                borderRadius: "6px",
-                cursor: "pointer",
-                fontWeight: 600,
-                fontSize: "0.9rem",
-              }}
-            >
-              View Flagged Students
-            </button>
-          </div>
-        </div>
-      ) : isFullyReviewed ? (
-        // All reviewed - show different message based on follow-ups
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: "12px",
-            padding: "16px 20px",
-            background: followupCount > 0 ? "#fef3c7" : "#f0fdf4",
-            border: `1px solid ${followupCount > 0 ? "#fcd34d" : "#bbf7d0"}`,
-            borderLeft: `4px solid ${followupCount > 0 ? "#f59e0b" : "#22c55e"}`,
-            borderRadius: "8px",
-            marginBottom: "24px",
-          }}
-        >
-          <div style={{ flex: 1 }}>
-            <div style={{ fontWeight: 600, color: followupCount > 0 ? "#b45309" : "#166534", fontSize: "1rem" }}>
-              {followupCount > 0
-                ? `All reviewed · ${followupCount} follow-up${followupCount !== 1 ? "s" : ""} scheduled`
-                : "All submissions reviewed"}
-            </div>
-            <div style={{ fontSize: "0.85rem", color: "var(--text-secondary)", marginTop: "4px" }}>
-              {stats.completed} submission{stats.completed !== 1 ? "s" : ""} reviewed
-            </div>
-          </div>
-          <button
-            onClick={() => setActiveTab("all")}
-            style={{
-              padding: "8px 14px",
-              background: "transparent",
-              color: followupCount > 0 ? "#b45309" : "#166534",
-              border: `1px solid ${followupCount > 0 ? "#fcd34d" : "#86efac"}`,
-              borderRadius: "6px",
-              cursor: "pointer",
-              fontSize: "0.85rem",
-              fontWeight: 500,
-            }}
-          >
-            View All Submissions
-          </button>
-        </div>
-      ) : null}
+      )}
 
       {/* Tabs */}
       <div
@@ -1059,6 +1090,25 @@ export default function AssignmentReview() {
           active={activeTab === "all"}
           onClick={() => setActiveTab("all")}
         />
+        <div style={{ marginLeft: "auto", paddingRight: "2px", paddingBottom: "6px", display: "flex", alignItems: "flex-end" }}>
+          <button
+            onClick={() => setShowAddStudentModal(true)}
+            disabled={unassignedStudents.length === 0}
+            style={{
+              padding: "5px 12px",
+              fontSize: "0.82rem",
+              fontWeight: 600,
+              background: "white",
+              color: unassignedStudents.length > 0 ? "#3d5a80" : "#94a3b8",
+              border: "1px solid #e2e8f0",
+              borderRadius: "6px",
+              cursor: unassignedStudents.length > 0 ? "pointer" : "default",
+              whiteSpace: "nowrap",
+            }}
+          >
+            + Add student
+          </button>
+        </div>
       </div>
 
       {/* Student Table */}
@@ -1117,9 +1167,12 @@ export default function AssignmentReview() {
                   onSort={handleSort}
                   align="left"
                 />
+                <th style={{ textAlign: "center", padding: "10px 8px", fontWeight: 500, color: "var(--text-muted)", fontSize: "0.8rem", textTransform: "uppercase", letterSpacing: "0.03em" }}>
+                  Student Progress
+                </th>
                 <SortableHeader
-                  label="Student Progress"
-                  column="progress"
+                  label="Attempts"
+                  column="attempts"
                   currentColumn={sortColumn}
                   currentDirection={sortDirection}
                   onSort={handleSort}
@@ -1131,20 +1184,15 @@ export default function AssignmentReview() {
                   currentDirection={sortDirection}
                   onSort={handleSort}
                 />
-                <SortableHeader
-                  label="Coach Support"
-                  column="coachSupport"
-                  currentColumn={sortColumn}
-                  currentDirection={sortDirection}
-                  onSort={handleSort}
-                />
-                <SortableHeader
-                  label="Attempts"
-                  column="attempts"
-                  currentColumn={sortColumn}
-                  currentDirection={sortDirection}
-                  onSort={handleSort}
-                />
+                <th style={{ textAlign: "center", padding: "10px 8px", fontWeight: 500, color: "var(--text-muted)", fontSize: "0.8rem", textTransform: "uppercase", letterSpacing: "0.03em" }}>
+                  Coach Support
+                </th>
+                <th style={{ textAlign: "center", padding: "10px 16px", fontWeight: 500, color: "var(--text-muted)", fontSize: "0.8rem", textTransform: "uppercase", letterSpacing: "0.03em" }}>
+                  How They Got There
+                </th>
+                <th style={{ textAlign: "center", padding: "10px 8px", fontWeight: 500, color: "var(--text-muted)", fontSize: "0.8rem", textTransform: "uppercase", letterSpacing: "0.03em" }}>
+                  Insights
+                </th>
                 <SortableHeader
                   label="Teacher Status"
                   column="teacherStatus"
@@ -1152,15 +1200,8 @@ export default function AssignmentReview() {
                   currentDirection={sortDirection}
                   onSort={handleSort}
                 />
-                <SortableHeader
-                  label="Insights"
-                  column="insights"
-                  currentColumn={sortColumn}
-                  currentDirection={sortDirection}
-                  onSort={handleSort}
-                />
                 <th style={{ textAlign: "center", padding: "10px 16px", fontWeight: 500, color: "var(--text-muted)", fontSize: "0.8rem", textTransform: "uppercase", letterSpacing: "0.03em" }}>
-                  Action
+                  Actions
                 </th>
               </tr>
             </thead>
@@ -1189,6 +1230,128 @@ export default function AssignmentReview() {
           </table>
         )}
       </div>
+
+      {/* Add Student Modal */}
+      {showAddStudentModal && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0,0,0,0.4)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 1000,
+          }}
+          onClick={() => { setShowAddStudentModal(false); setAddStudentSearch(""); setAddStudentSelected(new Set()); }}
+        >
+          <div
+            style={{
+              background: "white",
+              borderRadius: "12px",
+              width: "420px",
+              maxHeight: "520px",
+              display: "flex",
+              flexDirection: "column",
+              boxShadow: "0 20px 60px rgba(0,0,0,0.2)",
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div style={{ padding: "20px 20px 12px", borderBottom: "1px solid #e2e8f0" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px" }}>
+                <h3 style={{ margin: 0, fontSize: "1.05rem", color: "#1e293b" }}>Add students</h3>
+                <button
+                  onClick={() => { setShowAddStudentModal(false); setAddStudentSearch(""); setAddStudentSelected(new Set()); }}
+                  style={{ background: "none", border: "none", cursor: "pointer", fontSize: "1.2rem", color: "#94a3b8", padding: "4px" }}
+                >
+                  ✕
+                </button>
+              </div>
+              <input
+                type="text"
+                value={addStudentSearch}
+                onChange={(e) => setAddStudentSearch(e.target.value)}
+                placeholder="Search students..."
+                autoFocus
+                style={{
+                  width: "100%",
+                  padding: "8px 12px",
+                  fontSize: "0.9rem",
+                  border: "1px solid #e2e8f0",
+                  borderRadius: "6px",
+                  boxSizing: "border-box",
+                }}
+              />
+            </div>
+
+            {/* Student list */}
+            <div style={{ flex: 1, overflowY: "auto", padding: "8px 0" }}>
+              {filteredUnassignedStudents.length === 0 ? (
+                <p style={{ textAlign: "center", color: "#94a3b8", fontSize: "0.9rem", padding: "24px" }}>
+                  {addStudentSearch ? "No matching students" : "All students are already assigned"}
+                </p>
+              ) : (
+                filteredUnassignedStudents.map((student) => (
+                  <label
+                    key={student.id}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "10px",
+                      padding: "8px 20px",
+                      cursor: "pointer",
+                      fontSize: "0.9rem",
+                      color: "#334155",
+                      background: addStudentSelected.has(student.id) ? "#f0f9ff" : "transparent",
+                    }}
+                    onMouseEnter={(e) => { if (!addStudentSelected.has(student.id)) e.currentTarget.style.background = "#f8fafc"; }}
+                    onMouseLeave={(e) => { if (!addStudentSelected.has(student.id)) e.currentTarget.style.background = "transparent"; }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={addStudentSelected.has(student.id)}
+                      onChange={() => {
+                        setAddStudentSelected((prev) => {
+                          const next = new Set(prev);
+                          if (next.has(student.id)) next.delete(student.id);
+                          else next.add(student.id);
+                          return next;
+                        });
+                      }}
+                      style={{ width: "16px", height: "16px", cursor: "pointer" }}
+                    />
+                    {student.name}
+                  </label>
+                ))
+              )}
+            </div>
+
+            {/* Footer */}
+            <div style={{ padding: "12px 20px", borderTop: "1px solid #e2e8f0", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <span style={{ fontSize: "0.82rem", color: "#64748b" }}>
+                {addStudentSelected.size > 0 ? `${addStudentSelected.size} selected` : ""}
+              </span>
+              <button
+                onClick={handleAddStudents}
+                disabled={addStudentSelected.size === 0 || addingStudents}
+                style={{
+                  padding: "8px 18px",
+                  fontSize: "0.9rem",
+                  fontWeight: 600,
+                  background: addStudentSelected.size > 0 && !addingStudents ? "#3d5a80" : "#ccc",
+                  color: "white",
+                  border: "none",
+                  borderRadius: "6px",
+                  cursor: addStudentSelected.size > 0 && !addingStudents ? "pointer" : "not-allowed",
+                }}
+              >
+                {addingStudents ? "Adding..." : "Add selected"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Insights Drawer */}
       {drawerStudent && (
@@ -1227,73 +1390,21 @@ export default function AssignmentReview() {
 }
 
 // ============================================
-// View Assignment Toggle
-// ============================================
-
-function ViewAssignmentToggle({
-  questionCount,
-  showPreview,
-  onToggle,
-}: {
-  questionCount: number;
-  showPreview: boolean;
-  onToggle: () => void;
-}) {
-  return (
-    <button
-      onClick={onToggle}
-      style={{
-        display: "inline-flex",
-        alignItems: "center",
-        gap: "8px",
-        background: "rgba(255, 255, 255, 0.95)",
-        border: "none",
-        padding: "8px 14px",
-        font: "inherit",
-        color: "#4a5568",
-        cursor: "pointer",
-        borderRadius: "6px",
-        transition: "background 0.15s, box-shadow 0.15s",
-        fontSize: "0.9rem",
-        boxShadow: "0 1px 3px rgba(0,0,0,0.1)",
-      }}
-      onMouseEnter={(e) => {
-        e.currentTarget.style.background = "#ffffff";
-        e.currentTarget.style.boxShadow = "0 2px 4px rgba(0,0,0,0.15)";
-      }}
-      onMouseLeave={(e) => {
-        e.currentTarget.style.background = "rgba(255, 255, 255, 0.95)";
-        e.currentTarget.style.boxShadow = "0 1px 3px rgba(0,0,0,0.1)";
-      }}
-    >
-      <span style={{ fontWeight: 500 }}>
-        {questionCount} question{questionCount !== 1 ? "s" : ""}
-      </span>
-      <span style={{ color: "#a0aec0" }}>·</span>
-      <span style={{ color: "#667eea", fontWeight: 500 }}>
-        {showPreview ? "Hide questions" : "Review Questions"}
-      </span>
-      <span style={{ color: "#667eea", fontSize: "0.75rem" }}>
-        {showPreview ? "▲" : "▼"}
-      </span>
-    </button>
-  );
-}
-
-// ============================================
 // Assignment Actions (guarded destructive actions)
 // ============================================
 
 function AssignmentActions({
   anyStudentStarted,
   anyStudentSubmitted,
+  onEditLesson,
   onUnassign,
   onDelete,
 }: {
   anyStudentStarted: boolean;
   anyStudentSubmitted: boolean;
-  onUnassign: () => void;
-  onDelete: () => void;
+  onEditLesson?: () => void;
+  onUnassign?: () => void;
+  onDelete?: () => void;
 }) {
   const [open, setOpen] = useState(false);
 
@@ -1349,6 +1460,34 @@ function AssignmentActions({
               overflow: "hidden",
             }}
           >
+            {/* Edit Lesson */}
+            {onEditLesson && (
+              <button
+                onClick={() => {
+                  setOpen(false);
+                  onEditLesson();
+                }}
+                style={{
+                  display: "block",
+                  width: "100%",
+                  textAlign: "center",
+                  padding: "10px 16px",
+                  background: "transparent",
+                  color: "#475569",
+                  border: "none",
+                  borderBottom: "1px solid #f1f5f9",
+                  cursor: "pointer",
+                  fontSize: "0.85rem",
+                  fontWeight: 500,
+                  transition: "background 0.1s",
+                }}
+                onMouseEnter={(e) => e.currentTarget.style.background = "#f8fafc"}
+                onMouseLeave={(e) => e.currentTarget.style.background = "transparent"}
+              >
+                Edit Lesson
+              </button>
+            )}
+
             {/* Move back to Unassigned */}
             {anyStudentStarted ? (
               <div
@@ -1358,6 +1497,7 @@ function AssignmentActions({
                   color: "var(--text-muted)",
                   cursor: "not-allowed",
                   borderBottom: "1px solid #f1f5f9",
+                  textAlign: "center",
                 }}
                 title="Cannot unassign while students have started working"
               >
@@ -1368,12 +1508,12 @@ function AssignmentActions({
               <button
                 onClick={() => {
                   setOpen(false);
-                  onUnassign();
+                  onUnassign?.();
                 }}
                 style={{
                   display: "block",
                   width: "100%",
-                  textAlign: "left",
+                  textAlign: "center",
                   padding: "10px 16px",
                   background: "transparent",
                   color: "#475569",
@@ -1399,6 +1539,7 @@ function AssignmentActions({
                   fontSize: "0.85rem",
                   color: "var(--text-muted)",
                   cursor: "not-allowed",
+                  textAlign: "center",
                 }}
               >
                 <div style={{ fontWeight: 500, marginBottom: "2px" }}>Delete Assignment</div>
@@ -1408,12 +1549,12 @@ function AssignmentActions({
               <button
                 onClick={() => {
                   setOpen(false);
-                  onDelete();
+                  onDelete?.();
                 }}
                 style={{
                   display: "block",
                   width: "100%",
-                  textAlign: "left",
+                  textAlign: "center",
                   padding: "10px 16px",
                   background: "transparent",
                   color: "var(--status-danger)",
@@ -1432,747 +1573,6 @@ function AssignmentActions({
           </div>
         </>
       )}
-    </div>
-  );
-}
-
-// ============================================
-// Edit Lesson Modal
-// ============================================
-
-function EditLessonModal({
-  lesson,
-  onChange,
-  onSave,
-  onClose,
-  saving,
-  hasStudentSubmissions,
-}: {
-  lesson: Lesson;
-  onChange: (lesson: Lesson) => void;
-  onSave: () => void;
-  onClose: () => void;
-  saving: boolean;
-  hasStudentSubmissions: boolean;
-}) {
-  const { showSuccess, showError } = useToast();
-  const [confirmDeleteIndex, setConfirmDeleteIndex] = useState<number | null>(null);
-
-  // AI question generation state (mirrors LessonEditor flow)
-  const [showAddQuestionPanel, setShowAddQuestionPanel] = useState(false);
-  const [generatingQuestion, setGeneratingQuestion] = useState(false);
-  const [generatedQuestion, setGeneratedQuestion] = useState<Prompt | null>(null);
-  const [questionFocus, setQuestionFocus] = useState("");
-
-  const updatePrompt = (index: number, updates: Partial<Prompt>) => {
-    const newPrompts = lesson.prompts.map((p, i) =>
-      i === index ? { ...p, ...updates } : p
-    );
-    onChange({ ...lesson, prompts: newPrompts });
-  };
-
-  const removeQuestion = (index: number) => {
-    onChange({ ...lesson, prompts: lesson.prompts.filter((_, i) => i !== index) });
-    setConfirmDeleteIndex(null);
-  };
-
-  const updateHint = (promptIndex: number, hintIndex: number, value: string) => {
-    const newPrompts = lesson.prompts.map((p, i) => {
-      if (i !== promptIndex) return p;
-      const newHints = [...p.hints];
-      newHints[hintIndex] = value;
-      return { ...p, hints: newHints };
-    });
-    onChange({ ...lesson, prompts: newPrompts });
-  };
-
-  const addHint = (promptIndex: number) => {
-    const newPrompts = lesson.prompts.map((p, i) => {
-      if (i !== promptIndex) return p;
-      return { ...p, hints: [...p.hints, ""] };
-    });
-    onChange({ ...lesson, prompts: newPrompts });
-  };
-
-  const removeHint = (promptIndex: number, hintIndex: number) => {
-    const newPrompts = lesson.prompts.map((p, i) => {
-      if (i !== promptIndex) return p;
-      return { ...p, hints: p.hints.filter((_, hi) => hi !== hintIndex) };
-    });
-    onChange({ ...lesson, prompts: newPrompts });
-  };
-
-  // AI question generation handlers (same flow as LessonEditor)
-  const handleGenerateQuestion = async () => {
-    setGeneratingQuestion(true);
-    try {
-      const existingQuestions = lesson.prompts.map((p) => p.input);
-      const lessonContext = `${lesson.title}: ${lesson.description}`;
-      const newQuestion = await generateQuestion(
-        lessonContext,
-        existingQuestions,
-        lesson.difficulty,
-        {
-          focus: questionFocus.trim() || undefined,
-          subject: lesson.subject || undefined,
-          gradeLevel: lesson.gradeLevel || undefined,
-        }
-      );
-      setGeneratedQuestion(newQuestion);
-    } catch (err) {
-      console.error("Failed to generate question:", err);
-      showError("Failed to generate question");
-    } finally {
-      setGeneratingQuestion(false);
-    }
-  };
-
-  const handleAddGeneratedQuestion = () => {
-    if (!generatedQuestion) return;
-    onChange({ ...lesson, prompts: [...lesson.prompts, generatedQuestion] });
-    setGeneratedQuestion(null);
-    setShowAddQuestionPanel(false);
-    setQuestionFocus("");
-    showSuccess("Question added");
-  };
-
-  const updateGeneratedQuestion = (updates: Partial<Prompt>) => {
-    if (!generatedQuestion) return;
-    setGeneratedQuestion({ ...generatedQuestion, ...updates });
-  };
-
-  const updateGeneratedHint = (hintIndex: number, value: string) => {
-    if (!generatedQuestion) return;
-    setGeneratedQuestion({
-      ...generatedQuestion,
-      hints: generatedQuestion.hints.map((h, i) => (i === hintIndex ? value : h)),
-    });
-  };
-
-  const addGeneratedHint = () => {
-    if (!generatedQuestion) return;
-    setGeneratedQuestion({
-      ...generatedQuestion,
-      hints: [...generatedQuestion.hints, ""],
-    });
-  };
-
-  const removeGeneratedHint = (hintIndex: number) => {
-    if (!generatedQuestion) return;
-    setGeneratedQuestion({
-      ...generatedQuestion,
-      hints: generatedQuestion.hints.filter((_, i) => i !== hintIndex),
-    });
-  };
-
-  return (
-    <div
-      style={{
-        position: "fixed",
-        top: 0,
-        left: 0,
-        right: 0,
-        bottom: 0,
-        background: "rgba(45, 55, 72, 0.5)",
-        display: "flex",
-        justifyContent: "center",
-        alignItems: "flex-start",
-        zIndex: 1000,
-        overflowY: "auto",
-        padding: "40px 16px",
-      }}
-      onClick={onClose}
-    >
-      <div
-        style={{
-          background: "white",
-          borderRadius: "12px",
-          maxWidth: "720px",
-          width: "100%",
-          boxShadow: "0 12px 40px rgba(0,0,0,0.15)",
-          overflow: "hidden",
-        }}
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/* Modal Header */}
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-            padding: "16px 24px",
-            borderBottom: "1px solid #e2e8f0",
-            background: "#f8fafc",
-          }}
-        >
-          <h2 style={{ margin: 0, fontSize: "1.1rem", color: "#1e293b" }}>Edit Lesson</h2>
-          <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-            <button
-              onClick={onSave}
-              disabled={saving}
-              style={{
-                padding: "7px 16px",
-                background: saving ? "#e2e8f0" : "#667eea",
-                color: saving ? "#64748b" : "white",
-                border: "none",
-                borderRadius: "6px",
-                cursor: saving ? "not-allowed" : "pointer",
-                fontSize: "0.85rem",
-                fontWeight: 600,
-              }}
-            >
-              {saving ? "Saving..." : "Save Changes"}
-            </button>
-            <button
-              onClick={onClose}
-              style={{
-                background: "none",
-                border: "none",
-                fontSize: "1.3rem",
-                color: "var(--text-muted)",
-                cursor: "pointer",
-                padding: "4px 8px",
-                lineHeight: 1,
-                borderRadius: "4px",
-              }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.color = "#475569";
-                e.currentTarget.style.background = "#e2e8f0";
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.color = "var(--text-muted)";
-                e.currentTarget.style.background = "none";
-              }}
-            >
-              ×
-            </button>
-          </div>
-        </div>
-
-        {/* Submissions warning banner */}
-        {hasStudentSubmissions && (
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: "8px",
-              padding: "10px 24px",
-              background: "#fffbeb",
-              borderBottom: "1px solid #fde68a",
-              fontSize: "0.83rem",
-              color: "#92400e",
-            }}
-          >
-            <span style={{ fontWeight: 600 }}>Note:</span>
-            <span>This assignment already has student responses. Changes may affect grading.</span>
-          </div>
-        )}
-
-        {/* Modal Body */}
-        <div style={{ padding: "24px", maxHeight: "calc(100vh - 200px)", overflowY: "auto" }}>
-          {/* Title */}
-          <div style={{ marginBottom: "16px" }}>
-            <label style={{ display: "block", fontSize: "0.8rem", fontWeight: 600, color: "#475569", marginBottom: "6px", textTransform: "uppercase", letterSpacing: "0.03em" }}>
-              Title
-            </label>
-            <input
-              type="text"
-              value={lesson.title}
-              onChange={(e) => onChange({ ...lesson, title: e.target.value })}
-              style={{
-                width: "100%",
-                padding: "10px 12px",
-                border: "1px solid #e2e8f0",
-                borderRadius: "6px",
-                fontSize: "0.95rem",
-                color: "#1e293b",
-                boxSizing: "border-box",
-              }}
-            />
-          </div>
-
-          {/* Description */}
-          <div style={{ marginBottom: "24px" }}>
-            <label style={{ display: "block", fontSize: "0.8rem", fontWeight: 600, color: "#475569", marginBottom: "6px", textTransform: "uppercase", letterSpacing: "0.03em" }}>
-              Description
-            </label>
-            <textarea
-              value={lesson.description}
-              onChange={(e) => onChange({ ...lesson, description: e.target.value })}
-              rows={2}
-              style={{
-                width: "100%",
-                padding: "10px 12px",
-                border: "1px solid #e2e8f0",
-                borderRadius: "6px",
-                fontSize: "0.9rem",
-                color: "#1e293b",
-                resize: "vertical",
-                boxSizing: "border-box",
-                fontFamily: "inherit",
-              }}
-            />
-          </div>
-
-          {/* Questions */}
-          <div>
-            <label style={{ display: "block", fontSize: "0.8rem", fontWeight: 600, color: "#475569", marginBottom: "12px", textTransform: "uppercase", letterSpacing: "0.03em" }}>
-              Questions ({lesson.prompts.length})
-            </label>
-            <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
-              {lesson.prompts.map((prompt, index) => (
-                <div
-                  key={prompt.id}
-                  style={{
-                    border: "1px solid #e2e8f0",
-                    borderRadius: "8px",
-                    overflow: "hidden",
-                    position: "relative",
-                  }}
-                >
-                  {/* Delete question button */}
-                  {lesson.prompts.length > 1 && (
-                    <button
-                      onClick={() => setConfirmDeleteIndex(index)}
-                      style={{
-                        position: "absolute",
-                        top: "8px",
-                        right: "8px",
-                        background: "none",
-                        border: "none",
-                        color: "#cbd5e1",
-                        cursor: "pointer",
-                        fontSize: "0.85rem",
-                        padding: "2px 6px",
-                        lineHeight: 1,
-                        borderRadius: "4px",
-                        zIndex: 1,
-                        transition: "color 0.1s, background 0.1s",
-                      }}
-                      onMouseEnter={(e) => {
-                        e.currentTarget.style.color = "#ef4444";
-                        e.currentTarget.style.background = "#fef2f2";
-                      }}
-                      onMouseLeave={(e) => {
-                        e.currentTarget.style.color = "#cbd5e1";
-                        e.currentTarget.style.background = "none";
-                      }}
-                      title="Remove question"
-                    >
-                      ✕
-                    </button>
-                  )}
-
-                  {/* Delete confirmation inline */}
-                  {confirmDeleteIndex === index && (
-                    <div
-                      style={{
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "space-between",
-                        padding: "8px 16px",
-                        background: "#fef2f2",
-                        borderBottom: "1px solid #fecaca",
-                        fontSize: "0.83rem",
-                      }}
-                    >
-                      <span style={{ color: "#991b1b", fontWeight: 500 }}>Remove this question?</span>
-                      <div style={{ display: "flex", gap: "8px" }}>
-                        <button
-                          onClick={() => setConfirmDeleteIndex(null)}
-                          style={{
-                            padding: "4px 10px",
-                            background: "transparent",
-                            color: "#64748b",
-                            border: "1px solid #e2e8f0",
-                            borderRadius: "4px",
-                            cursor: "pointer",
-                            fontSize: "0.8rem",
-                            fontWeight: 500,
-                          }}
-                        >
-                          Cancel
-                        </button>
-                        <button
-                          onClick={() => removeQuestion(index)}
-                          style={{
-                            padding: "4px 10px",
-                            background: "#ef4444",
-                            color: "white",
-                            border: "none",
-                            borderRadius: "4px",
-                            cursor: "pointer",
-                            fontSize: "0.8rem",
-                            fontWeight: 600,
-                          }}
-                        >
-                          Remove
-                        </button>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Question header */}
-                  <div style={{ display: "flex", alignItems: "flex-start", gap: "10px", padding: "12px 16px", paddingRight: "36px" }}>
-                    <span
-                      style={{
-                        flexShrink: 0,
-                        width: "24px",
-                        height: "24px",
-                        borderRadius: "50%",
-                        background: "#667eea",
-                        color: "white",
-                        fontSize: "0.8rem",
-                        fontWeight: 600,
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        marginTop: "8px",
-                      }}
-                    >
-                      {index + 1}
-                    </span>
-                    <textarea
-                      value={prompt.input}
-                      onChange={(e) => updatePrompt(index, { input: e.target.value })}
-                      rows={2}
-                      style={{
-                        flex: 1,
-                        padding: "8px 10px",
-                        border: "1px solid #e2e8f0",
-                        borderRadius: "6px",
-                        fontSize: "0.9rem",
-                        color: "#1e293b",
-                        resize: "vertical",
-                        fontFamily: "inherit",
-                        lineHeight: 1.5,
-                      }}
-                    />
-                  </div>
-
-                  {/* Hints */}
-                  <div style={{ padding: "0 16px 12px 50px" }}>
-                    <div style={{ fontSize: "0.75rem", color: "#64748b", fontWeight: 500, marginBottom: "6px" }}>
-                      Hints ({prompt.hints.length})
-                    </div>
-                    {prompt.hints.map((hint, hintIndex) => (
-                      <div key={hintIndex} style={{ display: "flex", alignItems: "center", gap: "6px", marginBottom: "4px" }}>
-                        <input
-                          type="text"
-                          value={hint}
-                          onChange={(e) => updateHint(index, hintIndex, e.target.value)}
-                          style={{
-                            flex: 1,
-                            padding: "6px 8px",
-                            border: "1px solid #e2e8f0",
-                            borderRadius: "4px",
-                            fontSize: "0.85rem",
-                            color: "#475569",
-                          }}
-                        />
-                        <button
-                          onClick={() => removeHint(index, hintIndex)}
-                          style={{
-                            background: "none",
-                            border: "none",
-                            color: "var(--text-muted)",
-                            cursor: "pointer",
-                            fontSize: "1rem",
-                            padding: "2px 4px",
-                            lineHeight: 1,
-                          }}
-                          onMouseEnter={(e) => e.currentTarget.style.color = "#ef4444"}
-                          onMouseLeave={(e) => e.currentTarget.style.color = "var(--text-muted)"}
-                          title="Remove hint"
-                        >
-                          ×
-                        </button>
-                      </div>
-                    ))}
-                    <button
-                      onClick={() => addHint(index)}
-                      style={{
-                        background: "none",
-                        border: "none",
-                        color: "#667eea",
-                        cursor: "pointer",
-                        fontSize: "0.8rem",
-                        padding: "4px 0",
-                        fontWeight: 500,
-                      }}
-                    >
-                      + Add hint
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-
-            {/* Add Question section */}
-            {!showAddQuestionPanel ? (
-              <button
-                onClick={() => {
-                  setShowAddQuestionPanel(true);
-                  setGeneratedQuestion(null);
-                }}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  gap: "6px",
-                  width: "100%",
-                  padding: "14px",
-                  marginTop: "16px",
-                  background: "#f8fafc",
-                  border: "2px dashed #e2e8f0",
-                  borderRadius: "8px",
-                  cursor: "pointer",
-                  fontSize: "0.875rem",
-                  fontWeight: 500,
-                  color: "#667eea",
-                  transition: "border-color 0.15s, background 0.15s",
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.borderColor = "#667eea";
-                  e.currentTarget.style.background = "#f0f0ff";
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.borderColor = "#e2e8f0";
-                  e.currentTarget.style.background = "#f8fafc";
-                }}
-              >
-                + Add Question
-              </button>
-            ) : (
-              <div
-                style={{
-                  marginTop: "16px",
-                  border: "1px solid #e2e8f0",
-                  borderRadius: "8px",
-                  overflow: "hidden",
-                  background: "#fafbfc",
-                }}
-              >
-                <div
-                  style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "center",
-                    padding: "12px 16px",
-                    borderBottom: "1px solid #e2e8f0",
-                  }}
-                >
-                  <h3 style={{ margin: 0, fontSize: "0.95rem", color: "#1e293b" }}>Add Question</h3>
-                  <button
-                    onClick={() => {
-                      setShowAddQuestionPanel(false);
-                      setGeneratedQuestion(null);
-                      setQuestionFocus("");
-                    }}
-                    style={{
-                      background: "none",
-                      border: "none",
-                      fontSize: "1.1rem",
-                      color: "var(--text-muted)",
-                      cursor: "pointer",
-                      padding: "2px 6px",
-                      lineHeight: 1,
-                    }}
-                  >
-                    ×
-                  </button>
-                </div>
-
-                <div style={{ padding: "16px" }}>
-                  {!generatedQuestion ? (
-                    <div style={{ padding: "4px 0 16px 0" }}>
-                      {/* Optional focus input */}
-                      <div style={{ marginBottom: "16px" }}>
-                        <label style={{ display: "block", fontSize: "0.83rem", fontWeight: 500, color: "#475569", marginBottom: "5px" }}>
-                          What should this question focus on?
-                        </label>
-                        <input
-                          type="text"
-                          value={questionFocus}
-                          onChange={(e) => setQuestionFocus(e.target.value)}
-                          placeholder="e.g., daily life, religion, cause and effect, compare past vs present"
-                          style={{
-                            width: "100%",
-                            padding: "8px 10px",
-                            border: "1px solid #e2e8f0",
-                            borderRadius: "6px",
-                            fontSize: "0.875rem",
-                            color: "#1e293b",
-                            boxSizing: "border-box",
-                          }}
-                        />
-                        <p style={{ margin: "4px 0 0 0", fontSize: "0.78rem", color: "var(--text-muted)" }}>
-                          Optional — leave blank to let the AI choose
-                        </p>
-                      </div>
-
-                      <div style={{ textAlign: "center" }}>
-                        <button
-                          onClick={handleGenerateQuestion}
-                          disabled={generatingQuestion}
-                          style={{
-                            padding: "10px 20px",
-                            background: generatingQuestion ? "#e2e8f0" : "#667eea",
-                            color: generatingQuestion ? "#64748b" : "white",
-                            border: "none",
-                            borderRadius: "6px",
-                            cursor: generatingQuestion ? "not-allowed" : "pointer",
-                            fontSize: "0.875rem",
-                            fontWeight: 600,
-                          }}
-                        >
-                          {generatingQuestion ? (
-                            <>
-                              <span className="loading-spinner" style={{ width: "14px", height: "14px", marginRight: "8px", display: "inline-block" }}></span>
-                              Generating...
-                            </>
-                          ) : (
-                            "Generate Question with AI"
-                          )}
-                        </button>
-                      </div>
-                    </div>
-                  ) : (
-                    <div>
-                      {/* Generated question text */}
-                      <div style={{ marginBottom: "12px" }}>
-                        <label style={{ display: "block", fontSize: "0.8rem", fontWeight: 500, color: "#64748b", marginBottom: "6px" }}>
-                          Question Text
-                        </label>
-                        <textarea
-                          value={generatedQuestion.input}
-                          onChange={(e) => updateGeneratedQuestion({ input: e.target.value })}
-                          rows={3}
-                          style={{
-                            width: "100%",
-                            padding: "8px 10px",
-                            border: "1px solid #e2e8f0",
-                            borderRadius: "6px",
-                            fontSize: "0.9rem",
-                            color: "#1e293b",
-                            resize: "vertical",
-                            fontFamily: "inherit",
-                            boxSizing: "border-box",
-                          }}
-                        />
-                      </div>
-
-                      {/* Generated hints */}
-                      <div style={{ marginBottom: "16px" }}>
-                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" }}>
-                          <label style={{ fontSize: "0.8rem", fontWeight: 500, color: "#64748b" }}>
-                            Hints ({generatedQuestion.hints.length})
-                          </label>
-                          <button
-                            onClick={addGeneratedHint}
-                            style={{
-                              padding: "3px 8px",
-                              background: "#667eea",
-                              color: "white",
-                              border: "none",
-                              borderRadius: "4px",
-                              cursor: "pointer",
-                              fontSize: "0.75rem",
-                            }}
-                          >
-                            + Add Hint
-                          </button>
-                        </div>
-                        <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-                          {generatedQuestion.hints.map((hint, hintIndex) => (
-                            <div
-                              key={hintIndex}
-                              style={{
-                                display: "flex",
-                                alignItems: "center",
-                                gap: "6px",
-                              }}
-                            >
-                              <span style={{ fontSize: "0.75rem", color: "var(--text-muted)", fontWeight: 600, minWidth: "18px" }}>
-                                {hintIndex + 1}.
-                              </span>
-                              <input
-                                type="text"
-                                value={hint}
-                                onChange={(e) => updateGeneratedHint(hintIndex, e.target.value)}
-                                style={{
-                                  flex: 1,
-                                  padding: "6px 8px",
-                                  border: "1px solid #e2e8f0",
-                                  borderRadius: "4px",
-                                  fontSize: "0.85rem",
-                                  color: "#475569",
-                                }}
-                              />
-                              <button
-                                onClick={() => removeGeneratedHint(hintIndex)}
-                                style={{
-                                  background: "none",
-                                  border: "none",
-                                  color: "var(--text-muted)",
-                                  cursor: "pointer",
-                                  fontSize: "0.85rem",
-                                  padding: "2px 4px",
-                                  lineHeight: 1,
-                                }}
-                                onMouseEnter={(e) => e.currentTarget.style.color = "#ef4444"}
-                                onMouseLeave={(e) => e.currentTarget.style.color = "var(--text-muted)"}
-                                title="Remove hint"
-                              >
-                                ✕
-                              </button>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-
-                      {/* Actions */}
-                      <div style={{ display: "flex", gap: "10px", justifyContent: "flex-end" }}>
-                        <button
-                          onClick={handleGenerateQuestion}
-                          disabled={generatingQuestion}
-                          style={{
-                            padding: "8px 14px",
-                            background: "transparent",
-                            color: "#64748b",
-                            border: "1px solid #e2e8f0",
-                            borderRadius: "6px",
-                            cursor: generatingQuestion ? "not-allowed" : "pointer",
-                            fontSize: "0.85rem",
-                            fontWeight: 500,
-                          }}
-                        >
-                          {generatingQuestion ? "Generating..." : "Regenerate"}
-                        </button>
-                        <button
-                          onClick={handleAddGeneratedQuestion}
-                          style={{
-                            padding: "8px 16px",
-                            background: "#667eea",
-                            color: "white",
-                            border: "none",
-                            borderRadius: "6px",
-                            cursor: "pointer",
-                            fontSize: "0.85rem",
-                            fontWeight: 600,
-                          }}
-                        >
-                          Add to Lesson
-                        </button>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
     </div>
   );
 }
@@ -2416,6 +1816,27 @@ function StudentRow({ student, onReview, onViewStudent, showReviewButton, recomm
         />
       </td>
 
+      {/* Attempts */}
+      <td style={{ textAlign: "center", padding: "12px 8px" }}>
+        {student.attempts > 1 ? (
+          <span
+            style={{
+              display: "inline-block",
+              padding: "3px 8px",
+              borderRadius: "10px",
+              fontSize: "0.78rem",
+              fontWeight: 500,
+              background: "#e3f2fd",
+              color: "#1565c0",
+            }}
+          >
+            {student.attempts}
+          </span>
+        ) : (
+          <span style={{ color: "var(--text-muted)", fontSize: "0.85rem" }}>{student.attempts}</span>
+        )}
+      </td>
+
       {/* Understanding Level */}
       <td style={{ textAlign: "center", padding: "12px 8px" }}>
         {hasStarted ? (
@@ -2443,7 +1864,7 @@ function StudentRow({ student, onReview, onViewStudent, showReviewButton, recomm
           <span
             style={{
               fontSize: "0.85rem",
-              color: student.coachSupport === "significant" ? "#e65100" : "var(--text-muted)",
+              color: student.coachSupport === "high" ? "#e65100" : student.coachSupport === "moderate" ? "#ed6c02" : "var(--text-muted)",
             }}
           >
             {getCoachSupportLabel(student.coachSupport)}
@@ -2453,30 +1874,21 @@ function StudentRow({ student, onReview, onViewStudent, showReviewButton, recomm
         )}
       </td>
 
-      {/* Attempts */}
-      <td style={{ textAlign: "center", padding: "12px 8px" }}>
-        {student.attempts > 1 ? (
+      {/* How They Got There */}
+      <td style={{ textAlign: "center", padding: "12px 8px", maxWidth: "180px" }}>
+        {hasStarted ? (
           <span
             style={{
-              display: "inline-block",
-              padding: "3px 8px",
-              borderRadius: "10px",
-              fontSize: "0.78rem",
-              fontWeight: 500,
-              background: "#e3f2fd",
-              color: "#1565c0",
+              fontSize: "0.8rem",
+              color: "var(--text-secondary)",
+              fontStyle: "italic",
             }}
           >
-            {student.attempts}
+            {student.journeySummary}
           </span>
         ) : (
-          <span style={{ color: "var(--text-muted)", fontSize: "0.85rem" }}>{student.attempts}</span>
+          <span style={{ color: "#ccc" }}>—</span>
         )}
-      </td>
-
-      {/* Teacher Status */}
-      <td style={{ textAlign: "center", padding: "12px 8px" }}>
-        <TeacherStatusBadge status={teacherStatus} />
       </td>
 
       {/* Insights */}
@@ -2590,12 +2002,29 @@ function StudentRow({ student, onReview, onViewStudent, showReviewButton, recomm
               </span>
             )}
           </div>
+        ) : hasStarted && student.insight ? (
+          <span
+            style={{
+              fontSize: "0.78rem",
+              color: "var(--text-secondary)",
+              lineHeight: 1.3,
+              maxWidth: "180px",
+              display: "inline-block",
+            }}
+          >
+            {student.insight}
+          </span>
         ) : (
           <span style={{ color: "#ccc" }}>—</span>
         )}
       </td>
 
-      {/* Action */}
+      {/* Teacher Status */}
+      <td style={{ textAlign: "center", padding: "12px 8px" }}>
+        <TeacherStatusBadge status={teacherStatus} />
+      </td>
+
+      {/* Actions */}
       <td style={{ textAlign: "center", padding: "12px 16px" }}>
         {hasStarted ? (
           <button

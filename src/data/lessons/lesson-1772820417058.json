@@ -1,0 +1,121 @@
+{
+  "id": "lesson-1772820417058",
+  "title": "Understanding Two-Digit Addition Without Regrouping",
+  "description": "Explore how to add two-digit numbers easily and confidently.",
+  "difficulty": "intermediate",
+  "gradeLevel": "2",
+  "subject": "Math",
+  "prompts": [
+    {
+      "id": "q1",
+      "type": "explain",
+      "input": "Solve 40 + 20. What is your answer and how did you find it?",
+      "hints": [
+        "Hint 1: Break down the numbers into tens and ones.",
+        "Hint 2: Add the tens first, then the ones."
+      ],
+      "blueprintId": "math_solve_first_step",
+      "filledSlots": {
+        "expression": "40 + 20"
+      },
+      "mathProblem": {
+        "skill": "two_digit_addition",
+        "a": 40,
+        "b": 20,
+        "expression": "40 + 20",
+        "correctAnswer": 60,
+        "requiresRegrouping": false,
+        "expectedStrategyTags": [
+          "add ones",
+          "add tens"
+        ]
+      },
+      "assessment": {
+        "learningObjective": "Solve two-digit addition problems without regrouping.",
+        "expectedConcepts": [
+          "Identifies the correct sum of 40 and 20.",
+          "Explains how to add the tens place.",
+          "States that no regrouping is needed."
+        ],
+        "requiredExamples": "The student must provide one correct answer and explain their method.",
+        "validVocabulary": [
+          "add",
+          "sum",
+          "tens",
+          "ones",
+          "no regrouping"
+        ],
+        "misconceptions": [
+          "Thinks they need to regroup for all two-digit additions.",
+          "Believes the answer is 60 instead of 40 + 20.",
+          "Does not understand that they are adding tens."
+        ],
+        "scoringLevels": {
+          "strong": "The response includes the correct answer of 60 and clearly explains how they added 40 and 20.",
+          "developing": "The response gives the correct answer but does not explain the addition process clearly.",
+          "needsSupport": "The response provides an incorrect answer or does not address the question."
+        },
+        "successCriteria": [
+          "Identifies the correct sum of 40 and 20.",
+          "Explains how to add the tens place.",
+          "States that no regrouping is needed.",
+          "The student must provide one correct answer and explain their method."
+        ],
+        "evaluationFocus": [
+          "understanding",
+          "clarity"
+        ],
+        "requiredEvidence": {
+          "minEntities": 2,
+          "entityLabel": "numbers",
+          "attributeLabel": "method of addition",
+          "minAttributeTypes": 1,
+          "requirePairing": true
+        },
+        "referenceFacts": {
+          "20": [
+            "tens",
+            "ones"
+          ],
+          "40": [
+            "tens",
+            "ones"
+          ]
+        },
+        "allowedProbes": [
+          "What is the sum of 40 and 20?",
+          "Can you explain how you added the tens?",
+          "What do you get when you add the tens together?"
+        ],
+        "retryQuestions": [
+          "What is 40 plus 20 really?",
+          "Can you show me how to add 40 and 20?",
+          "What happens when you add the tens together?"
+        ],
+        "conceptAnchor": {
+          "anchorSentence": "This question is about adding two-digit numbers without regrouping.",
+          "coreConcepts": [
+            "two-digit addition",
+            "adding tens",
+            "no regrouping"
+          ],
+          "allowedEntities": [
+            "40",
+            "20"
+          ],
+          "allowedAttributes": [
+            "addition method"
+          ],
+          "offTopicConcepts": [
+            "subtraction",
+            "regrouping",
+            "multiplication",
+            "place value",
+            "three-digit numbers"
+          ]
+        }
+      }
+    }
+  ],
+  "systemIndex": "Math 2.1"
+}

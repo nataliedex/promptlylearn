@@ -1,0 +1,146 @@
+{
+  "id": "lesson-1773762254908",
+  "title": "Understanding Regrouping in Addition",
+  "description": "Explore how to add two-digit numbers with regrouping.",
+  "difficulty": "intermediate",
+  "gradeLevel": "2",
+  "subject": "Math",
+  "prompts": [
+    {
+      "id": "q1",
+      "type": "explain",
+      "input": "Solve 27 + 44. Tell what you did when adding the ones.",
+      "hints": [
+        "Look at the ones place first.",
+        "What happens when the sum is 10 or more?"
+      ],
+      "blueprintId": "math_regrouping_focus",
+      "filledSlots": {
+        "expression": "27 + 44"
+      },
+      "mathProblem": {
+        "skill": "two_digit_addition",
+        "a": 27,
+        "b": 44,
+        "expression": "27 + 44",
+        "correctAnswer": 71,
+        "requiresRegrouping": true,
+        "expectedStrategyTags": [
+          "add ones",
+          "carry",
+          "add tens"
+        ],
+        "commonWrongAnswers": [
+          {
+            "answer": 61,
+            "misconception": "forgot to carry"
+          }
+        ]
+      },
+      "assessment": {
+        "learningObjective": "Explain how to solve 27 + 44 by adding the ones, regrouping, and then adding the tens.",
+        "expectedReasoningSteps": [
+          "Add the ones: 7 + 4 = 11",
+          "Regroup the ones: 11 ones makes 1 ten and 1 ones",
+          "Add the tens including the carried ten: 20 + 40 + 10 = 70",
+          "State the final answer: 70 + 1 = 71"
+        ],
+        "reasoningSteps": [
+          {
+            "id": "step_1",
+            "label": "Add the ones",
+            "expectedStatements": [
+              "7 + 4 = 11"
+            ],
+            "probe": "What do you get when you add 7 and 4?",
+            "kind": "ones_sum"
+          },
+          {
+            "id": "step_2",
+            "label": "Regroup the ones",
+            "expectedStatements": [
+              "11 ones makes 1 ten and 1 ones"
+            ],
+            "probe": "7 + 4 makes 11. What do you do when the ones add up to more than 9?",
+            "kind": "regroup"
+          },
+          {
+            "id": "step_3",
+            "label": "Add the tens including the carried ten",
+            "expectedStatements": [
+              "20 + 40 + 10 = 70"
+            ],
+            "probe": "What do you get when you add 20 and 40 plus the extra ten?",
+            "kind": "tens_sum"
+          },
+          {
+            "id": "step_4",
+            "label": "State the final answer",
+            "expectedStatements": [
+              "70 + 1 = 71",
+              "The final answer is 71"
+            ],
+            "probe": "What do you get when you combine 70 and 1?",
+            "kind": "combine"
+          }
+        ],
+        "expectedConcepts": [
+          "27 is made of 20 and 7",
+          "44 is made of 40 and 4",
+          "7 + 4 = 11",
+          "11 ones becomes 1 ten and 1 ones",
+          "20 + 40 + 10 = 70",
+          "70 + 1 = 71"
+        ],
+        "successCriteria": [
+          "States that 7 + 4 = 11",
+          "Explains that 11 ones makes 1 ten and 1 ones",
+          "Explains that the extra ten is added to the tens place",
+          "States that the final answer is 71"
+        ],
+        "misconceptions": [
+          "Says 61 because forgot to carry",
+          "Says 71 but does not explain regrouping",
+          "Gives 71 but cannot explain how they got it"
+        ],
+        "scoringLevels": {
+          "strong": "States that 7 + 4 = 11, explains that 11 ones makes 1 ten and 1 ones, explains that the extra ten is added to the tens place, and gives the final answer 71.",
+          "developing": "Gives the correct answer or part of the explanation, but misses one or more key steps.",
+          "needsSupport": "Gives an incorrect answer, incomplete explanation, or unrelated response."
+        },
+        "referenceFacts": {
+          "27": [
+            "7 ones",
+            "2 tens"
+          ],
+          "44": [
+            "4 ones",
+            "4 tens"
+          ]
+        },
+        "requiredExamples": "Says that 7 + 4 = 11, explains regrouping, and gives the final answer 71.",
+        "validVocabulary": [
+          "ones",
+          "tens",
+          "add",
+          "regroup",
+          "carry",
+          "total",
+          "sum"
+        ]
+      },
+      "allowedProbes": [
+        "What do you get when you add 7 and 4?",
+        "7 + 4 makes 11. What do you do when the ones add up to more than 9?",
+        "What do you get when you add 20 and 40 plus the extra ten?",
+        "What do you get when you combine 70 and 1?"
+      ],
+      "retryQuestions": [
+        "Can you start with the ones digits, 7 and 4?",
+        "7 + 4 makes 11. What do you do with the extra ten?",
+        "What is the total when you put it all together?"
+      ]
+    }
+  ],
+  "systemIndex": "Math 2.12"
+}

@@ -27,8 +27,9 @@
  */
 
 import { useState, useRef, useEffect, useCallback } from "react";
-import { summarizeStudentTranscript, extractContentWords, detectTopics, hasForeignKeyword, buildEvidenceSummary, formatEvidenceSummary } from "../utils/summarizeTranscript";
-import { decidePostCoachAction, buildClosingStatement, CLOSING_WINDOW_SEC, WRAP_BUFFER_SEC, type VideoTurnKind } from "../domain/wrapDecision";
+import { summarizeStudentTranscript, extractContentWords, detectTopics, hasForeignKeyword, buildEvidenceSummary, formatEvidenceSummary, buildMathStepSummary } from "../utils/summarizeTranscript";
+import { decidePostCoachAction, buildClosingStatement, CLOSING_WINDOW_SEC, WRAP_BUFFER_SEC, type VideoTurnKind, type WrapReason } from "../domain/wrapDecision";
+import { containsMathContent, isInterrogativeMathAnswer } from "../domain/videoCoachStateMachine";
 
 
 export interface ConversationTurn {
@@ -40,7 +41,7 @@ export interface ConversationTurn {
 export interface VideoConversationRecorderProps {
   /** Maximum recording duration in seconds (default: 120 = 2 minutes) */
   maxDuration?: number;
-  /** Maximum coach turns before ending (default: 3) */
+  /** Maximum coach turns before ending (default: 5) */
   maxCoachTurns?: number;
   /** The question text to display */
   question: string;
@@ -72,7 +73,7 @@ export interface VideoConversationRecorderProps {
     transcript: ConversationTurn[],
     gradeLevel?: string,
     timeRemainingSec?: number
-  ) => Promise<{ response: string; shouldContinue: boolean; turnKind?: VideoTurnKind }>;
+  ) => Promise<{ response: string; shouldContinue: boolean; turnKind?: VideoTurnKind; wrapReason?: string; criteriaStatus?: string; serverSummary?: string; instructionalRecap?: string; completionRatio?: number }>;
   /** Whether the component is submitting */
   isSubmitting?: boolean;
   /** Called when student wants to continue coaching on this topic after session ends */
@@ -86,6 +87,30 @@ export interface VideoConversationRecorderProps {
   isFinalQuestion?: boolean;
   /** Success criteria from the prompt assessment rubric (for evidence-based summary) */
   successCriteria?: string[];
+  /** Called when conversation turns update (for parent draft persistence) */
+  onConversationUpdate?: (turns: ConversationTurn[]) => void;
+  /** Initial conversation turns to restore from a saved draft */
+  initialConversationTurns?: ConversationTurn[];
+  /** Called when recording finishes and blob is ready (for draft upload) */
+  onDraftVideoReady?: (data: { videoBlob: Blob; durationSec: number; turns: ConversationTurn[]; summary: string | null }) => void;
+  /** Mount directly into preview phase (for resume from saved draft) */
+  initialPhase?: "preview";
+  /** Restored recorded duration (for preview resume) */
+  initialRecordedDuration?: number;
+  /** Restored video URL served by backend (for preview resume) */
+  initialVideoUrl?: string;
+  /** Restored session summary text (for preview resume) */
+  initialSessionSummary?: string;
+  /** Pre-uploaded draft video metadata — reused on submit to avoid re-upload */
+  draftVideoMetadata?: { url: string; mimeType: string; durationSec: number; sizeBytes: number; createdAt: string; kind: string };
+  /** Called when student re-records, so parent can delete draft video */
+  onReRecordDraft?: () => void;
+  /** Server-computed teacher summary (from step accumulation — most accurate for math) */
+  serverSummary?: string;
+  /** Override silence duration (ms) — from student pacing preference */
+  silenceDurationMs?: number;
+  /** Override min speech before silence triggers (ms) — from student pacing preference */
+  minSpeechBeforeSilenceMs?: number;
 }
 
 type RecordingPhase =
@@ -115,7 +140,7 @@ const SESSION_WRAP_MESSAGE = "It looks like we ran out of time. I really enjoyed
 
 export default function VideoConversationRecorder({
   maxDuration = 120,
-  maxCoachTurns = 3,
+  maxCoachTurns = 5,
   question,
   gradeLevel,
   onStartRecording,
@@ -133,15 +158,31 @@ export default function VideoConversationRecorder({
   onKeepCoaching,
   isFinalQuestion = false,
   successCriteria,
+  onConversationUpdate,
+  initialConversationTurns,
+  onDraftVideoReady,
+  initialPhase,
+  initialRecordedDuration,
+  initialVideoUrl,
+  initialSessionSummary,
+  draftVideoMetadata,
+  onReRecordDraft,
+  serverSummary,
+  silenceDurationMs: silenceDurationMsOverride,
+  minSpeechBeforeSilenceMs: minSpeechBeforeSilenceMsOverride,
 }: VideoConversationRecorderProps) {
-  const [phase, setPhase] = useState<RecordingPhase>("idle");
+  // Effective timing — props override module-level constants
+  const effectiveSilenceDurationMs = silenceDurationMsOverride ?? SILENCE_DURATION_MS;
+  const effectiveMinSpeechMs = minSpeechBeforeSilenceMsOverride ?? MIN_SPEECH_BEFORE_SILENCE_MS;
+
+  const [phase, setPhase] = useState<RecordingPhase>(initialPhase || "idle");
   const [error, setError] = useState<string | null>(null);
   const [elapsedTime, setElapsedTime] = useState(0);
   const [hidePreview, setHidePreview] = useState(false);
   const [conversationTurns, setConversationTurns] = useState<ConversationTurn[]>([]);
   const [coachTurnCount, setCoachTurnCount] = useState(0);
   const [recordedBlob, setRecordedBlob] = useState<Blob | null>(null);
-  const [recordedDuration, setRecordedDuration] = useState(0);
+  const [recordedDuration, setRecordedDuration] = useState(initialRecordedDuration || 0);
   const [currentTranscript, setCurrentTranscript] = useState("");
   const [isListening, setIsListening] = useState(false);
   const [studentSpeechDuration, setStudentSpeechDuration] = useState(0);
@@ -150,13 +191,16 @@ export default function VideoConversationRecorder({
   const [streamingCoachText, setStreamingCoachText] = useState("");
   const [sessionExpiringSoon, setSessionExpiringSoon] = useState(false);
   const [sessionWrapped, setSessionWrapped] = useState(false);
-  const [sessionSummary, setSessionSummary] = useState<string | null>(null);
+  const [sessionSummary, setSessionSummary] = useState<string | null>(initialSessionSummary || null);
 
   // Telemetry ref for timing pipeline stages
   const telemetryRef = useRef({ studentStop: 0, apiReturn: 0, firstAudio: 0, coachAudioEnd: 0, listeningStart: 0 });
 
   // Progressive text reveal cleanup
   const revealCleanupRef = useRef<(() => void) | null>(null);
+
+  // Track last conversation turn role to prevent consecutive API coach turns
+  const lastApiTurnRoleRef = useRef<"coach" | "student" | null>(null);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const previewVideoRef = useRef<HTMLVideoElement>(null);
@@ -189,19 +233,49 @@ export default function VideoConversationRecorder({
   const coachSpeakingRef = useRef(false); // Lock to prevent overlapping TTS
   const sessionExpiringSoonRef = useRef(false); // Sync ref for async callbacks
   const sessionWrappedRef = useRef(false); // Prevent double wrap
+  const wrapTTSPendingRef = useRef(false); // handleSessionWrap is driving phase transition (onstop should defer)
+  const latestServerSummaryRef = useRef<string | undefined>(serverSummary); // Track server summary across closures
   const frozenTurnsRef = useRef<ConversationTurn[] | null>(null); // Snapshot of turns when recording stops (excludes wrap message)
   const lastCoachResponseRef = useRef<string>(""); // Dedup: prevent identical consecutive coach messages
+  const instructionalRecapRef = useRef<string | undefined>(undefined); // Latest server-computed instructional recap for client-side wraps
+  const completionRatioRef = useRef<number>(0); // Latest step completion ratio from server (0-1)
   const [needsUserAudioGesture, setNeedsUserAudioGesture] = useState(false);
-  const pendingCoachAudioRef = useRef<{ text: string; shouldContinue: boolean; turnId: number; turnKind?: VideoTurnKind } | null>(null);
+  // Keep server summary ref in sync with prop (belt-and-suspenders for stale closures)
+  if (serverSummary) latestServerSummaryRef.current = serverSummary;
+  const pendingCoachAudioRef = useRef<{ text: string; shouldContinue: boolean; turnId: number; turnKind?: VideoTurnKind; wrapReason?: string; criteriaStatus?: string } | null>(null);
 
   const updateConversationTurns = useCallback((updater: ConversationTurn[] | ((prev: ConversationTurn[]) => ConversationTurn[])) => {
     setConversationTurns(prev => {
       const next = typeof updater === 'function' ? updater(prev) : updater;
       const capped = next.length > 50 ? next.slice(next.length - 50) : next;
       conversationTurnsRef.current = capped;
+      // Sync to parent for draft persistence
+      onConversationUpdate?.(capped);
       return capped;
     });
+  }, [onConversationUpdate]);
+
+  // Helper: check if conversation turns already contain the initial question
+  const hasInitialQuestionTurn = useCallback((turns: ConversationTurn[], questionText: string): boolean => {
+    return turns.length > 0 && turns[0].role === "coach" && turns[0].message === questionText;
   }, []);
+
+  // Restore conversation turns from a saved draft on mount
+  useEffect(() => {
+    if (initialConversationTurns && initialConversationTurns.length > 0) {
+      const coachCount = initialConversationTurns.filter(t => t.role === "coach").length;
+      const lastTurn = initialConversationTurns[initialConversationTurns.length - 1];
+      const hasQ = hasInitialQuestionTurn(initialConversationTurns, question);
+      console.log(`[ResumeDebug] restoredTurns=${initialConversationTurns.length} hasQuestionTurn=${hasQ} lastTurnRole=${lastTurn?.role ?? "none"} coachCount=${coachCount}`);
+      // Use updateConversationTurns so parent autosave stays in sync
+      updateConversationTurns(initialConversationTurns);
+      setCoachTurnCount(coachCount);
+      coachTurnCountRef.current = coachCount;
+      // Set last turn role for double-coach guard
+      if (lastTurn) lastApiTurnRoleRef.current = lastTurn.role as "coach" | "student";
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // Only on mount
 
   // Callback ref for live camera video elements.
   // Auto-attaches the media stream whenever a <video> element mounts (handles
@@ -274,6 +348,8 @@ export default function VideoConversationRecorder({
       realElapsedSec: realElapsedNow,
       maxDurationSec: maxDuration,
       turnKind: pending.turnKind,
+      wrapReason: pending.wrapReason,
+      criteriaStatus: pending.criteriaStatus,
     });
 
     console.log(`[Turn ${pending.turnId}] handleTapToPlay decision=${decision.action} turnKind=${pending.turnKind ?? "unknown"} (${decision.reason})`);
@@ -284,9 +360,11 @@ export default function VideoConversationRecorder({
       if (isRecordingRef.current) startStudentTurn();
     } else if (decision.action === "wrap") {
       console.log(`[Turn ${pending.turnId}] [WRAP_REASON=${decision.reason}]`);
-      await handleSessionWrap();
+      await handleSessionWrap(decision.reason);
     } else {
       console.log(`[Turn ${pending.turnId}] [WRAP_REASON=${decision.reason}]`);
+      sessionWrappedRef.current = true;
+      setSessionWrapped(true);
       endConversation();
     }
   };
@@ -522,11 +600,11 @@ export default function VideoConversationRecorder({
         if (
           speechDetectedRef.current &&
           speechStartTimeRef.current &&
-          (now - speechStartTimeRef.current) >= MIN_SPEECH_BEFORE_SILENCE_MS
+          (now - speechStartTimeRef.current) >= effectiveMinSpeechMs
         ) {
           if (silenceStartRef.current === null) {
             silenceStartRef.current = now;
-          } else if ((now - silenceStartRef.current) >= SILENCE_DURATION_MS) {
+          } else if ((now - silenceStartRef.current) >= effectiveSilenceDurationMs) {
             console.log("[VideoConversation] Silence detected, ending student turn");
             setTimeout(() => handleDoneSpeaking(), TRAILING_BUFFER_MS);
             return; // Stop the loop
@@ -585,16 +663,36 @@ export default function VideoConversationRecorder({
 
         // Use frozen turns (excludes wrap message) if available, otherwise live
         const turnsForSummary = frozenTurnsRef.current || conversationTurnsRef.current;
-        if (successCriteria && successCriteria.length > 0) {
-          const bullets = buildEvidenceSummary(turnsForSummary, successCriteria);
-          setSessionSummary(formatEvidenceSummary(bullets));
-        } else {
-          setSessionSummary(summarizeStudentTranscript(turnsForSummary, question));
+        // Build session summary: prefer server summary (from step accumulation),
+        // then math step evidence, then criteria-based, then general.
+        // Server summary is the most accurate for math because it uses validated
+        // reasoning step accumulation rather than raw transcript extraction.
+        const allStudentText = turnsForSummary
+          .filter(t => t.role === "student")
+          .map(t => t.message)
+          .join(" ");
+        let summary: string | null = latestServerSummaryRef.current || null;
+        if (!summary) {
+          summary = buildMathStepSummary(allStudentText);
         }
+        if (!summary) {
+          if (successCriteria && successCriteria.length > 0) {
+            const bullets = buildEvidenceSummary(turnsForSummary, successCriteria);
+            summary = formatEvidenceSummary(bullets, allStudentText);
+          } else {
+            summary = summarizeStudentTranscript(turnsForSummary, question, successCriteria);
+          }
+        }
+        setSessionSummary(summary);
 
-        // During session wrap, the wrap handler manages phase transition and
-        // stream cleanup after the closing TTS finishes. Don't do it here.
-        if (sessionWrappedRef.current) {
+        // Notify parent so it can upload the draft video to the server
+        onDraftVideoReady?.({ videoBlob: blob, durationSec: actualDuration, turns: turnsForSummary, summary });
+
+        // During session wrap (handleSessionWrap), the wrap handler manages
+        // phase transition and stream cleanup after the closing TTS finishes.
+        // Only defer when wrapTTSPendingRef is set — NOT for server_wrap / end_conversation
+        // where there's no follow-up TTS and onstop must handle the transition.
+        if (wrapTTSPendingRef.current) {
           console.log("[VideoConversation] MediaRecorder stopped during wrap — blob saved, deferring phase transition");
           return;
         }
@@ -613,8 +711,6 @@ export default function VideoConversationRecorder({
 
       startTimeRef.current = Date.now();
       setElapsedTime(0);
-      setCoachTurnCount(1);
-      coachTurnCountRef.current = 1;
       onStartRecording?.();
 
       // Start elapsed timer — single source of truth for wall-clock time
@@ -633,41 +729,71 @@ export default function VideoConversationRecorder({
         // Graceful wrap instead of hard stop — only when timer actually expires
         if (elapsed >= maxDuration && !sessionWrappedRef.current) {
           console.log(`[WRAP_REASON=timer_expired] elapsed=${elapsed} maxDuration=${maxDuration}`);
-          void handleSessionWrap();
+          void handleSessionWrap("timer_expired");
         }
       }, 100);
 
-      // Add coach's question as first turn
-      const firstTurn: ConversationTurn = { role: "coach", message: question, timestamp: 0 };
-      updateConversationTurns([firstTurn]);
-      setPhase("coach_speaking");
+      // RESUME PATH: If restored turns already contain the initial question,
+      // skip speaking it and go directly to student turn.
+      const existingTurns = conversationTurnsRef.current;
+      const isResume = existingTurns.length > 0 && hasInitialQuestionTurn(existingTurns, question);
 
-      // Initial question is Turn 0
-      turnIdRef.current = 0;
-      coachSpeakingRef.current = true;
-      console.log("[Turn 0] speak() invoked for initial question");
-      const questionPlayed = await speak(question);
-      console.log(`[Turn 0] speak() resolved: audioPlayed=${questionPlayed}`);
-      coachSpeakingRef.current = false;
+      if (isResume) {
+        const existingCoachCount = existingTurns.filter(t => t.role === "coach").length;
+        console.log(`[Resume] Skipping question TTS — restored ${existingTurns.length} turns, ${existingCoachCount} coach turns`);
+        setCoachTurnCount(existingCoachCount);
+        coachTurnCountRef.current = existingCoachCount;
+        turnIdRef.current = existingCoachCount;
+        setPhase("coach_speaking");
 
-      if (!questionPlayed) {
-        if (lastSpeakError === "NotAllowedError") {
-          console.log("[Turn 0] AUDIO_FAILED: autoplay blocked — showing tap-to-play");
-          pendingCoachAudioRef.current = { text: question, shouldContinue: true, turnId: 0 };
-          setNeedsUserAudioGesture(true);
-          return;
+        // Brief "welcome back" — speak it but do NOT add as a conversation turn
+        // (it's UI chrome, not part of the academic transcript)
+        coachSpeakingRef.current = true;
+        await speak("Welcome back! Let's pick up where we left off.");
+        coachSpeakingRef.current = false;
+
+        await new Promise(resolve => setTimeout(resolve, 400));
+        if (isRecordingRef.current) {
+          console.log("[Resume] startStudentTurn invoked");
+          startStudentTurn();
         }
-        // Non-autoplay failure (API error etc.) — text is visible, proceed silently
-        console.log("[Turn 0] AUDIO_FAILED on initial question (non-autoplay) — continuing with text only");
-      }
+      } else {
+        // FRESH PATH: speak the question and start from scratch
+        setCoachTurnCount(1);
+        coachTurnCountRef.current = 1;
 
-      // Brief pause after coach finishes speaking before starting mic
-      await new Promise(resolve => setTimeout(resolve, 400));
+        // Add coach's question as first turn
+        const firstTurn: ConversationTurn = { role: "coach", message: question, timestamp: 0 };
+        updateConversationTurns([firstTurn]);
+        setPhase("coach_speaking");
 
-      // After speaking, start student's turn
-      if (isRecordingRef.current) {
-        console.log("[Turn 0] startStudentTurn invoked");
-        startStudentTurn();
+        // Initial question is Turn 0
+        turnIdRef.current = 0;
+        coachSpeakingRef.current = true;
+        console.log("[Turn 0] speak() invoked for initial question");
+        const questionPlayed = await speak(question);
+        console.log(`[Turn 0] speak() resolved: audioPlayed=${questionPlayed}`);
+        coachSpeakingRef.current = false;
+
+        if (!questionPlayed) {
+          if (lastSpeakError === "NotAllowedError") {
+            console.log("[Turn 0] AUDIO_FAILED: autoplay blocked — showing tap-to-play");
+            pendingCoachAudioRef.current = { text: question, shouldContinue: true, turnId: 0 };
+            setNeedsUserAudioGesture(true);
+            return;
+          }
+          // Non-autoplay failure (API error etc.) — text is visible, proceed silently
+          console.log("[Turn 0] AUDIO_FAILED on initial question (non-autoplay) — continuing with text only");
+        }
+
+        // Brief pause after coach finishes speaking before starting mic
+        await new Promise(resolve => setTimeout(resolve, 400));
+
+        // After speaking, start student's turn
+        if (isRecordingRef.current) {
+          console.log("[Turn 0] startStudentTurn invoked");
+          startStudentTurn();
+        }
       }
 
     } catch (err) {
@@ -776,7 +902,7 @@ export default function VideoConversationRecorder({
 
     const realElapsed = Math.floor((Date.now() - startTimeRef.current) / 1000);
     console.log(
-      "[VideoFlow] studentSubmitted coachTurnCount=" + coachTurnCount +
+      "[VideoFlow] studentSubmitted coachTurnCount=" + coachTurnCountRef.current +
       " realElapsed=" + realElapsed + " stateElapsed=" + elapsedTime +
       " finalTranscriptRef=\"" + (transcript || "(empty)").substring(0, 80) + "\"" +
       " currentTranscriptState=\"" + (currentTranscript || "(empty)").substring(0, 80) + "\""
@@ -817,7 +943,7 @@ export default function VideoConversationRecorder({
       }
 
       // Gentle re-prompt without API call
-      const reprompt = "I didn't quite catch that. Take your time and try again!";
+      const reprompt = "I didn't catch that\u2014can you say your answer again?";
       const coachTurn: ConversationTurn = {
         role: "coach",
         message: reprompt,
@@ -839,7 +965,26 @@ export default function VideoConversationRecorder({
     // Got real speech — reset no-speech retry counter
     noSpeechRetryRef.current = 0;
 
+    // Filter filler-only transcripts — handle locally without API call
+    const FILLER_ONLY = /^(um+|uh+|hmm+|like|well|so|yeah|ok(ay)?|huh|what|oh|ah+|mhm+)[.!?,\s]*$/i;
+    if (FILLER_ONLY.test(transcript)) {
+      console.log("[STT] filler_only_transcript -> local_retry (no API)", transcript);
+      const fillerReprompt = "I didn't catch that\u2014can you say your answer again?";
+      const fillerCoachTurn: ConversationTurn = {
+        role: "coach",
+        message: fillerReprompt,
+        timestamp: currentTime,
+      };
+      updateConversationTurns(prev => [...prev, fillerCoachTurn]);
+      setPhase("coach_speaking");
+      await speak(fillerReprompt);
+      await new Promise(resolve => setTimeout(resolve, 400));
+      if (isRecordingRef.current) startStudentTurn();
+      return;
+    }
+
     // Add student turn to transcript
+    lastApiTurnRoleRef.current = "student";
     const studentTurn: ConversationTurn = {
       role: "student",
       message: transcript,
@@ -852,16 +997,17 @@ export default function VideoConversationRecorder({
     setCurrentTranscript("");
     finalTranscriptRef.current = "";
 
-    // Probing cutoff: if less than WRAP_BUFFER_SEC (30s) remains, don't start
-    // another API call + student turn. Wrap now so the coach doesn't ask a question
-    // at 1:32 and then immediately wrap at 1:46.
-    if (realElapsed + WRAP_BUFFER_SEC >= maxDuration) {
+    // Probing cutoff: if less than buffer remains, don't start another API call.
+    // Near-success leniency: when student has completed most steps (completionRatio >= 0.66),
+    // use CLOSING_WINDOW_SEC (15s) instead of WRAP_BUFFER_SEC (30s) to allow one final answer.
+    const effectiveBuffer = completionRatioRef.current >= 0.66 ? CLOSING_WINDOW_SEC : WRAP_BUFFER_SEC;
+    if (realElapsed + effectiveBuffer >= maxDuration) {
       console.log(
         "[WRAP_REASON=probing_cutoff] Probing cutoff reached (realElapsed=" +
           realElapsed + ", remaining=" + (maxDuration - realElapsed) +
-          "s < " + WRAP_BUFFER_SEC + "s buffer), wrapping conversation"
+          "s < " + effectiveBuffer + "s buffer, completionRatio=" + completionRatioRef.current.toFixed(2) + "), wrapping conversation"
       );
-      await handleSessionWrap();
+      await handleSessionWrap("probing_cutoff");
       return;
     }
 
@@ -887,26 +1033,57 @@ export default function VideoConversationRecorder({
         timeRemaining
       );
       let { response, shouldContinue } = coachResult;
-      const { turnKind } = coachResult;
+      const { turnKind, wrapReason, criteriaStatus } = coachResult;
+
+      // Capture the latest server summary (from step accumulation) — freshest value
+      if (coachResult.serverSummary) {
+        latestServerSummaryRef.current = coachResult.serverSummary;
+      }
+
+      // Capture the latest instructional recap (for client-side probing_cutoff wraps)
+      if (coachResult.instructionalRecap) {
+        instructionalRecapRef.current = coachResult.instructionalRecap;
+      }
+
+      // Track step completion ratio for near-success leniency
+      const prevRatio = completionRatioRef.current;
+      if (coachResult.completionRatio !== undefined) {
+        completionRatioRef.current = coachResult.completionRatio;
+      }
+      console.log(
+        `[Turn ${turnId}] completionRatio: raw=${coachResult.completionRatio ?? "undefined"}` +
+        ` before=${prevRatio.toFixed(2)} after=${completionRatioRef.current.toFixed(2)}`,
+      );
 
       // DEDUP: If the coach produced the exact same response as last turn,
-      // replace with a continuation prompt to avoid dead-air repetition.
+      // decide whether to replace it. For math candidate answers and
+      // interrogative attempts, KEEP the server's deterministic remediation
+      // (misconception redirect, step probe, etc.) — it IS the right response
+      // even when repeated. Only replace for non-math conversational turns.
+      //
+      // IMPORTANT: Use `transcript` (the local variable captured before the API
+      // call) — NOT currentTranscript or finalTranscriptRef, which are cleared
+      // at line 985-986 before the API response arrives.
       if (response === lastCoachResponseRef.current && shouldContinue) {
-        response = "I heard you! Would you like to keep exploring this, or are you ready to move on?";
-        if (process.env.NODE_ENV === "development") {
-          console.log(`[Turn ${turnId}] [DEDUP] Replaced duplicate coach response`);
+        const isMathAttempt = containsMathContent(transcript) || isInterrogativeMathAnswer(transcript);
+        if (!isMathAttempt) {
+          response = "I heard you! Would you like to keep exploring this, or are you ready to move on?";
+          if (process.env.NODE_ENV === "development") {
+            console.log(`[Turn ${turnId}] [DEDUP] Replaced duplicate coach response (non-math, transcript="${transcript.slice(0, 40)}")`);
+          }
+        } else if (process.env.NODE_ENV === "development") {
+          console.log(`[Turn ${turnId}] [DEDUP-SKIP] Keeping duplicate remediation — student gave math candidate answer (transcript="${transcript.slice(0, 40)}")`);
         }
       }
       lastCoachResponseRef.current = response;
 
-      // INVARIANT: If shouldContinue=true, the coach must ask a question (?).
-      // If not, append a continuation question as a safety net against dead air.
+      // INVARIANT: If shouldContinue=true, the coach MUST ask a question (?).
+      // The server already enforces this (Invariant 4 + safety net), but if it
+      // somehow slips through, patch locally with a deterministic question rather
+      // than forcing end (which produces a questionless statement).
       if (shouldContinue && !response.includes("?")) {
-        response = response.replace(/[.!]\s*$/, "") +
-          ". What else do you think about this?";
-        if (process.env.NODE_ENV === "development") {
-          console.log(`[Turn ${turnId}] [INVARIANT] shouldContinue=true but no question — appended question`);
-        }
+        console.error(`[Turn ${turnId}] [INVARIANT] shouldContinue=true but no "?" — server bug, patching locally`);
+        response = response.trimEnd().replace(/[.!]$/, "") + ". Can you answer the question by giving two examples?";
       }
 
       telemetryRef.current.apiReturn = Date.now();
@@ -926,14 +1103,28 @@ export default function VideoConversationRecorder({
 
       // Closing-window check: if time drifted into the closing window during
       // the API round-trip, skip speaking the new response and wrap immediately.
+      // EXCEPTION: If the API already returned a success wrap (shouldContinue=false),
+      // let it play out — the student earned their success experience and should
+      // hear the success message, not a generic "Great effort, let's wrap up."
       const postApiElapsed = Math.floor((Date.now() - startTimeRef.current) / 1000);
       const postApiRemaining = maxDuration - postApiElapsed;
-      if (postApiRemaining <= WRAP_BUFFER_SEC && !sessionWrappedRef.current) {
-        console.log(`[Turn ${turnId}] Probing cutoff entered during API (remaining=${postApiRemaining}s) — skipping TTS, wrapping`);
+      const postApiBuffer = completionRatioRef.current >= 0.66 ? CLOSING_WINDOW_SEC : WRAP_BUFFER_SEC;
+      if (postApiRemaining <= postApiBuffer && !sessionWrappedRef.current && shouldContinue) {
+        console.log(`[Turn ${turnId}] Probing cutoff entered during API (remaining=${postApiRemaining}s, buffer=${postApiBuffer}s, completionRatio=${completionRatioRef.current.toFixed(2)}) — skipping TTS, wrapping`);
         coachSpeakingRef.current = false;
-        await handleSessionWrap();
+        await handleSessionWrap("probing_cutoff");
         return;
       }
+
+      // Guard: prevent consecutive API coach turns without a student turn between them
+      if (lastApiTurnRoleRef.current === "coach") {
+        console.log(`[Flow] prevented_double_coach_turn -> start_student_turn`);
+        coachSpeakingRef.current = false;
+        await new Promise(resolve => setTimeout(resolve, 400));
+        if (isRecordingRef.current) startStudentTurn();
+        return;
+      }
+      lastApiTurnRoleRef.current = "coach";
 
       // Acquire TTS lock
       coachSpeakingRef.current = false;
@@ -1021,7 +1212,7 @@ export default function VideoConversationRecorder({
       if (!audioPlayed) {
         if (lastSpeakError === "NotAllowedError") {
           console.log(`[Turn ${turnId}] AUDIO_FAILED: autoplay blocked — showing tap-to-play`);
-          pendingCoachAudioRef.current = { text: response, shouldContinue, turnId, turnKind };
+          pendingCoachAudioRef.current = { text: response, shouldContinue, turnId, turnKind, wrapReason, criteriaStatus };
           setNeedsUserAudioGesture(true);
           return;
         }
@@ -1047,6 +1238,8 @@ export default function VideoConversationRecorder({
         realElapsedSec: realElapsedNow,
         maxDurationSec: maxDuration,
         turnKind,
+        wrapReason,
+        criteriaStatus,
       });
 
       console.log(
@@ -1066,9 +1259,13 @@ export default function VideoConversationRecorder({
         }
       } else if (decision.action === "wrap") {
         console.log(`[Turn ${turnId}] [WRAP_REASON=${decision.reason}]`);
-        await handleSessionWrap();
+        await handleSessionWrap(decision.reason);
       } else {
         console.log(`[Turn ${turnId}] [WRAP_REASON=${decision.reason}]`);
+        // Server already delivered the wrap message — set sessionWrapped
+        // so the interval timer can't trigger a second handleSessionWrap.
+        sessionWrappedRef.current = true;
+        setSessionWrapped(true);
         endConversation();
       }
     } catch (err) {
@@ -1120,7 +1317,7 @@ export default function VideoConversationRecorder({
   // Graceful session wrap when time runs out.
   // Allows current TTS to finish, appends wrap message, speaks it, then ends.
   // Does NOT count as a failed attempt or incorrect answer.
-  const handleSessionWrap = async () => {
+  const handleSessionWrap = async (sessionWrapReason?: WrapReason) => {
     // Guard against double invocation
     if (sessionWrappedRef.current) return;
     sessionWrappedRef.current = true;
@@ -1172,37 +1369,53 @@ export default function VideoConversationRecorder({
     // Snapshot turns now — the wrap turn added below is display-only.
     frozenTurnsRef.current = [...conversationTurnsRef.current];
     isRecordingRef.current = false;
+    // Signal onstop to defer phase transition — handleSessionWrap will do it
+    // after the closing TTS finishes.
+    wrapTTSPendingRef.current = true;
     if (mediaRecorderRef.current && mediaRecorderRef.current.state === "recording") {
       console.log("[SessionWrap] Stopping MediaRecorder before wrap TTS");
       mediaRecorderRef.current.stop();
       // onstop fires asynchronously: creates blob + saves duration,
-      // but skips phase transition (guarded by sessionWrappedRef)
+      // but skips phase transition (guarded by wrapTTSPendingRef)
     }
 
     // Transition to session_wrap phase
     setPhase("session_wrap");
 
-    // Build a personalized closing statement from student topics.
-    // FOREIGN KEYWORD FILTER: reject topic templates that introduce domain
-    // concepts absent from the question + student speech (prevents "sun" in
-    // a subtraction lesson, etc.).
-    const studentText = conversationTurnsRef.current
-      .filter(t => t.role === "student" && t.message.trim())
-      .map(t => t.message)
-      .join(" ");
-    const contextText = [question, studentText].join(" ");
-    const allTopics = detectTopics(extractContentWords(studentText));
-    const safeTopics = allTopics.filter(t => !hasForeignKeyword(t.template, contextText));
-    if (process.env.NODE_ENV === "development" && safeTopics.length !== allTopics.length) {
-      console.log("[SessionWrap] Filtered foreign topics:", allTopics.length - safeTopics.length, "removed");
-    }
-    const closingMessage = buildClosingStatement(
-      safeTopics.map(t => t.template),
-      undefined, // studentName — not available here
-    );
-    if (process.env.NODE_ENV === "development") {
-      console.log("[SessionWrap] wrapSource=buildClosingStatement safeTopics=" + safeTopics.length +
-        " message=" + JSON.stringify(closingMessage.slice(0, 80)));
+    // INSTRUCTIONAL RECAP OVERRIDE: If the server detected a misconception
+    // during the conversation and provided an instructional recap, use it
+    // instead of the generic closing statement. This ensures probing_cutoff
+    // and other client-side wraps include concrete solution modeling.
+    let closingMessage: string;
+    if (instructionalRecapRef.current) {
+      closingMessage = instructionalRecapRef.current;
+      if (process.env.NODE_ENV === "development") {
+        console.log("[SessionWrap] wrapSource=instructionalRecap message=" + JSON.stringify(closingMessage.slice(0, 80)));
+      }
+    } else {
+      // Build a personalized closing statement from student topics.
+      // FOREIGN KEYWORD FILTER: reject topic templates that introduce domain
+      // concepts absent from the question + student speech (prevents "sun" in
+      // a subtraction lesson, etc.).
+      const studentText = conversationTurnsRef.current
+        .filter(t => t.role === "student" && t.message.trim())
+        .map(t => t.message)
+        .join(" ");
+      const contextText = [question, studentText].join(" ");
+      const allTopics = detectTopics(extractContentWords(studentText));
+      const safeTopics = allTopics.filter(t => !hasForeignKeyword(t.template, contextText));
+      if (process.env.NODE_ENV === "development" && safeTopics.length !== allTopics.length) {
+        console.log("[SessionWrap] Filtered foreign topics:", allTopics.length - safeTopics.length, "removed");
+      }
+      closingMessage = buildClosingStatement(
+        safeTopics.map(t => t.template),
+        undefined, // studentName — not available here
+        sessionWrapReason,
+      );
+      if (process.env.NODE_ENV === "development") {
+        console.log("[SessionWrap] wrapSource=buildClosingStatement safeTopics=" + safeTopics.length +
+          " message=" + JSON.stringify(closingMessage.slice(0, 80)));
+      }
     }
 
     // Add wrap message to transcript (NOT as an answer attempt)
@@ -1281,6 +1494,8 @@ export default function VideoConversationRecorder({
   // Re-record (start over)
   const handleReRecord = async () => {
     console.log("[VideoConversation] Re-recording");
+    // Notify parent to delete draft video from server
+    onReRecordDraft?.();
     setRecordedBlob(null);
     setRecordedDuration(0);
     setElapsedTime(0);
@@ -1295,6 +1510,9 @@ export default function VideoConversationRecorder({
     setSessionSummary(null);
     sessionExpiringSoonRef.current = false;
     sessionWrappedRef.current = false;
+    wrapTTSPendingRef.current = false;
+    instructionalRecapRef.current = undefined;
+    completionRatioRef.current = 0;
     frozenTurnsRef.current = null;
     noSpeechRetryRef.current = 0;
 
@@ -1303,17 +1521,27 @@ export default function VideoConversationRecorder({
 
   // Submit the recording
   const handleSubmit = () => {
+    const turnsForUpload = frozenTurnsRef.current || conversationTurns;
     console.log("[VideoConversation] handleSubmit called", {
       hasBlob: !!recordedBlob,
+      hasDraftMeta: !!draftVideoMetadata,
       blobSize: recordedBlob?.size,
       recordedDuration,
-      turnsCount: conversationTurns.length,
+      turnsCount: turnsForUpload.length,
       isSubmitting,
     });
+
+    // If we have draft video metadata from a previous upload (resume flow),
+    // pass a sentinel blob so parent can reuse the metadata without re-uploading.
+    if (draftVideoMetadata && !recordedBlob && recordedDuration > 0) {
+      console.log("[VideoConversation] Reusing draft video metadata (no re-upload)");
+      const sentinel = new Blob([], { type: draftVideoMetadata.mimeType });
+      onStopRecording(sentinel, recordedDuration, turnsForUpload);
+      return;
+    }
+
     if (recordedBlob && recordedDuration > 0) {
       console.log("[VideoConversation] Calling onStopRecording...");
-      // Use frozen turns (excludes wrap message) for upload, fall back to live turns
-      const turnsForUpload = frozenTurnsRef.current || conversationTurns;
       onStopRecording(recordedBlob, recordedDuration, turnsForUpload);
     } else {
       console.log("[VideoConversation] Cannot submit - missing blob or duration");
@@ -1906,7 +2134,7 @@ export default function VideoConversationRecorder({
       )}
 
       {/* Session Complete — preview phase */}
-      {phase === "preview" && recordedBlob && (
+      {phase === "preview" && (recordedBlob || initialVideoUrl) && (
         <div>
           {/* Session Complete header */}
           <div style={{
@@ -2004,7 +2232,7 @@ export default function VideoConversationRecorder({
           }}>
             <video
               ref={previewVideoRef}
-              src={URL.createObjectURL(recordedBlob)}
+              src={recordedBlob ? URL.createObjectURL(recordedBlob) : initialVideoUrl}
               controls
               style={{ width: "100%", display: "block" }}
             />

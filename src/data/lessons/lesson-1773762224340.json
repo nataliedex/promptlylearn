@@ -1,0 +1,125 @@
+{
+  "id": "lesson-1773762224340",
+  "title": "Mastering Easy Two-Digit Addition",
+  "description": "Let's practice adding two-digit numbers together.",
+  "difficulty": "intermediate",
+  "gradeLevel": "2",
+  "subject": "Math",
+  "prompts": [
+    {
+      "id": "q1",
+      "type": "explain",
+      "input": "What is 20 + 42? Tell how you got your answer.",
+      "hints": [
+        "Look at the tens and ones separately.",
+        "Add the tens first, then the ones."
+      ],
+      "blueprintId": "math_solve_and_explain",
+      "filledSlots": {
+        "expression": "20 + 42"
+      },
+      "mathProblem": {
+        "skill": "two_digit_addition",
+        "a": 20,
+        "b": 42,
+        "expression": "20 + 42",
+        "correctAnswer": 62,
+        "requiresRegrouping": false,
+        "expectedStrategyTags": [
+          "add ones",
+          "add tens"
+        ]
+      },
+      "assessment": {
+        "learningObjective": "Explain how to add 20 and 42 by adding the ones and tens separately.",
+        "expectedReasoningSteps": [
+          "Add the ones: 0 + 2 = 2",
+          "Add the tens: 20 + 40 = 60",
+          "Combine the totals: 60 + 2 = 62"
+        ],
+        "reasoningSteps": [
+          {
+            "id": "step_1",
+            "label": "Add the ones",
+            "expectedStatements": [
+              "0 + 2 = 2"
+            ],
+            "probe": "What do you get when you add 0 and 2?",
+            "kind": "ones_sum"
+          },
+          {
+            "id": "step_2",
+            "label": "Add the tens",
+            "expectedStatements": [
+              "20 + 40 = 60"
+            ],
+            "probe": "What do you get when you add 20 and 40?",
+            "kind": "tens_sum"
+          },
+          {
+            "id": "step_3",
+            "label": "Combine the totals",
+            "expectedStatements": [
+              "60 + 2 = 62",
+              "The final answer is 62"
+            ],
+            "probe": "What do you get when you combine 60 and 2?",
+            "kind": "combine"
+          }
+        ],
+        "expectedConcepts": [
+          "20 is made of 20 and 0",
+          "42 is made of 40 and 2",
+          "0 + 2 = 2",
+          "20 + 40 = 60",
+          "60 + 2 = 62"
+        ],
+        "successCriteria": [
+          "States that 0 + 2 = 2",
+          "States that 20 + 40 = 60",
+          "States that 60 + 2 = 62",
+          "States that the final answer is 62"
+        ],
+        "misconceptions": [
+          "Says 60 because they added 20 + 40 but forgot to add 0 + 2",
+          "Says 2 because they only added the ones",
+          "Gives 62 but cannot explain how they got it"
+        ],
+        "scoringLevels": {
+          "strong": "States that 0 + 2 = 2, states that 20 + 40 = 60, states that 60 + 2 = 62, and gives the final answer 62.",
+          "developing": "Gives the correct answer or part of the explanation, but misses one or more key steps.",
+          "needsSupport": "Gives an incorrect answer, incomplete explanation, or unrelated response."
+        },
+        "referenceFacts": {
+          "20": [
+            "0 ones",
+            "2 tens"
+          ],
+          "42": [
+            "2 ones",
+            "4 tens"
+          ]
+        },
+        "requiredExamples": "Says how to add the ones and tens and gives the final answer 62.",
+        "validVocabulary": [
+          "ones",
+          "tens",
+          "add",
+          "total",
+          "sum"
+        ]
+      },
+      "allowedProbes": [
+        "What do you get when you add 0 and 2?",
+        "What do you get when you add 20 and 40?",
+        "What do you get when you combine 60 and 2?"
+      ],
+      "retryQuestions": [
+        "Can you start with the ones digits, 0 and 2?",
+        "Now what do you get when you add 20 and 40?",
+        "What is the total when you put it all together?"
+      ]
+    }
+  ],
+  "systemIndex": "Math 2.11"
+}

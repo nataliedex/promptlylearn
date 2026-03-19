@@ -42,6 +42,7 @@ export interface HeaderProps {
   breadcrumbs?: BreadcrumbItem[];
   backLink?: string;
   backLabel?: string;
+  onBack?: () => void; // Override back navigation (e.g., for auto-save before exit)
 
   // Content
   title?: string;
@@ -393,20 +394,40 @@ export default function Header(props: HeaderProps) {
     return (
       <nav style={containerStyle}>
         <div style={{ display: "flex", alignItems: "center", gap: "12px", flex: 1 }}>
-          {backLink && (
-            <Link
-              to={backLink}
-              style={{
-                color: "var(--text-muted)",
-                textDecoration: "none",
-                fontSize: "0.85rem",
-                display: "flex",
-                alignItems: "center",
-                gap: "4px",
-              }}
-            >
-              ← {backLabel}
-            </Link>
+          {(backLink || onBack) && (
+            onBack ? (
+              <button
+                onClick={onBack}
+                style={{
+                  background: "none",
+                  border: "none",
+                  cursor: "pointer",
+                  padding: 0,
+                  color: "var(--text-muted)",
+                  textDecoration: "none",
+                  fontSize: "0.85rem",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "4px",
+                }}
+              >
+                ← {backLabel}
+              </button>
+            ) : (
+              <Link
+                to={backLink!}
+                style={{
+                  color: "var(--text-muted)",
+                  textDecoration: "none",
+                  fontSize: "0.85rem",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "4px",
+                }}
+              >
+                ← {backLabel}
+              </Link>
+            )
           )}
           {title && (
             <span

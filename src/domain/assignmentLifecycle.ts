@@ -192,10 +192,11 @@ export function computeAssignmentState(
     const hintRatio = hintsUsed / Math.max(session.submission.responses.length, 1);
     const hasTeacherNote = !!session.educatorNotes;
 
-    // Determine if needs support
+    // Determine if needs support — only completed sessions have meaningful scores
     const flaggedNeedsSupport =
-      understanding === "needs-support" ||
-      hintRatio > CONFIG.significantCoachUsageRatio;
+      isComplete &&
+      (understanding === "needs-support" ||
+        hintRatio > CONFIG.significantCoachUsageRatio);
 
     // Check if improved after help
     const improvedAfterHelp = hintsUsed > 0 && score >= CONFIG.developingThreshold;

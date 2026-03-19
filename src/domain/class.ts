@@ -37,7 +37,7 @@ export interface Class {
   schoolYear?: string; // e.g., "2024-2025"
   period?: string; // e.g., "Period 3", "Morning", "Block A"
   sectionLabel?: string; // e.g., "A", "B", "AM", "PM", "1", "2"
-  subject?: string; // Legacy single subject field (deprecated, use subjects array)
+  subject?: string; // Primary subject for this class (e.g., "Math", "Science")
 
   // Timestamps
   createdAt: string;
@@ -55,7 +55,7 @@ export interface ClassSummary {
   schoolYear?: string;
   period?: string;
   sectionLabel?: string;
-  subject?: string; // Legacy
+  subject?: string;
   subjects: string[];
   studentCount: number;
   createdAt: string;
@@ -73,7 +73,7 @@ export interface CreateClassInput {
   schoolYear?: string;
   period?: string;
   sectionLabel?: string;
-  subject?: string; // Legacy
+  subject?: string;
   subjects?: string[];
   studentIds?: string[];
 }
@@ -88,7 +88,7 @@ export interface UpdateClassInput {
   schoolYear?: string;
   period?: string;
   sectionLabel?: string;
-  subject?: string; // Legacy
+  subject?: string;
   subjects?: string[];
   subjectExclusions?: Record<string, string[]>;
 }

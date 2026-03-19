@@ -1,0 +1,39 @@
+{
+  "id": "planets-meta-question-recovery",
+  "tags": ["regression", "meta-question"],
+  "expectedVerdict": "PASS",
+  "expectedIssueCodes": [],
+  "notes": "Student asks 'what does made of mean?' (meta-question), coach clarifies, student then provides a correct entity-attribute pair. Tests CLARIFICATION move followed by partial evidence.",
+  "mode": "explanation",
+  "name": "planets: meta-question → clarification → partial evidence",
+  "promptInput": "What are planets made of? Give examples of different planets and their materials.",
+  "requiredEvidence": {
+    "minEntities": 2,
+    "entityLabel": "planets",
+    "attributeLabel": "materials",
+    "minAttributeTypes": 2,
+    "requirePairing": true
+  },
+  "referenceFacts": {
+    "Mercury": ["rock", "metal"],
+    "Venus": ["rock"],
+    "Earth": ["rock", "metal"],
+    "Mars": ["rock"],
+    "Jupiter": ["gas"],
+    "Saturn": ["gas"],
+    "Uranus": ["ice", "gas"],
+    "Neptune": ["ice", "gas"]
+  },
+  "successCriteria": [
+    "States that planets are made of different materials such as rock, gas, or ice.",
+    "Names at least two specific planets.",
+    "Describes what each named planet is made of."
+  ],
+  "hints": ["Think about what you know about Earth and other planets."],
+  "transcript": [
+    { "role": "coach", "message": "What are planets made of? Give examples." },
+    { "role": "student", "message": "what does 'made of' mean?" },
+    { "role": "coach", "message": "Good question! What are planets made of? What do you think?" },
+    { "role": "student", "message": "Earth is made of rock" }
+  ]
+}

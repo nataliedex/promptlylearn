@@ -42,7 +42,8 @@ import {
   deriveUnderstanding,
   deriveCoachSupport,
   getUnderstandingLabel,
-  wasHintUsed,
+  getUnderstandingColor,
+  getUnderstandingBgColor,
 } from "../utils/teacherDashboardUtils";
 import type { UnderstandingLevel, CoachSupportLevel } from "../types/teacherDashboard";
 
@@ -57,8 +58,11 @@ interface StudentAssignment {
   coachSupport: CoachSupportLevel;
   completedAt?: string;
   assignedAt?: string;
+  dueDate?: string;
   hasTeacherNote: boolean;
   reviewState: ReviewState;
+  attempts: number;
+  lastWorkedAt?: string;
 }
 
 export default function StudentDetails() {
@@ -86,7 +90,6 @@ export default function StudentDetails() {
   const [badgeTypes, setBadgeTypes] = useState<BadgeTypeInfo[]>([]);
   const [studentTodos, setStudentTodos] = useState<TeacherTodo[]>([]);
   const [loading, setLoading] = useState(true);
-  const [showCompleted, setShowCompleted] = useState(false);
   const [showProfileDrawer, setShowProfileDrawer] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
 
@@ -97,7 +100,7 @@ export default function StudentDetails() {
       try {
         const [studentData, sessions, lessons, insights, recsResponse, badgesResponse, todosResponse, assignmentsResponse, profileResponse] = await Promise.all([
           getStudent(studentId!),
-          getSessions(studentId, "completed"),
+          getSessions(studentId),
           getLessons(),
           getStudentCoachingInsights(studentId!),
           getRecommendations({ studentId: studentId!, status: "active" }),
@@ -132,8 +135,7 @@ export default function StudentDetails() {
             // Student has attempted this assignment
             const score = session.evaluation?.totalScore ?? 0;
             const understanding = deriveUnderstanding(score);
-            const hintsUsed = session.submission.responses.filter((r) => wasHintUsed(r)).length;
-            const coachSupport = deriveCoachSupport(hintsUsed, session.submission.responses.length);
+            const coachSupport = deriveCoachSupport(session.submission.responses);
 
             assignmentList.push({
               lessonId: lesson.id,
@@ -146,24 +148,31 @@ export default function StudentDetails() {
               coachSupport,
               completedAt: session.completedAt,
               assignedAt: assignmentRecord.assignedAt,
+              dueDate: assignmentRecord.dueDate,
               hasTeacherNote: !!session.educatorNotes,
-              // Default to pending_review if completed but no stored state
               reviewState: assignmentRecord.reviewState || (session.completedAt ? "pending_review" : "not_started"),
+              attempts: assignmentRecord.attempts || 1,
+              lastWorkedAt: session.completedAt || session.startedAt || assignmentRecord.assignedAt,
             });
           } else {
-            // Student hasn't started this assignment
+            // No session found — use assignment record's own completion data as fallback
+            const isCompletedByRecord = !!assignmentRecord.completedAt;
             assignmentList.push({
               lessonId: lesson.id,
               lessonTitle: lesson.title,
               subject: lesson.subject,
-              isComplete: false,
-              questionsAnswered: 0,
+              isComplete: isCompletedByRecord,
+              questionsAnswered: isCompletedByRecord ? lesson.promptCount : 0,
               totalQuestions: lesson.promptCount,
-              understanding: "needs-support",
+              understanding: isCompletedByRecord ? "developing" : "needs-support",
               coachSupport: "minimal",
+              completedAt: assignmentRecord.completedAt,
               assignedAt: assignmentRecord.assignedAt,
+              dueDate: assignmentRecord.dueDate,
               hasTeacherNote: false,
-              reviewState: assignmentRecord.reviewState || "not_started",
+              reviewState: assignmentRecord.reviewState || (isCompletedByRecord ? "pending_review" : "not_started"),
+              attempts: assignmentRecord.attempts || (isCompletedByRecord ? 1 : 0),
+              lastWorkedAt: assignmentRecord.completedAt || undefined,
             });
           }
         }
@@ -354,26 +363,6 @@ export default function StudentDetails() {
     );
   }
 
-  // Categorize assignments using reviewState as single source of truth
-  // Reviewed = any state that indicates teacher has reviewed (reviewed, followup_scheduled, resolved)
-  const reviewedAssignments = assignments.filter((a) =>
-    a.questionsAnswered > 0 &&
-    a.reviewState !== "not_started" &&
-    a.reviewState !== "pending_review"
-  );
-  // Pending review = completed but teacher hasn't reviewed yet
-  const pendingReviewAssignments = assignments.filter((a) => a.isComplete && a.reviewState === "pending_review");
-  // In progress = has started but not completed and not reviewed
-  const inProgressAssignments = assignments.filter((a) =>
-    !a.isComplete &&
-    a.questionsAnswered > 0 &&
-    (a.reviewState === "not_started" || a.reviewState === "pending_review")
-  );
-  const notStartedAssignments = assignments.filter((a) => a.questionsAnswered === 0);
-
-  // Open = needs attention: pending review or in progress
-  const openAssignments = [...pendingReviewAssignments, ...inProgressAssignments];
-
   return (
     <div className="container">
       <EducatorAppHeader
@@ -386,20 +375,27 @@ export default function StudentDetails() {
           <button
             onClick={() => setShowProfileDrawer(true)}
             style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: "6px",
               padding: "6px 12px",
               fontSize: "0.8rem",
-              background: "rgba(255,255,255,0.15)",
-              color: "white",
-              border: "1px solid rgba(255,255,255,0.3)",
+              background: "transparent",
+              color: "var(--text-secondary)",
+              border: "1px solid var(--border-subtle)",
               borderRadius: "6px",
               cursor: "pointer",
               fontWeight: 500,
+              whiteSpace: "nowrap",
+              transition: "all 0.15s ease",
             }}
             onMouseEnter={(e) => {
-              e.currentTarget.style.background = "rgba(255,255,255,0.25)";
+              e.currentTarget.style.background = "var(--surface-accent)";
+              e.currentTarget.style.color = "var(--text-primary)";
             }}
             onMouseLeave={(e) => {
-              e.currentTarget.style.background = "rgba(255,255,255,0.15)";
+              e.currentTarget.style.background = "transparent";
+              e.currentTarget.style.color = "var(--text-secondary)";
             }}
           >
             Edit Profile
@@ -577,111 +573,141 @@ export default function StudentDetails() {
         </div>
       )}
 
-      {/* Open Assignments (Needs Attention) */}
-      {openAssignments.length > 0 && (
-        <div style={{ marginTop: "32px", marginBottom: "24px" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "8px" }}>
-            <h3 style={{ margin: 0, color: "var(--text-primary)", fontSize: "1rem", fontWeight: 600 }}>
-              Open Assignments
-            </h3>
-            <span style={{ color: "var(--text-secondary)", fontSize: "0.85rem" }}>
-              ({openAssignments.length})
-            </span>
+      {/* Recent Work Table */}
+      <div style={{ marginTop: "32px", marginBottom: "24px" }}>
+        <h3 style={{ margin: "0 0 12px 0", color: "var(--text-primary)", fontSize: "1rem", fontWeight: 600 }}>
+          Recent Work
+        </h3>
+
+        {assignments.length === 0 ? (
+          <div className="card" style={{ textAlign: "center", padding: "32px" }}>
+            <p style={{ color: "var(--text-secondary)", margin: 0 }}>No assignments yet.</p>
           </div>
-          <div style={{ borderRadius: "12px", overflow: "hidden", boxShadow: "0 1px 3px rgba(0, 0, 0, 0.08)" }}>
-            {openAssignments.map((assignment) => (
-              <StudentAssignmentRow
-                key={assignment.lessonId}
-                assignment={assignment}
-                priority={assignment.isComplete && assignment.reviewState === "pending_review" ? "needs-attention" : "in-progress"}
-                onNavigate={() =>
-                  navigate(`/educator/assignment/${assignment.lessonId}/student/${studentId}`, {
-                    state: { fromStudent: studentId, studentName: student.name }
+        ) : (
+          <div className="card" style={{ padding: 0, overflow: "hidden" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead>
+                <tr style={{ background: "#f8f9fa", borderBottom: "1px solid #e8e8e8" }}>
+                  <th style={{ textAlign: "left", padding: "10px 16px", fontWeight: 500, color: "var(--text-muted)", fontSize: "0.8rem", textTransform: "uppercase", letterSpacing: "0.03em" }}>
+                    Assignment
+                  </th>
+                  <th style={{ textAlign: "center", padding: "10px 12px", fontWeight: 500, color: "var(--text-muted)", fontSize: "0.8rem", textTransform: "uppercase", letterSpacing: "0.03em" }}>
+                    Status
+                  </th>
+                  <th style={{ textAlign: "center", padding: "10px 12px", fontWeight: 500, color: "var(--text-muted)", fontSize: "0.8rem", textTransform: "uppercase", letterSpacing: "0.03em" }}>
+                    Understanding
+                  </th>
+                  <th style={{ textAlign: "center", padding: "10px 12px", fontWeight: 500, color: "var(--text-muted)", fontSize: "0.8rem", textTransform: "uppercase", letterSpacing: "0.03em" }}>
+                    Attempts
+                  </th>
+                  <th style={{ textAlign: "center", padding: "10px 12px", fontWeight: 500, color: "var(--text-muted)", fontSize: "0.8rem", textTransform: "uppercase", letterSpacing: "0.03em" }}>
+                    Last Worked
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {[...assignments]
+                  .sort((a, b) => {
+                    // Needs review first, then in progress, then not started, then reviewed
+                    const statusOrder: Record<ReviewState, number> = {
+                      pending_review: 0,
+                      not_started: 1,
+                      reviewed: 2,
+                      followup_scheduled: 3,
+                      resolved: 4,
+                    };
+                    const aOrder = a.questionsAnswered > 0 && !a.isComplete ? 0.5 : (statusOrder[a.reviewState] ?? 5);
+                    const bOrder = b.questionsAnswered > 0 && !b.isComplete ? 0.5 : (statusOrder[b.reviewState] ?? 5);
+                    if (aOrder !== bOrder) return aOrder - bOrder;
+                    // Then by most recent
+                    const aDate = a.lastWorkedAt ? new Date(a.lastWorkedAt).getTime() : 0;
+                    const bDate = b.lastWorkedAt ? new Date(b.lastWorkedAt).getTime() : 0;
+                    return bDate - aDate;
                   })
-                }
-              />
-            ))}
-          </div>
-        </div>
-      )}
+                  .map((assignment) => {
+                    const statusLabel = assignment.isComplete && assignment.reviewState === "pending_review"
+                      ? "Needs review"
+                      : !assignment.isComplete && assignment.questionsAnswered > 0
+                      ? "In progress"
+                      : assignment.questionsAnswered === 0
+                      ? "Not started"
+                      : assignment.reviewState === "reviewed" || assignment.reviewState === "resolved"
+                      ? "Completed"
+                      : assignment.reviewState === "followup_scheduled"
+                      ? "Follow-up"
+                      : "Completed";
 
-      {/* Not Started Assignments */}
-      {notStartedAssignments.length > 0 && (
-        <div style={{ marginBottom: "24px" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "8px" }}>
-            <h3 style={{ margin: 0, color: "var(--text-primary)", fontSize: "1rem", fontWeight: 600 }}>
-              Awaiting Submissions
-            </h3>
-            <span style={{ color: "var(--text-secondary)", fontSize: "0.85rem" }}>
-              ({notStartedAssignments.length})
-            </span>
-          </div>
-          <div style={{ borderRadius: "12px", overflow: "hidden", boxShadow: "0 1px 3px rgba(0, 0, 0, 0.08)" }}>
-            {notStartedAssignments.map((assignment) => (
-              <StudentAssignmentRow
-                key={assignment.lessonId}
-                assignment={assignment}
-                priority="awaiting-submissions"
-                onNavigate={() =>
-                  navigate(`/educator/assignment/${assignment.lessonId}/student/${studentId}`, {
-                    state: { fromStudent: studentId, studentName: student.name }
-                  })
-                }
-              />
-            ))}
-          </div>
-        </div>
-      )}
+                    const statusColor = statusLabel === "Needs review"
+                      ? { bg: "#fef3c7", color: "#92400e" }
+                      : statusLabel === "In progress"
+                      ? { bg: "#e0f2fe", color: "#0369a1" }
+                      : statusLabel === "Not started"
+                      ? { bg: "#f5f5f5", color: "#64748b" }
+                      : statusLabel === "Follow-up"
+                      ? { bg: "#fef3c7", color: "#92400e" }
+                      : { bg: "#e8f5e9", color: "#166534" };
 
-      {/* Completed & Reviewed (Collapsible) */}
-      {reviewedAssignments.length > 0 && (
-        <div style={{ marginBottom: "24px" }}>
-          <div
-            onClick={() => setShowCompleted(!showCompleted)}
-            style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "8px", cursor: "pointer" }}
-          >
-            <span
-              style={{
-                color: "var(--text-muted)",
-                fontSize: "0.8rem",
-                transform: showCompleted ? "rotate(90deg)" : "rotate(0deg)",
-                transition: "transform 0.2s",
-              }}
-            >
-              ▶
-            </span>
-            <h3 style={{ margin: 0, color: "var(--text-primary)", fontSize: "1rem", fontWeight: 600 }}>
-              Completed & Reviewed
-            </h3>
-            <span style={{ color: "var(--text-secondary)", fontSize: "0.85rem" }}>
-              ({reviewedAssignments.length})
-            </span>
+                    return (
+                      <tr
+                        key={assignment.lessonId}
+                        onClick={() =>
+                          navigate(`/educator/assignment/${assignment.lessonId}/student/${studentId}`, {
+                            state: { fromStudent: studentId, studentName: student.name },
+                          })
+                        }
+                        style={{ borderBottom: "1px solid #f1f5f9", cursor: "pointer" }}
+                        onMouseEnter={(e) => { e.currentTarget.style.background = "#f8fafc"; }}
+                        onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
+                      >
+                        <td style={{ padding: "12px 16px" }}>
+                          <div style={{ fontWeight: 600, fontSize: "0.9rem", color: "#1e293b" }}>{assignment.lessonTitle}</div>
+                        </td>
+                        <td style={{ padding: "12px", textAlign: "center" }}>
+                          <span style={{
+                            padding: "3px 10px",
+                            borderRadius: "10px",
+                            fontSize: "0.78rem",
+                            fontWeight: 500,
+                            background: statusColor.bg,
+                            color: statusColor.color,
+                            whiteSpace: "nowrap",
+                          }}>
+                            {statusLabel}
+                          </span>
+                        </td>
+                        <td style={{ padding: "12px", textAlign: "center" }}>
+                          {assignment.questionsAnswered > 0 ? (
+                            <span style={{
+                              padding: "3px 10px",
+                              borderRadius: "10px",
+                              fontSize: "0.78rem",
+                              fontWeight: 500,
+                              background: getUnderstandingBgColor(assignment.understanding),
+                              color: getUnderstandingColor(assignment.understanding),
+                              whiteSpace: "nowrap",
+                            }}>
+                              {getUnderstandingLabel(assignment.understanding)}
+                            </span>
+                          ) : (
+                            <span style={{ color: "#94a3b8", fontSize: "0.82rem" }}>—</span>
+                          )}
+                        </td>
+                        <td style={{ padding: "12px", textAlign: "center", fontSize: "0.85rem", color: "#475569" }}>
+                          {assignment.attempts || "—"}
+                        </td>
+                        <td style={{ padding: "12px", textAlign: "center", fontSize: "0.82rem", color: "#64748b", whiteSpace: "nowrap" }}>
+                          {assignment.lastWorkedAt
+                            ? new Date(assignment.lastWorkedAt).toLocaleDateString("en-US", { month: "short", day: "numeric" })
+                            : "—"}
+                        </td>
+                      </tr>
+                    );
+                  })}
+              </tbody>
+            </table>
           </div>
-          {showCompleted && (
-            <div style={{ borderRadius: "12px", overflow: "hidden", boxShadow: "0 1px 3px rgba(0, 0, 0, 0.08)" }}>
-              {reviewedAssignments.map((assignment) => (
-                <StudentAssignmentRow
-                  key={assignment.lessonId}
-                  assignment={assignment}
-                  priority="reviewed"
-                  onNavigate={() =>
-                    navigate(`/educator/assignment/${assignment.lessonId}/student/${studentId}`, {
-                      state: { fromStudent: studentId, studentName: student.name }
-                    })
-                  }
-                />
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Empty State */}
-      {assignments.length === 0 && (
-        <div className="card" style={{ textAlign: "center", padding: "32px", marginTop: "16px" }}>
-          <p style={{ color: "var(--text-secondary)" }}>No assignments found for this student.</p>
-        </div>
-      )}
+        )}
+      </div>
 
       {/* Student Profile Drawer */}
       <StudentProfileDrawer
@@ -872,10 +898,78 @@ function StudentAssignmentRow({ assignment, priority, onNavigate }: StudentAssig
 // Student Learning Snapshot
 // ============================================
 
+type OverallLevel = "strong" | "developing" | "needs-support" | "no-data";
+type TrendLevel = "improving" | "steady" | "declining" | "inconsistent" | "no-data";
+type SupportLevel = "none" | "check-in" | "follow-up" | "no-data";
+type WorkStatusLevel = "on-track" | "pending" | "at-risk" | "no-data";
+
 interface StudentSnapshot {
+  overall: OverallLevel;
+  trend: TrendLevel;
+  supportNeeded: SupportLevel;
+  workStatus: WorkStatusLevel;
+  workStatusDetail: string;
+  openCount: number;
   strengths: string;
   watchAreas: string;
   momentum: string;
+}
+
+// ============================================
+// Next Steps Engine
+// ============================================
+
+type NextStepPriority = "low" | "medium" | "high";
+
+interface NextStep {
+  label: string;
+  message: string;
+  priority: NextStepPriority;
+}
+
+function getNextStep(snapshot: StudentSnapshot): NextStep {
+  // HIGH: overdue work
+  if (snapshot.workStatus === "at-risk") {
+    return {
+      label: "Immediate check-in",
+      message: "Overdue work is piling up — prioritize this student",
+      priority: "high",
+    };
+  }
+
+  // MEDIUM: struggling student
+  if (snapshot.overall === "needs-support") {
+    return {
+      label: "Provide support",
+      message: "Student is struggling — schedule 1:1 support",
+      priority: "medium",
+    };
+  }
+
+  // MEDIUM: too many open assignments
+  if (snapshot.workStatus === "pending" && snapshot.openCount >= 3) {
+    return {
+      label: "Check-in recommended",
+      message: `${snapshot.openCount} assignments still open — check engagement`,
+      priority: "medium",
+    };
+  }
+
+  // LOW: strong but has pending work
+  if (snapshot.overall === "strong" && snapshot.workStatus === "pending") {
+    return {
+      label: "Light check-in",
+      message: "Strong performance — keep assignments moving",
+      priority: "low",
+    };
+  }
+
+  // DEFAULT
+  return {
+    label: "No action needed",
+    message: "On track",
+    priority: "low",
+  };
 }
 
 /**
@@ -884,18 +978,31 @@ interface StudentSnapshot {
  * Groups by subject (not assignment title) for cleaner output.
  */
 function computeStudentSnapshot(assignments: StudentAssignment[]): StudentSnapshot {
-  // Filter to assignments with activity
-  const withActivity = assignments.filter((a) => a.questionsAnswered > 0);
-  const completed = withActivity.filter((a) => a.isComplete);
+  // Filter to completed assignments (isComplete only — do NOT require reviewState === "reviewed")
+  const completed = assignments.filter((a) => a.isComplete);
 
-  // Sort completed by date (most recent first)
+  // Also track assignments with any activity (for strengths/watch areas)
+  const withActivity = assignments.filter((a) => a.questionsAnswered > 0 || a.isComplete);
+
+  // Sort completed by date (most recent first), fallback to lastWorkedAt
   const recentCompleted = [...completed]
     .sort((a, b) => {
-      const dateA = a.completedAt ? new Date(a.completedAt).getTime() : 0;
-      const dateB = b.completedAt ? new Date(b.completedAt).getTime() : 0;
+      const dateA = new Date(a.completedAt || a.lastWorkedAt || 0).getTime();
+      const dateB = new Date(b.completedAt || b.lastWorkedAt || 0).getTime();
       return dateB - dateA;
     })
-    .slice(0, 4); // Last 4 completed
+    .slice(0, 5); // Last 5 completed
+
+  // Debug logging — temporary
+  console.log("[snapshot] total assignments:", assignments.length);
+  console.log("[snapshot] completed (isComplete):", completed.length);
+  console.log("[snapshot] recentCompleted:", recentCompleted.map(a => ({
+    title: a.lessonTitle,
+    isComplete: a.isComplete,
+    understanding: a.understanding,
+    completedAt: a.completedAt,
+    reviewState: a.reviewState,
+  })));
 
   // ============================================
   // Group by Subject (not lesson title)
@@ -918,7 +1025,7 @@ function computeStudentSnapshot(assignments: StudentAssignment[]): StudentSnapsh
     const strongAssigns = assigns.filter((a) => a.understanding === "strong");
     const lowCoachGoodOutcome = assigns.filter(
       (a) => (a.understanding === "strong" || a.understanding === "developing") &&
-             a.coachSupport === "minimal"
+             (a.coachSupport === "none" || a.coachSupport === "minimal")
     );
 
     if (strongAssigns.length >= 1 && strongAssigns.length === assigns.length) {
@@ -937,30 +1044,35 @@ function computeStudentSnapshot(assignments: StudentAssignment[]): StudentSnapsh
   // Check for consistent completion pattern
   const hasConsistentCompletion = completed.length >= 3;
 
-  // Build strengths string with natural teacher-facing language
+  // Build strengths string with specific, actionable language
   let strengths: string;
   if (strengthSubjects.length === 0 && !hasConsistentCompletion) {
     if (withActivity.length === 0) {
-      strengths = "Still building — more completed work will reveal patterns.";
+      strengths = "No completed work yet.";
+    } else if (withActivity.length === 1) {
+      const a = withActivity[0];
+      if (a.understanding === "strong") {
+        strengths = `Strong on ${a.subject || a.lessonTitle} — need more data to confirm.`;
+      } else {
+        strengths = "One assignment completed — more needed to identify strengths.";
+      }
     } else {
-      strengths = "Patterns emerging as work continues.";
+      strengths = "No clear strengths yet — mixed across assignments.";
     }
   } else {
     const phrases: string[] = [];
+    // Add subjects with count context
+    strengthSubjects.slice(0, 2).forEach((subject) => {
+      const count = bySubject[subject]?.length || 0;
+      phrases.push(count > 1 ? `${subject} (${count} assignments)` : subject);
+    });
 
-    // Add up to 2 subjects
-    phrases.push(...strengthSubjects.slice(0, 2));
-
-    // Add consistent completion if we have room or it's the only thing
     if (hasConsistentCompletion && phrases.length < 2) {
-      phrases.push("consistent follow-through");
+      phrases.push(`finishes assignments consistently (${completed.length} completed)`);
     }
 
-    // Calculate extras (subjects beyond 2, plus completion if not shown)
-    const extraCount = Math.max(0, strengthSubjects.length - 2) +
-                       (hasConsistentCompletion && phrases.length === 2 && !phrases.includes("consistent follow-through") ? 1 : 0);
-
-    strengths = phrases.slice(0, 2).join(", ");
+    const extraCount = Math.max(0, strengthSubjects.length - 2);
+    strengths = phrases.join(", ");
     if (extraCount > 0) {
       strengths += ` +${extraCount} more`;
     }
@@ -976,7 +1088,7 @@ function computeStudentSnapshot(assignments: StudentAssignment[]): StudentSnapsh
     const needsSupport = assigns.filter((a) => a.understanding === "needs-support");
     const developingHighCoach = assigns.filter(
       (a) => a.understanding === "developing" &&
-             (a.coachSupport === "some" || a.coachSupport === "significant")
+             (a.coachSupport === "moderate" || a.coachSupport === "high")
     );
 
     if (needsSupport.length >= 1) {
@@ -1005,28 +1117,39 @@ function computeStudentSnapshot(assignments: StudentAssignment[]): StudentSnapsh
     }
   }
 
-  // Build watch areas string with natural teacher-facing language
+  // Build watch areas string with specific, actionable language
   let watchAreas: string;
   if (watchSubjects.length === 0 && !hasRecentRegression) {
-    watchAreas = "No immediate watch areas right now.";
+    if (withActivity.length === 0) {
+      watchAreas = "No data yet.";
+    } else {
+      watchAreas = "Nothing flagged — performing at or above expectations.";
+    }
   } else {
     const phrases: string[] = [];
 
-    // Add up to 2 subjects
-    phrases.push(...watchSubjects.slice(0, 2));
+    watchSubjects.slice(0, 2).forEach((subject) => {
+      const assigns = bySubject[subject] || [];
+      const needsSupport = assigns.filter((a) => a.understanding === "needs-support");
+      const highCoach = assigns.filter((a) => a.coachSupport === "high" || a.coachSupport === "moderate");
 
-    // Add regression note if we have room
+      if (needsSupport.length > 0) {
+        phrases.push(`${subject} — scored "needs support" on ${needsSupport.length} assignment${needsSupport.length > 1 ? "s" : ""}`);
+      } else if (highCoach.length > 0) {
+        phrases.push(`${subject} — needed significant coaching support`);
+      } else {
+        phrases.push(subject);
+      }
+    });
+
     if (hasRecentRegression && phrases.length < 2) {
-      phrases.push("recent dip in performance");
+      phrases.push("recent scores are lower than earlier work — may need a check-in");
     }
 
-    // Calculate extras
-    const extraCount = Math.max(0, watchSubjects.length - 2) +
-                       (hasRecentRegression && phrases.length === 2 && !phrases.includes("recent dip in performance") ? 1 : 0);
-
-    watchAreas = phrases.slice(0, 2).join(", ");
+    const extraCount = Math.max(0, watchSubjects.length - 2);
+    watchAreas = phrases.join("; ");
     if (extraCount > 0) {
-      watchAreas += ` +${extraCount} more`;
+      watchAreas += ` (+${extraCount} more)`;
     }
   }
 
@@ -1036,18 +1159,17 @@ function computeStudentSnapshot(assignments: StudentAssignment[]): StudentSnapsh
   let momentum: string;
 
   if (completed.length === 0) {
-    momentum = "Just getting started — no completed work yet.";
+    momentum = "No completed assignments yet.";
   } else if (recentCompleted.length < 2) {
-    momentum = "Early days — more completed work will show the trend.";
+    const a = recentCompleted[0];
+    momentum = `1 completed (${getUnderstandingLabel(a.understanding).toLowerCase()}) — need 2+ for trend.`;
   } else {
     const scoreMap: Record<string, number> = { "strong": 3, "developing": 2, "needs-support": 1 };
     const scores = recentCompleted.map((a) => scoreMap[a.understanding] || 0);
 
-    // Check for all strong
     if (scores.every((s) => s === 3)) {
-      momentum = "Performing consistently well across recent work.";
+      momentum = `Strong across last ${scores.length} — ready for more challenge.`;
     } else if (scores.length >= 2) {
-      // Compare first half (recent) to second half (older)
       const midpoint = Math.floor(scores.length / 2);
       const recentHalf = scores.slice(0, midpoint);
       const olderHalf = scores.slice(midpoint);
@@ -1056,28 +1178,115 @@ function computeStudentSnapshot(assignments: StudentAssignment[]): StudentSnapsh
       const olderAvg = olderHalf.reduce((a, b) => a + b, 0) / olderHalf.length;
 
       if (recentAvg > olderAvg + 0.3) {
-        momentum = "Improving over recent assignments.";
+        momentum = "Recent work is stronger than earlier assignments.";
       } else if (recentAvg < olderAvg - 0.3) {
-        momentum = "Recent work shows a dip — consider a quick check-in.";
+        momentum = "Recent scores dropping — consider a check-in.";
       } else {
-        // Mixed or stable
         const hasStrong = scores.includes(3);
         const hasNeedsSupport = scores.includes(1);
 
         if (hasStrong && hasNeedsSupport) {
-          momentum = "Mixed recently — strengths and gaps both showing.";
+          momentum = "Mixed — strong on some topics, needs support on others.";
         } else if (scores.every((s) => s >= 2)) {
-          momentum = "Steady progress with consistent engagement.";
+          momentum = "Steady — developing with some coaching support.";
         } else {
-          momentum = "Mixed recently — strengths and gaps both showing.";
+          momentum = "Mixed results across recent assignments.";
         }
       }
     } else {
-      momentum = "Early days — more completed work will show the trend.";
+      momentum = `${completed.length} completed — more data needed.`;
     }
   }
 
-  return { strengths, watchAreas, momentum };
+  // ============================================
+  // Scorecard: Overall
+  // ============================================
+  // Based on last 3–5 completed assignments
+  let overall: OverallLevel;
+  if (recentCompleted.length === 0) {
+    overall = "no-data";
+  } else {
+    const scoreMap: Record<string, number> = { "strong": 3, "developing": 2, "needs-support": 1 };
+    const avg = recentCompleted.reduce((sum, a) => sum + (scoreMap[a.understanding] || 0), 0) / recentCompleted.length;
+    if (avg >= 2.5) overall = "strong";
+    else if (avg >= 1.5) overall = "developing";
+    else overall = "needs-support";
+  }
+
+  // ============================================
+  // Scorecard: Trend
+  // ============================================
+  let trend: TrendLevel;
+  if (recentCompleted.length < 2) {
+    trend = "no-data";
+  } else {
+    const scoreMap: Record<string, number> = { "strong": 3, "developing": 2, "needs-support": 1 };
+    const scores = recentCompleted.map((a) => scoreMap[a.understanding] || 0);
+    const midpoint = Math.floor(scores.length / 2);
+    const recentHalf = scores.slice(0, midpoint);
+    const olderHalf = scores.slice(midpoint);
+    const recentAvg = recentHalf.reduce((a, b) => a + b, 0) / recentHalf.length;
+    const olderAvg = olderHalf.reduce((a, b) => a + b, 0) / olderHalf.length;
+
+    if (recentAvg > olderAvg + 0.3) trend = "improving";
+    else if (recentAvg < olderAvg - 0.3) trend = "declining";
+    else {
+      const hasStrong = scores.includes(3);
+      const hasNeedsSupport = scores.includes(1);
+      trend = (hasStrong && hasNeedsSupport) ? "inconsistent" : "steady";
+    }
+  }
+
+  // ============================================
+  // Scorecard: Support Needed
+  // ============================================
+  let supportNeeded: SupportLevel;
+  if (withActivity.length === 0) {
+    supportNeeded = "no-data";
+  } else {
+    const needsSupportCount = recentCompleted.filter((a) => a.understanding === "needs-support").length;
+    const highCoachCount = recentCompleted.filter((a) => a.coachSupport === "high" || a.coachSupport === "moderate").length;
+
+    if (needsSupportCount >= 2 || (needsSupportCount >= 1 && trend === "declining")) {
+      supportNeeded = "follow-up";
+    } else if (needsSupportCount >= 1 || highCoachCount >= 2 || trend === "declining" || trend === "inconsistent") {
+      supportNeeded = "check-in";
+    } else {
+      supportNeeded = "none";
+    }
+  }
+
+  // ============================================
+  // Scorecard: Work Status
+  // ============================================
+  const openAssignments = assignments.filter((a) => !a.isComplete);
+  const now = new Date();
+  const overdueAssignments = openAssignments.filter((a) => {
+    if (!a.dueDate) return false;
+    return new Date(a.dueDate + "T23:59:59") < now;
+  });
+
+  let workStatus: WorkStatusLevel;
+  let workStatusDetail: string;
+
+  if (assignments.length === 0) {
+    workStatus = "no-data";
+    workStatusDetail = "No assignments yet.";
+  } else if (overdueAssignments.length > 0) {
+    workStatus = "at-risk";
+    workStatusDetail = `${overdueAssignments.length} overdue, ${completed.length} completed`;
+  } else if (openAssignments.length > 0 && completed.length === 0) {
+    workStatus = "pending";
+    workStatusDetail = `${openAssignments.length} not started`;
+  } else if (openAssignments.length > 0) {
+    workStatus = "pending";
+    workStatusDetail = `${completed.length} completed, ${openAssignments.length} open`;
+  } else {
+    workStatus = "on-track";
+    workStatusDetail = `${completed.length} completed, none open`;
+  }
+
+  return { overall, trend, supportNeeded, workStatus, workStatusDetail, openCount: openAssignments.length, strengths, watchAreas, momentum };
 }
 
 // ============================================
@@ -1088,20 +1297,51 @@ interface StudentLearningSnapshotProps {
   snapshot: StudentSnapshot;
 }
 
+// Scorecard display config — colored text + icon on neutral background
+interface SignalConfig { icon: string; label: string; color: string }
+
+const OVERALL_CONFIG: Record<OverallLevel, SignalConfig> = {
+  "strong":        { icon: "●", label: "Strong",        color: "#166534" },
+  "developing":    { icon: "●", label: "Developing",    color: "#92400e" },
+  "needs-support": { icon: "●", label: "Needs Support", color: "#991b1b" },
+  "no-data":       { icon: "–", label: "No data",       color: "#9ca3af" },
+};
+
+const TREND_CONFIG: Record<TrendLevel, SignalConfig> = {
+  "improving":    { icon: "↗", label: "Improving",    color: "#166534" },
+  "steady":       { icon: "→", label: "Steady",       color: "#475569" },
+  "declining":    { icon: "↘", label: "Declining",    color: "#991b1b" },
+  "inconsistent": { icon: "↕", label: "Inconsistent", color: "#92400e" },
+  "no-data":      { icon: "–", label: "No data",      color: "#9ca3af" },
+};
+
+const NEXT_STEP_PRIORITY_CONFIG: Record<NextStepPriority, { icon: string; color: string }> = {
+  "high":   { icon: "!", color: "#991b1b" },
+  "medium": { icon: "◐", color: "#92400e" },
+  "low":    { icon: "✓", color: "#166534" },
+};
+
+const WORK_STATUS_CONFIG: Record<WorkStatusLevel, SignalConfig> = {
+  "on-track": { icon: "✓", label: "On track",  color: "#166534" },
+  "pending":  { icon: "◐", label: "Pending",   color: "#92400e" },
+  "at-risk":  { icon: "!", label: "At risk",    color: "#991b1b" },
+  "no-data":  { icon: "–", label: "No data",    color: "#9ca3af" },
+};
+
 function StudentLearningSnapshot({ snapshot }: StudentLearningSnapshotProps) {
   // Shared row style using CSS grid for consistent alignment
   const rowStyle: React.CSSProperties = {
     display: "grid",
-    gridTemplateColumns: "120px 1fr",
-    gap: "16px",
+    gridTemplateColumns: "100px 1fr",
+    gap: "12px",
     alignItems: "start",
   };
 
-  // Shared content text style - allows natural wrapping
+  // Shared content text style
   const contentStyle: React.CSSProperties = {
-    fontSize: "0.9rem",
+    fontSize: "0.85rem",
     color: "#374151",
-    lineHeight: 1.5,
+    lineHeight: 1.45,
     whiteSpace: "normal",
     wordBreak: "break-word",
   };
@@ -1116,6 +1356,27 @@ function StudentLearningSnapshot({ snapshot }: StudentLearningSnapshotProps) {
     whiteSpace: "nowrap",
   };
 
+  const nextStep = getNextStep(snapshot);
+  const nsPri = NEXT_STEP_PRIORITY_CONFIG[nextStep.priority];
+
+  const statusSignals: { title: string; config: SignalConfig; detail?: string }[] = [
+    { title: "Overall", config: OVERALL_CONFIG[snapshot.overall] },
+    { title: "Trend", config: TREND_CONFIG[snapshot.trend] },
+    { title: "Work Status", config: WORK_STATUS_CONFIG[snapshot.workStatus], detail: snapshot.workStatusDetail },
+  ];
+
+  const actionBtnStyle: React.CSSProperties = {
+    padding: "5px 12px",
+    fontSize: "0.78rem",
+    fontWeight: 500,
+    background: "white",
+    color: "#475569",
+    border: "1px solid #d1d5db",
+    borderRadius: "6px",
+    cursor: "pointer",
+    transition: "background 0.15s",
+  };
+
   return (
     <div
       className="card"
@@ -1127,58 +1388,129 @@ function StudentLearningSnapshot({ snapshot }: StudentLearningSnapshotProps) {
     >
       <h3
         style={{
-          margin: "0 0 16px 0",
+          margin: "0 0 14px 0",
           color: "#1f2937",
           fontSize: "1rem",
           fontWeight: 600,
         }}
       >
-        Student Learning Insights
+        Student Snapshot
       </h3>
 
-      <div style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
-        {/* Doing well in */}
-        <div style={rowStyle}>
-          <span
+      {/* Scorecard row */}
+      <div
+        style={{
+          display: "flex",
+          gap: "10px",
+          marginBottom: "16px",
+          flexWrap: "wrap",
+        }}
+      >
+        {statusSignals.map((s) => (
+          <div
+            key={s.title}
             style={{
-              ...labelBaseStyle,
-              color: "#166534",
-              background: "#f0fdf4",
+              flex: "1 1 0",
+              minWidth: "110px",
+              background: "#ffffff",
+              border: "1px solid #e5e7eb",
+              borderRadius: "8px",
+              padding: "10px 12px",
+              textAlign: "center",
             }}
           >
-            Doing well in
+            <div style={{ fontSize: "0.65rem", fontWeight: 500, color: "#9ca3af", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "4px" }}>
+              {s.title}
+            </div>
+            <div style={{ fontSize: "0.85rem", fontWeight: 600, color: s.config.color }}>
+              {s.config.icon} {s.config.label}
+            </div>
+            {s.detail && (
+              <div style={{ fontSize: "0.7rem", color: "#9ca3af", marginTop: "3px" }}>
+                {s.detail}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+
+      {/* Next Steps */}
+      <div
+        style={{
+          background: "#ffffff",
+          border: "1px solid #e5e7eb",
+          borderRadius: "8px",
+          padding: "12px 16px",
+          marginBottom: "16px",
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: nextStep.priority !== "low" || nextStep.label !== "No action needed" ? "10px" : "0" }}>
+          <span style={{ fontSize: "0.65rem", fontWeight: 500, color: "#9ca3af", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+            Next Step
+          </span>
+          <span style={{ fontSize: "0.85rem", fontWeight: 600, color: nsPri.color }}>
+            {nsPri.icon} {nextStep.label}
+          </span>
+        </div>
+        {(nextStep.priority !== "low" || nextStep.label !== "No action needed") && (
+          <div style={{ fontSize: "0.82rem", color: "#6b7280", marginBottom: "10px" }}>
+            {nextStep.message}
+          </div>
+        )}
+        <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+          <button
+            style={actionBtnStyle}
+            onClick={() => console.log("[next-step] Check in")}
+            onMouseEnter={(e) => { e.currentTarget.style.background = "#f3f4f6"; }}
+            onMouseLeave={(e) => { e.currentTarget.style.background = "white"; }}
+          >
+            Check in
+          </button>
+          <button
+            style={actionBtnStyle}
+            onClick={() => console.log("[next-step] Assign practice")}
+            onMouseEnter={(e) => { e.currentTarget.style.background = "#f3f4f6"; }}
+            onMouseLeave={(e) => { e.currentTarget.style.background = "white"; }}
+          >
+            Assign practice
+          </button>
+          <button
+            style={actionBtnStyle}
+            onClick={() => console.log("[next-step] Mark for follow-up")}
+            onMouseEnter={(e) => { e.currentTarget.style.background = "#f3f4f6"; }}
+            onMouseLeave={(e) => { e.currentTarget.style.background = "white"; }}
+          >
+            Mark for follow-up
+          </button>
+        </div>
+      </div>
+
+      {/* Detail rows */}
+      <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+        {/* Strong in */}
+        <div style={rowStyle}>
+          <span style={{ ...labelBaseStyle, color: "#166534", background: "#f0fdf4" }}>
+            Strong in
           </span>
           <span style={contentStyle}>
             {snapshot.strengths}
           </span>
         </div>
 
-        {/* Keep an eye on */}
+        {/* Watch */}
         <div style={rowStyle}>
-          <span
-            style={{
-              ...labelBaseStyle,
-              color: "#78716c",
-              background: "#f5f5f4",
-            }}
-          >
-            Keep an eye on
+          <span style={{ ...labelBaseStyle, color: "#78716c", background: "#f5f5f4" }}>
+            Watch
           </span>
           <span style={contentStyle}>
             {snapshot.watchAreas}
           </span>
         </div>
 
-        {/* Learning trend */}
+        {/* Trend */}
         <div style={rowStyle}>
-          <span
-            style={{
-              ...labelBaseStyle,
-              color: "#475569",
-              background: "#f1f5f9",
-            }}
-          >
-            Learning trend
+          <span style={{ ...labelBaseStyle, color: "#475569", background: "#f1f5f9" }}>
+            Trend
           </span>
           <span style={contentStyle}>
             {snapshot.momentum}

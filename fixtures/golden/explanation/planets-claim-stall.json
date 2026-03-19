@@ -1,0 +1,41 @@
+{
+  "id": "planets-claim-stall",
+  "tags": ["regression", "claim-only-stall"],
+  "expectedVerdict": "PASS",
+  "expectedIssueCodes": [],
+  "notes": "Claim-only stall: student gives 3 vague claims without naming any planet. Coach should escalate from specificity probe to hint to model-and-ask. No premature wrap.",
+  "mode": "explanation",
+  "name": "planets: claim-only stall × 3 turns",
+  "promptInput": "What are planets made of? Give examples.",
+  "requiredEvidence": {
+    "minEntities": 2,
+    "entityLabel": "planets",
+    "attributeLabel": "materials",
+    "minAttributeTypes": 2,
+    "requirePairing": true
+  },
+  "referenceFacts": {
+    "Mercury": ["rock", "metal"],
+    "Venus": ["rock"],
+    "Earth": ["rock", "metal"],
+    "Mars": ["rock"],
+    "Jupiter": ["gas"],
+    "Saturn": ["gas"],
+    "Uranus": ["ice", "gas"],
+    "Neptune": ["ice", "gas"]
+  },
+  "successCriteria": [
+    "States that planets are made of different materials.",
+    "Names at least two specific planets.",
+    "Describes what each named planet is made of."
+  ],
+  "hints": ["Think about what you know about Earth and other planets."],
+  "transcript": [
+    { "role": "coach", "message": "What are planets made of?" },
+    { "role": "student", "message": "they are made of different stuff" },
+    { "role": "coach", "message": "Can you name a specific planet?" },
+    { "role": "student", "message": "there are many kinds of planets" },
+    { "role": "coach", "message": "Here's a hint: think about Earth." },
+    { "role": "student", "message": "each planet is different" }
+  ]
+}

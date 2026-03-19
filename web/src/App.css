@@ -896,3 +896,10 @@ textarea::placeholder {
   background: var(--border-muted);
   color: var(--text-secondary);
 }
+
+/* Student Assignment Review — responsive 2-column layout */
+@media (max-width: 900px) {
+  .two-col-layout {
+    grid-template-columns: 1fr !important;
+  }
+}

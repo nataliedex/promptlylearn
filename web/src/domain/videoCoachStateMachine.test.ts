@@ -13,8 +13,17 @@ import {
   containsCorrectLanguage,
   buildRetryPrompt,
   classifyStudentUtterance,
+  shouldApplyMasteryStop,
+  isProceduralQuestion,
   CORRECT_THRESHOLD,
+  MASTERY_STOP_THRESHOLD,
+  PROCEDURAL_MASTERY_THRESHOLD,
   VideoCoachState,
+  buildProbeFromQuestion,
+  isShortAnswerValidForCoachQuestion,
+  normalizeNumberWordsClient,
+  containsMathContent,
+  isInterrogativeMathAnswer,
 } from "./videoCoachStateMachine";
 
 // Helper to build a default state
@@ -1800,6 +1809,821 @@ describe("computeVideoCoachAction — utterance classification", () => {
     const action = computeVideoCoachAction(state);
     expect(action.type).not.toBe("EVALUATE_ANSWER");
     expect(action.stateUpdates.attemptCount).toBe(0); // NOT incremented
+  });
+});
+
+// ============================================================================
+// isProceduralQuestion
+// ============================================================================
+
+describe("isProceduralQuestion", () => {
+  test("detects explicit math operations", () => {
+    expect(isProceduralQuestion("What is 25 + 37?")).toBe(true);
+    expect(isProceduralQuestion("Solve 48 - 19")).toBe(true);
+    expect(isProceduralQuestion("What is 6 × 7?")).toBe(true);
+  });
+
+  test("detects explain-your-steps questions with math context", () => {
+    expect(isProceduralQuestion("Explain your thinking for calculating 15 - 7")).toBe(true);
+    expect(isProceduralQuestion("Explain the steps you used to add 25 + 37")).toBe(true);
+    expect(isProceduralQuestion("Solve the problem: 48 - 19")).toBe(true);
+  });
+
+  test("rejects explain-your-steps questions without math context", () => {
+    expect(isProceduralQuestion("Explain your thinking about what makes a good community helper")).toBe(false);
+    expect(isProceduralQuestion("Explain the steps for writing a good story")).toBe(false);
+  });
+
+  test("detects math keyword questions", () => {
+    expect(isProceduralQuestion("Find the sum of 15 and 23")).toBe(true);
+    expect(isProceduralQuestion("What is the difference between 50 and 28?")).toBe(true);
+    expect(isProceduralQuestion("Subtract 12 from 30")).toBe(true);
+  });
+
+  test("rejects non-procedural questions", () => {
+    expect(isProceduralQuestion("What is the sun made of?")).toBe(false);
+    expect(isProceduralQuestion("Why do animals migrate?")).toBe(false);
+    expect(isProceduralQuestion("Describe what happens during photosynthesis")).toBe(false);
+  });
+
+  test("tightened 'solve' — rejects non-math solve", () => {
+    expect(isProceduralQuestion("Solve the mystery of why leaves change color")).toBe(false);
+  });
+
+  test("tightened 'solve' — still matches math solve", () => {
+    expect(isProceduralQuestion("Solve 24 + 38 and show your work")).toBe(true);
+    expect(isProceduralQuestion("Solve the equation 5x = 25")).toBe(true);
+    expect(isProceduralQuestion("Solve the problem correctly")).toBe(true);
+  });
+});
+
+// ============================================================================
+// shouldApplyMasteryStop
+// ============================================================================
+
+describe("shouldApplyMasteryStop", () => {
+  test("score >= 85, PROBE, attemptCount >= 1 → WRAP (standard mastery stop)", () => {
+    const result = shouldApplyMasteryStop({
+      score: 88,
+      turnKind: "PROBE",
+      attemptCount: 1,
+      criteriaMet: true,
+      utteranceIntent: "CONTENT_ANSWER",
+    });
+    expect(result).toEqual({ shouldContinue: false, turnKind: "WRAP" });
+  });
+
+  test("score >= 85, PROBE, attemptCount === 0 → no override (first attempt, non-procedural)", () => {
+    const result = shouldApplyMasteryStop({
+      score: 88,
+      turnKind: "PROBE",
+      attemptCount: 0,
+      criteriaMet: true,
+      utteranceIntent: "CONTENT_ANSWER",
+    });
+    expect(result).toBeNull();
+  });
+
+  test("score >= 90, PROBE, procedural question, attemptCount === 0 → WRAP (procedural fast-track)", () => {
+    const result = shouldApplyMasteryStop({
+      score: 92,
+      turnKind: "PROBE",
+      attemptCount: 0,
+      questionText: "What is 25 + 37?",
+      criteriaMet: true,
+      utteranceIntent: "CONTENT_ANSWER",
+    });
+    expect(result).toEqual({ shouldContinue: false, turnKind: "WRAP" });
+  });
+
+  test("score < 85, PROBE, attemptCount >= 1 → no override (below threshold)", () => {
+    const result = shouldApplyMasteryStop({
+      score: 80,
+      turnKind: "PROBE",
+      attemptCount: 1,
+    });
+    expect(result).toBeNull();
+  });
+
+  test("score >= 85, FEEDBACK turnKind → no override (only applies to PROBE)", () => {
+    const result = shouldApplyMasteryStop({
+      score: 90,
+      turnKind: "FEEDBACK",
+      attemptCount: 2,
+    });
+    expect(result).toBeNull();
+  });
+
+  test("score >= 85, WRAP turnKind → no override (already wrapping)", () => {
+    const result = shouldApplyMasteryStop({
+      score: 90,
+      turnKind: "WRAP",
+      attemptCount: 2,
+    });
+    expect(result).toBeNull();
+  });
+
+  test("score >= 90, procedural, non-PROBE → no override", () => {
+    const result = shouldApplyMasteryStop({
+      score: 95,
+      turnKind: "FEEDBACK",
+      attemptCount: 0,
+      questionText: "What is 25 + 37?",
+    });
+    expect(result).toBeNull();
+  });
+
+  test("score 85 exactly (boundary), PROBE, attemptCount 1 → WRAP", () => {
+    const result = shouldApplyMasteryStop({
+      score: MASTERY_STOP_THRESHOLD,
+      turnKind: "PROBE",
+      attemptCount: 1,
+      criteriaMet: true,
+      utteranceIntent: "CONTENT_ANSWER",
+    });
+    expect(result).toEqual({ shouldContinue: false, turnKind: "WRAP" });
+  });
+
+  test("score 90 exactly (boundary), PROBE, procedural, attemptCount 0 → WRAP", () => {
+    const result = shouldApplyMasteryStop({
+      score: PROCEDURAL_MASTERY_THRESHOLD,
+      turnKind: "PROBE",
+      attemptCount: 0,
+      questionText: "Solve 48 - 19",
+      criteriaMet: true,
+      utteranceIntent: "CONTENT_ANSWER",
+    });
+    expect(result).toEqual({ shouldContinue: false, turnKind: "WRAP" });
+  });
+
+  test("score 89, PROBE, procedural, attemptCount 0 → no override (below procedural threshold)", () => {
+    const result = shouldApplyMasteryStop({
+      score: 89,
+      turnKind: "PROBE",
+      attemptCount: 0,
+      questionText: "Solve 48 - 19",
+    });
+    expect(result).toBeNull();
+  });
+
+  test("no questionText provided → procedural fast-track skipped, standard rule applies", () => {
+    // Score 92, attemptCount 0, no questionText → no procedural fast-track, and
+    // standard rule requires attemptCount >= 1, so no override
+    const result = shouldApplyMasteryStop({
+      score: 92,
+      turnKind: "PROBE",
+      attemptCount: 0,
+    });
+    expect(result).toBeNull();
+  });
+});
+
+// ============================================================================
+// buildProbeFromQuestion — client-side fallback probe builder
+// ============================================================================
+
+describe("buildProbeFromQuestion", () => {
+  test("science examples question: asks for planet names, NOT procedural", () => {
+    const probe = buildProbeFromQuestion(
+      "How would you explain what planets are made of? Can you give examples of different planets and their materials?",
+      "some planets are made of rock and some are made of gas or ice"
+    );
+    expect(probe).toMatch(/two planets/i);
+    expect(probe).not.toMatch(/first step/i);
+    expect(probe).not.toMatch(/what did you get/i);
+  });
+
+  test("science examples question: asks about materials when planets already named", () => {
+    const probe = buildProbeFromQuestion(
+      "Can you give examples of different planets and their materials?",
+      "Jupiter and Mars are different kinds of planets"
+    );
+    expect(probe).toMatch(/what is it made of/i);
+    expect(probe).not.toMatch(/first step/i);
+  });
+
+  test("math procedural: returns math-explicit probe for show-your-work", () => {
+    const probe = buildProbeFromQuestion(
+      "What is 59 - 25? Show your work.",
+      "34"
+    );
+    // Should be a procedural prompt — walk through steps or first step
+    expect(probe).toMatch(/step|solve/i);
+    // Must be math-explicit, not generic
+    expect(probe).not.toMatch(/planet/i);
+  });
+
+  test("math procedural: asks 'why that order' when student gave steps", () => {
+    const probe = buildProbeFromQuestion(
+      "What is 59 - 25? Show your work.",
+      "first I did 59 minus 20 then subtracted 5"
+    );
+    expect(probe).toMatch(/why|order/i);
+  });
+
+  test("math procedural fallback uses math-explicit language", () => {
+    const probe = buildProbeFromQuestion(
+      "Calculate 12 + 7.",
+      "I would add them"
+    );
+    expect(probe).toMatch(/math problem/i);
+    expect(probe).not.toMatch(/what did you get/i);
+  });
+
+  test("REGRESSION: non-math question does NOT get procedural probe", () => {
+    const probe = buildProbeFromQuestion(
+      "What are planets made of? Give examples.",
+      "they are made of stuff"
+    );
+    expect(probe).not.toMatch(/first step/i);
+    expect(probe).not.toMatch(/what did you get/i);
+    expect(probe).not.toMatch(/math problem/i);
+  });
+
+  test("list-type answer gets 'tell me more about' probe", () => {
+    const probe = buildProbeFromQuestion(
+      "What animals live in the forest?",
+      "bears, deer, and rabbits"
+    );
+    expect(probe).toMatch(/you mentioned/i);
+    expect(probe).toMatch(/tell me more/i);
+  });
+
+  test("describe/explain question gets example probe", () => {
+    const probe = buildProbeFromQuestion(
+      "Describe what happens when water freezes.",
+      "it gets cold"
+    );
+    expect(probe).toMatch(/example|detail/i);
+  });
+
+  test("generic question gets default Socratic probe", () => {
+    const probe = buildProbeFromQuestion(
+      "What is your favorite season?",
+      "summer"
+    );
+    expect(probe).toMatch(/why you think/i);
+  });
+});
+
+// ============================================================================
+// normalizeNumberWordsClient
+// ============================================================================
+
+describe("normalizeNumberWordsClient", () => {
+  test("converts single number words to digits", () => {
+    expect(normalizeNumberWordsClient("a five")).toBe("a 5");
+    expect(normalizeNumberWordsClient("twenty")).toBe("20");
+  });
+
+  test("converts compound number words", () => {
+    expect(normalizeNumberWordsClient("twenty five")).toBe("25");
+    expect(normalizeNumberWordsClient("thirty-two")).toBe("32");
+  });
+
+  test("leaves digits unchanged", () => {
+    expect(normalizeNumberWordsClient("25")).toBe("25");
+  });
+
+  test("handles mixed text", () => {
+    expect(normalizeNumberWordsClient("you get five")).toBe("you get 5");
+  });
+});
+
+// ============================================================================
+// isShortAnswerValidForCoachQuestion
+// ============================================================================
+
+describe("isShortAnswerValidForCoachQuestion", () => {
+  test('"a five" is valid for "What do you get when you add 1 and 4?"', () => {
+    expect(
+      isShortAnswerValidForCoachQuestion("a five", "What do you get when you add 1 and 4?")
+    ).toBe(true);
+  });
+
+  test('"five" is valid for "What do you get when you add 1 and 4?"', () => {
+    expect(
+      isShortAnswerValidForCoachQuestion("five", "What do you get when you add 1 and 4?")
+    ).toBe(true);
+  });
+
+  test('"20" is valid for "What do you get when you add 10 and 10?"', () => {
+    expect(
+      isShortAnswerValidForCoachQuestion("20", "What do you get when you add 10 and 10?")
+    ).toBe(true);
+  });
+
+  test('"carry the one" is valid for a regroup question', () => {
+    expect(
+      isShortAnswerValidForCoachQuestion(
+        "carry the one",
+        "What happens when the ones add up to more than 9?"
+      )
+    ).toBe(true);
+  });
+
+  test('"to the tens place" is valid for "Where does the extra ten go?"', () => {
+    expect(
+      isShortAnswerValidForCoachQuestion(
+        "to the tens place",
+        "Where does the extra ten go?"
+      )
+    ).toBe(true);
+  });
+
+  test('"calculators" is NOT valid for a math sub-question', () => {
+    expect(
+      isShortAnswerValidForCoachQuestion(
+        "calculators",
+        "What do you get when you add 1 and 4?"
+      )
+    ).toBe(false);
+  });
+
+  test('"I don\'t know" is NOT valid', () => {
+    expect(
+      isShortAnswerValidForCoachQuestion(
+        "I don't know",
+        "What do you get when you add 1 and 4?"
+      )
+    ).toBe(false);
+  });
+
+  test("returns false when no coach question provided", () => {
+    expect(
+      isShortAnswerValidForCoachQuestion("a five", "")
+    ).toBe(false);
+  });
+});
+
+// ============================================================================
+// Context-aware short-answer: computeVideoCoachAction integration
+// ============================================================================
+
+describe("computeVideoCoachAction — context-aware short answers", () => {
+  test('"a five" with coach context → EVALUATE_ANSWER, not OFFER_HINT', () => {
+    const action = computeVideoCoachAction(
+      makeState({
+        latestStudentResponse: "a five",
+        lastCoachQuestion: "What do you get when you add 1 and 4?",
+        attemptCount: 1,
+      })
+    );
+    expect(action.type).toBe("EVALUATE_ANSWER");
+    expect(action.type).not.toBe("OFFER_HINT");
+  });
+
+  test('"20" with coach context → EVALUATE_ANSWER', () => {
+    const action = computeVideoCoachAction(
+      makeState({
+        latestStudentResponse: "20",
+        lastCoachQuestion: "What do you get when you add 10 and 10?",
+        attemptCount: 1,
+      })
+    );
+    expect(action.type).toBe("EVALUATE_ANSWER");
+  });
+
+  test('"carry the one" with coach context → EVALUATE_ANSWER', () => {
+    const action = computeVideoCoachAction(
+      makeState({
+        latestStudentResponse: "carry the one",
+        lastCoachQuestion: "What happens when the ones add up to more than 9?",
+        attemptCount: 1,
+      })
+    );
+    expect(action.type).toBe("EVALUATE_ANSWER");
+  });
+
+  test('"I don\'t know" still triggers OFFER_HINT even with coach context', () => {
+    const action = computeVideoCoachAction(
+      makeState({
+        latestStudentResponse: "I don't know",
+        lastCoachQuestion: "What do you get when you add 1 and 4?",
+        attemptCount: 0,
+      })
+    );
+    expect(action.type).toBe("OFFER_HINT");
+  });
+
+  test('"calculators" without math content still triggers low-confidence path', () => {
+    const action = computeVideoCoachAction(
+      makeState({
+        latestStudentResponse: "um",
+        lastCoachQuestion: "What do you get when you add 1 and 4?",
+        attemptCount: 0,
+      })
+    );
+    expect(action.type).toBe("OFFER_HINT");
+  });
+
+  test('"a five" WITHOUT coach context → still OFFER_HINT (no context to validate against)', () => {
+    const action = computeVideoCoachAction(
+      makeState({
+        latestStudentResponse: "a five",
+        attemptCount: 0,
+      })
+    );
+    expect(action.type).toBe("OFFER_HINT");
+  });
+});
+
+// ============================================================================
+// No-speech retry + hint-offer override regression tests (Request K)
+// ============================================================================
+
+describe("no-speech retry preserves activeMathQuestion", () => {
+  test("PART 1: activeMathQuestion survives no-speech — 'five' after retry → EVALUATE_ANSWER", () => {
+    // Scenario: Coach asked "What do you get when you add 1 and 4?"
+    // Student: (no speech) → coach: "I didn't catch that..." (hint offer)
+    // Student: "five" — should use activeMathQuestion for context
+    const action = computeVideoCoachAction(
+      makeState({
+        latestStudentResponse: "five",
+        attemptCount: 0,
+        hintOfferPending: false,
+        // lastCoachQuestion is the retry message (procedural)
+        lastCoachQuestion: "I didn't catch that — would you like a hint, or would you like to try again?",
+        // activeMathQuestion preserves the original math sub-question
+        activeMathQuestion: "What do you get when you add 1 and 4?",
+      })
+    );
+    // "five" normalizes to "5", activeMathQuestion has "1 and 4" → context valid → EVALUATE_ANSWER
+    expect(action.type).toBe("EVALUATE_ANSWER");
+  });
+
+  test("PART 2: 'five' after no-speech retry with hintOfferPending → EVALUATE_ANSWER (math content bypass)", () => {
+    // Scenario: After no-speech, hintOfferPending=true. Student says "five"
+    // instead of responding to hint offer. Should bypass hint parsing.
+    const action = computeVideoCoachAction(
+      makeState({
+        latestStudentResponse: "five",
+        attemptCount: 0,
+        hintOfferPending: true,
+        lastCoachQuestion: "I didn't catch that — would you like a hint, or would you like to try again?",
+        activeMathQuestion: "What do you get when you add 1 and 4?",
+      })
+    );
+    expect(action.type).toBe("EVALUATE_ANSWER");
+  });
+
+  test("PART 3a: hintOfferPending + '1 + 4 = 5' → EVALUATE_ANSWER (equation bypasses hint)", () => {
+    const action = computeVideoCoachAction(
+      makeState({
+        latestStudentResponse: "1 + 4 = 5",
+        attemptCount: 0,
+        hintOfferPending: true,
+        activeMathQuestion: "What do you get when you add 1 and 4?",
+      })
+    );
+    expect(action.type).toBe("EVALUATE_ANSWER");
+  });
+
+  test("PART 3b: hintOfferPending + '10 + 10 = 20' → EVALUATE_ANSWER (equation bypasses hint)", () => {
+    const action = computeVideoCoachAction(
+      makeState({
+        latestStudentResponse: "10 + 10 = 20",
+        attemptCount: 0,
+        hintOfferPending: true,
+        activeMathQuestion: "What do you get when you add the tens? 10 + 10?",
+      })
+    );
+    expect(action.type).toBe("EVALUATE_ANSWER");
+  });
+
+  test("PART 3c: hintOfferPending + 'No 1 + 4 = 5' → EVALUATE_ANSWER (not hint decline)", () => {
+    // "No 1 + 4 = 5" starts with "No" which would match hint-decline pattern.
+    // But it contains math content, so should bypass hint parsing.
+    const action = computeVideoCoachAction(
+      makeState({
+        latestStudentResponse: "No 1 + 4 = 5",
+        attemptCount: 0,
+        hintOfferPending: true,
+        activeMathQuestion: "What do you get when you add 1 and 4?",
+      })
+    );
+    expect(action.type).toBe("EVALUATE_ANSWER");
+  });
+
+  test("hintOfferPending + genuine 'yes' → still DELIVER_HINT (no math content)", () => {
+    // Sanity check: actual hint acceptance still works
+    const action = computeVideoCoachAction(
+      makeState({
+        latestStudentResponse: "yes please",
+        attemptCount: 0,
+        hintOfferPending: true,
+        activeMathQuestion: "What do you get when you add 1 and 4?",
+      })
+    );
+    expect(action.type).toBe("DELIVER_HINT");
+  });
+
+  test("hintOfferPending + genuine 'no' (without math) → RETRY_AFTER_DECLINE", () => {
+    // Sanity check: actual hint decline without math content still works
+    const action = computeVideoCoachAction(
+      makeState({
+        latestStudentResponse: "no",
+        attemptCount: 0,
+        hintOfferPending: true,
+        hintDeclineCount: 0,
+        activeMathQuestion: "What do you get when you add 1 and 4?",
+      })
+    );
+    expect(action.type).toBe("RETRY_AFTER_DECLINE");
+  });
+});
+
+describe("containsMathContent", () => {
+  test("'five' contains math content (number word)", () => {
+    expect(containsMathContent("five")).toBe(true);
+  });
+
+  test("'1 + 4 = 5' contains math content", () => {
+    expect(containsMathContent("1 + 4 = 5")).toBe(true);
+  });
+
+  test("'No 1 + 4 = 5' contains math content", () => {
+    expect(containsMathContent("No 1 + 4 = 5")).toBe(true);
+  });
+
+  test("'ten plus ten' contains math content", () => {
+    expect(containsMathContent("ten plus ten")).toBe(true);
+  });
+
+  test("'yes please' does NOT contain math content", () => {
+    expect(containsMathContent("yes please")).toBe(false);
+  });
+
+  test("'no' does NOT contain math content", () => {
+    expect(containsMathContent("no")).toBe(false);
+  });
+
+  test("'I don't know' does NOT contain math content", () => {
+    expect(containsMathContent("I don't know")).toBe(false);
+  });
+
+  // Dedup regression: these phrases must be detected as math so the dedup
+  // preserves the server's deterministic remediation response.
+  test("'is the answer three' contains math content (number word)", () => {
+    expect(containsMathContent("is the answer three")).toBe(true);
+  });
+
+  test("'I think the answer is three' contains math content", () => {
+    expect(containsMathContent("I think the answer is three")).toBe(true);
+  });
+
+  test("'I think the answer is three is that right' contains math content", () => {
+    expect(containsMathContent("I think the answer is three is that right")).toBe(true);
+  });
+
+  test("'20 + 5 is 15' contains math content", () => {
+    expect(containsMathContent("20 + 5 is 15")).toBe(true);
+  });
+
+  test("'three' contains math content (bare number word)", () => {
+    expect(containsMathContent("three")).toBe(true);
+  });
+});
+
+// ============================================================================
+// hasReasoningSteps: bypass generic hint flow for math reasoning-step prompts
+// ============================================================================
+
+describe("hasReasoningSteps hint bypass", () => {
+  function makeReasoningState(overrides: Partial<VideoCoachState> = {}): VideoCoachState {
+    return makeState({
+      hasReasoningSteps: true,
+      ...overrides,
+    });
+  }
+
+  test("low confidence 'I don't know' → EVALUATE_ANSWER (not OFFER_HINT) when hasReasoningSteps", () => {
+    const action = computeVideoCoachAction(
+      makeReasoningState({ latestStudentResponse: "I don't know" })
+    );
+    expect(action.type).toBe("EVALUATE_ANSWER");
+    expect(action.shouldContinue).toBe(true);
+    // No attempt increment for uncertainty
+    expect(action.stateUpdates.attemptCount).toBe(0);
+  });
+
+  test("without hasReasoningSteps, 'I don't know' still → OFFER_HINT", () => {
+    const action = computeVideoCoachAction(
+      makeState({ latestStudentResponse: "I don't know" })
+    );
+    expect(action.type).toBe("OFFER_HINT");
+  });
+
+  test("explicit hint request → EVALUATE_ANSWER (not DELIVER_HINT) when hasReasoningSteps", () => {
+    const action = computeVideoCoachAction(
+      makeReasoningState({ latestStudentResponse: "Can I have a hint?" })
+    );
+    expect(action.type).toBe("EVALUATE_ANSWER");
+    expect(action.shouldContinue).toBe(true);
+    // No attempt increment for hint requests
+    expect(action.stateUpdates.attemptCount).toBe(0);
+  });
+
+  test("without hasReasoningSteps, explicit hint request → DELIVER_HINT", () => {
+    const action = computeVideoCoachAction(
+      makeState({ latestStudentResponse: "Can I have a hint?" })
+    );
+    expect(action.type).toBe("DELIVER_HINT");
+  });
+
+  test("hint offer pending + accept → EVALUATE_ANSWER (not DELIVER_HINT) when hasReasoningSteps", () => {
+    const action = computeVideoCoachAction(
+      makeReasoningState({
+        latestStudentResponse: "Yes please",
+        hintOfferPending: true,
+      })
+    );
+    // Should fall through hintOfferPending and reach EVALUATE_ANSWER
+    expect(action.type).toBe("EVALUATE_ANSWER");
+  });
+
+  test("no speech → ASK_RETRY (not OFFER_HINT) when hasReasoningSteps", () => {
+    const action = computeVideoCoachAction(
+      makeReasoningState({ latestStudentResponse: "" })
+    );
+    expect(action.type).toBe("ASK_RETRY");
+    // No attempt increment for no-speech
+    expect(action.stateUpdates.attemptCount).toBe(0);
+  });
+
+  test("substantive answer → EVALUATE_ANSWER with attempt increment when hasReasoningSteps", () => {
+    const action = computeVideoCoachAction(
+      makeReasoningState({ latestStudentResponse: "I think 1 plus 4 equals 5" })
+    );
+    expect(action.type).toBe("EVALUATE_ANSWER");
+    // Substantive answers DO increment attempt count
+    expect(action.stateUpdates.attemptCount).toBe(1);
+  });
+
+  test("short math answer with coach context → EVALUATE_ANSWER with attempt increment", () => {
+    const action = computeVideoCoachAction(
+      makeReasoningState({
+        latestStudentResponse: "5",
+        lastCoachQuestion: "What do you get when you add 1 and 4?",
+        activeMathQuestion: "What do you get when you add 1 and 4?",
+      })
+    );
+    expect(action.type).toBe("EVALUATE_ANSWER");
+    // Context-valid short answers increment attempt count
+    expect(action.stateUpdates.attemptCount).toBe(1);
+  });
+
+  test("hint request does not increment attemptCount when hasReasoningSteps", () => {
+    const action = computeVideoCoachAction(
+      makeReasoningState({
+        latestStudentResponse: "give me a hint",
+        attemptCount: 1,
+      })
+    );
+    expect(action.type).toBe("EVALUATE_ANSWER");
+    expect(action.stateUpdates.attemptCount).toBe(1); // unchanged
+  });
+
+  test("'I don't know' does not increment attemptCount when hasReasoningSteps", () => {
+    const action = computeVideoCoachAction(
+      makeReasoningState({
+        latestStudentResponse: "I don't know",
+        attemptCount: 2,
+      })
+    );
+    expect(action.type).toBe("EVALUATE_ANSWER");
+    expect(action.stateUpdates.attemptCount).toBe(2); // unchanged
+  });
+});
+
+// ============================================================================
+// isInterrogativeMathAnswer
+// ============================================================================
+
+describe("isInterrogativeMathAnswer", () => {
+  test("'Is it three?' → true (spelled-out number in question)", () => {
+    expect(isInterrogativeMathAnswer("Is it three?")).toBe(true);
+  });
+
+  test("'Is the answer three?' → true", () => {
+    expect(isInterrogativeMathAnswer("Is the answer three?")).toBe(true);
+  });
+
+  test("'Could it be 3?' → true (digit in question)", () => {
+    expect(isInterrogativeMathAnswer("Could it be 3?")).toBe(true);
+  });
+
+  test("'So is it 25?' → true", () => {
+    expect(isInterrogativeMathAnswer("So is it 25?")).toBe(true);
+  });
+
+  test("'Is it twenty-five?' → true (compound number word)", () => {
+    expect(isInterrogativeMathAnswer("Is it twenty-five?")).toBe(true);
+  });
+
+  test("'I don't know?' → false (no number)", () => {
+    expect(isInterrogativeMathAnswer("I don't know?")).toBe(false);
+  });
+
+  test("'three' → false (no interrogative frame, no question mark)", () => {
+    expect(isInterrogativeMathAnswer("three")).toBe(false);
+  });
+
+  test("'Can I have a hint?' → false (no number)", () => {
+    expect(isInterrogativeMathAnswer("Can I have a hint?")).toBe(false);
+  });
+
+  test("'?' → false (bare question mark, no number)", () => {
+    expect(isInterrogativeMathAnswer("?")).toBe(false);
+  });
+
+  test("'five' → false (no interrogative frame, no question mark)", () => {
+    expect(isInterrogativeMathAnswer("five")).toBe(false);
+  });
+
+  // STT-noisy variants (no trailing "?", stutters, filler words)
+  test("'is is it three' → true (STT stutter + interrogative frame + number word)", () => {
+    expect(isInterrogativeMathAnswer("is is it three")).toBe(true);
+  });
+
+  test("'I still think the answer is three is it' → true (interrogative frame at end)", () => {
+    expect(isInterrogativeMathAnswer("I still think the answer is three is it")).toBe(true);
+  });
+
+  test("'oh is it five' → true (filler + interrogative frame + number word)", () => {
+    expect(isInterrogativeMathAnswer("oh is it five")).toBe(true);
+  });
+
+  test("'um is it 3' → true (filler + interrogative frame + digit, no ?)", () => {
+    expect(isInterrogativeMathAnswer("um is it 3")).toBe(true);
+  });
+
+  test("'is the answer twenty five' → true (interrogative frame + compound number word)", () => {
+    expect(isInterrogativeMathAnswer("is the answer twenty five")).toBe(true);
+  });
+
+  test("'so is it like 25' → true (interrogative frame with filler)", () => {
+    expect(isInterrogativeMathAnswer("so is it like 25")).toBe(true);
+  });
+
+  test("'I added them' → false (no number, no interrogative frame)", () => {
+    expect(isInterrogativeMathAnswer("I added them")).toBe(false);
+  });
+});
+
+// ============================================================================
+// isLowConfidenceResponse — interrogative candidate answers
+// ============================================================================
+
+describe("isLowConfidenceResponse — interrogative math answers", () => {
+  test("'Is it 3?' → false (short but contains interrogative candidate answer)", () => {
+    expect(isLowConfidenceResponse("Is it 3?")).toBe(false);
+  });
+
+  test("'Is it three?' → false", () => {
+    expect(isLowConfidenceResponse("Is it three?")).toBe(false);
+  });
+
+  test("'Could it be 3?' → false", () => {
+    expect(isLowConfidenceResponse("Could it be 3?")).toBe(false);
+  });
+
+  test("'Is the answer three?' → false", () => {
+    expect(isLowConfidenceResponse("Is the answer three?")).toBe(false);
+  });
+
+  test("'So is it 25?' → false", () => {
+    expect(isLowConfidenceResponse("So is it 25?")).toBe(false);
+  });
+
+  test("'Is it twenty-five?' → false", () => {
+    expect(isLowConfidenceResponse("Is it twenty-five?")).toBe(false);
+  });
+
+  // STT-noisy variants
+  test("'is is it three' → false (STT stutter, still an interrogative math answer)", () => {
+    expect(isLowConfidenceResponse("is is it three")).toBe(false);
+  });
+
+  test("'oh is it five' → false (filler + interrogative frame)", () => {
+    expect(isLowConfidenceResponse("oh is it five")).toBe(false);
+  });
+
+  test("'I still think the answer is three is it' → false", () => {
+    expect(isLowConfidenceResponse("I still think the answer is three is it")).toBe(false);
+  });
+
+  // Existing behavior preserved
+  test("'?' → still true (bare question mark has no candidate answer)", () => {
+    expect(isLowConfidenceResponse("?")).toBe(true);
+  });
+
+  test("'I don't know' → still true", () => {
+    expect(isLowConfidenceResponse("I don't know")).toBe(true);
+  });
+
+  test("'hmm' → still true", () => {
+    expect(isLowConfidenceResponse("hmm")).toBe(true);
   });
 });
 

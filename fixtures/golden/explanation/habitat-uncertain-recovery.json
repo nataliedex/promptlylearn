@@ -1,0 +1,36 @@
+{
+  "id": "habitat-uncertain-recovery",
+  "tags": ["regression", "uncertainty-escalation"],
+  "expectedVerdict": "PASS",
+  "expectedIssueCodes": [],
+  "notes": "Student says 'I don't know', coach encourages, student recovers with one entity-attribute pair. Partial evidence, not mastery — no premature wrap.",
+  "mode": "explanation",
+  "name": "habitat: uncertain → encouragement → partial evidence",
+  "promptInput": "What does habitat mean? Give examples.",
+  "requiredEvidence": {
+    "minEntities": 2,
+    "entityLabel": "animals",
+    "attributeLabel": "habitats",
+    "minAttributeTypes": 2,
+    "requirePairing": true
+  },
+  "referenceFacts": {
+    "fish": ["liquid", "ocean", "lake", "river"],
+    "bird": ["tree", "forest", "sky"],
+    "bear": ["forest", "cave"],
+    "camel": ["desert"],
+    "penguin": ["ice", "snow"]
+  },
+  "successCriteria": [
+    "Explains what a habitat is.",
+    "Names at least two animals.",
+    "Describes the habitat for each named animal."
+  ],
+  "hints": [],
+  "transcript": [
+    { "role": "coach", "message": "What does habitat mean? Give examples." },
+    { "role": "student", "message": "I don't know" },
+    { "role": "coach", "message": "No worries! Can you name one animal and tell me about it?" },
+    { "role": "student", "message": "fish live in water" }
+  ]
+}

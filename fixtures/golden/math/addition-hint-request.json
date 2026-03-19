@@ -1,0 +1,51 @@
+{
+  "id": "addition-hint-request",
+  "tags": ["regression", "hint-request"],
+  "expectedVerdict": "PASS",
+  "expectedIssueCodes": [],
+  "notes": "Student asks for a hint on the first step, gets STEP_HINT with exact operands (1 and 4), then completes all steps. Tests hint alignment to missing step.",
+  "mode": "math",
+  "name": "11+14: hint request → step hint → mastery",
+  "mathProblem": {
+    "skill": "two_digit_addition",
+    "a": 11,
+    "b": 14,
+    "expression": "11 + 14",
+    "correctAnswer": 25,
+    "requiresRegrouping": false,
+    "expectedStrategyTags": ["add ones", "add tens", "combine"]
+  },
+  "reasoningSteps": [
+    {
+      "id": "step_ones",
+      "label": "Add the ones",
+      "expectedStatements": ["1 + 4 = 5"],
+      "probe": "What do you get when you add 1 and 4?",
+      "kind": "ones_sum"
+    },
+    {
+      "id": "step_tens",
+      "label": "Add the tens",
+      "expectedStatements": ["10 + 10 = 20"],
+      "probe": "What do you get when you add 10 and 10?",
+      "kind": "tens_sum"
+    },
+    {
+      "id": "step_combine",
+      "label": "Combine",
+      "expectedStatements": ["20 + 5 = 25"],
+      "probe": "What do you get when you put 20 and 5 together?",
+      "kind": "combine"
+    }
+  ],
+  "transcript": [
+    { "role": "coach", "message": "Let's solve 11 + 14." },
+    { "role": "student", "message": "Can I have a hint?" },
+    { "role": "coach", "message": "Here's a hint: try adding 1 plus 4." },
+    { "role": "student", "message": "1 + 4 = 5" },
+    { "role": "coach", "message": "Good. What do you get when you add 10 and 10?" },
+    { "role": "student", "message": "10 + 10 = 20" },
+    { "role": "coach", "message": "Now combine them. What is 20 + 5?" },
+    { "role": "student", "message": "20 + 5 = 25" }
+  ]
+}

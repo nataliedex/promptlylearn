@@ -1,0 +1,54 @@
+{
+  "id": "lesson-1772719018102",
+  "title": "What Are Planets Made Of?",
+  "description": "what planets are made of",
+  "difficulty": "intermediate",
+  "gradeLevel": "3",
+  "prompts": [
+    {
+      "id": "q1",
+      "type": "explain",
+      "input": "How would you explain what planets are made of? Can you give examples of different planets and their materials?",
+      "hints": [
+        "Think about what you know about Earth and other planets.",
+        "Consider the types of materials you might find on a rocky planet versus a gas giant."
+      ],
+      "assessment": {
+        "learningObjective": "Explain what planets are made of using examples.",
+        "successCriteria": [
+          "States that planets are made of different materials such as rock, gas, or ice.",
+          "Names at least two specific planets (e.g., Earth, Jupiter, Mars, Saturn).",
+          "Describes what each named planet is made of (e.g., Earth is rocky, Jupiter is mostly gas)."
+        ],
+        "misconceptions": [
+          "Believes all planets are made of the same materials.",
+          "Thinks that planets are only made of gas.",
+          "Does not understand that some planets have solid surfaces."
+        ],
+        "evaluationFocus": [
+          "understanding",
+          "clarity"
+        ],
+        "requiredEvidence": {
+          "minEntities": 2,
+          "entityLabel": "planets",
+          "attributeLabel": "materials",
+          "minAttributeTypes": 2,
+          "requirePairing": true
+        },
+        "referenceFacts": {
+          "Mercury": ["rock", "metal"],
+          "Venus": ["rock"],
+          "Earth": ["rock", "metal"],
+          "Mars": ["rock"],
+          "Jupiter": ["gas"],
+          "Saturn": ["gas"],
+          "Uranus": ["ice", "gas"],
+          "Neptune": ["ice", "gas"]
+        }
+      }
+    }
+  ],
+  "subject": "Science",
+  "systemIndex": "Math 3.4"
+}

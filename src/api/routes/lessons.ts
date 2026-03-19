@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { loadLesson, getAllLessons } from "../../loaders/lessonLoader";
-import { generateLesson, generateSingleQuestion, generateAssessmentData, type LessonParams } from "../../domain/lessonGenerator";
+import { generateLesson, generateSingleQuestion, generateAssessmentData, generateQuestionPackage, type LessonParams } from "../../domain/lessonGenerator";
 import { saveLesson, archiveLesson, unarchiveLesson, deleteLesson, getArchivedLessons, updateLessonSubject, generateSystemIndex } from "../../stores/lessonStore";
 import { StudentAssignmentStore } from "../../stores/studentAssignmentStore";
 import { ClassStore } from "../../stores/classStore";
@@ -11,6 +11,7 @@ import { StudentStore } from "../../stores/studentStore";
 import { SessionStore } from "../../stores/sessionStore";
 import { ChecklistActionKey, CHECKLIST_ACTIONS } from "../../domain/recommendation";
 import { deriveReviewState } from "../../domain/studentAssignment";
+import { reconcileMathPromptFromText } from "../../domain/mathProblemGenerator";
 import { getStudentAssignmentDerivedInsights } from "../../stores/derivedInsightStore";
 
 const router = Router();
@@ -30,7 +31,7 @@ router.get("/", (req, res) => {
       description: lesson.description,
       difficulty: lesson.difficulty,
       gradeLevel: lesson.gradeLevel,
-      promptCount: lesson.prompts.length,
+      promptCount: lesson.prompts?.length ?? 0,
       subject: lesson.subject,
       systemIndex: lesson.systemIndex,
     }));
@@ -56,7 +57,7 @@ router.get("/unassigned", (req, res) => {
       description: lesson.description,
       difficulty: lesson.difficulty,
       gradeLevel: lesson.gradeLevel,
-      promptCount: lesson.prompts.length,
+      promptCount: lesson.prompts?.length ?? 0,
       subject: lesson.subject,
       systemIndex: lesson.systemIndex,
     }));
@@ -147,7 +148,7 @@ router.post("/generate-question", async (req, res) => {
 // POST /api/lessons/generate-assessment - Generate assessment data for a question
 router.post("/generate-assessment", async (req, res) => {
   try {
-    const { questionText, lessonContext, subject, gradeLevel, difficulty, lessonDescription } = req.body;
+    const { questionText, lessonContext, subject, gradeLevel, difficulty, lessonDescription, blueprintId, filledSlots } = req.body;
 
     if (!questionText || !lessonContext) {
       return res.status(400).json({
@@ -155,21 +156,68 @@ router.post("/generate-assessment", async (req, res) => {
       });
     }
 
-    const assessment = await generateAssessmentData(questionText, lessonContext, {
+    const result = await generateAssessmentData(questionText, lessonContext, {
       subject: subject || undefined,
       gradeLevel: gradeLevel || undefined,
       difficulty: difficulty || undefined,
       lessonDescription: lessonDescription || undefined,
+      blueprintId: blueprintId || undefined,
+      filledSlots: filledSlots || undefined,
     });
 
-    if (!assessment) {
+    if (!result) {
       return res.status(500).json({ error: "Failed to generate assessment data" });
     }
 
-    res.json(assessment);
+    // Return assessment + coaching probes + concept anchor in one response
+    res.json({
+      ...result.assessment,
+      allowedProbes: result.allowedProbes,
+      retryQuestions: result.retryQuestions,
+      conceptAnchor: result.conceptAnchor,
+    });
   } catch (error) {
     console.error("Error generating assessment:", error);
     res.status(500).json({ error: "Failed to generate assessment data" });
+  }
+});
+
+// POST /api/lessons/generate-question-package - Generate question + hints + assessment in one call
+router.post("/generate-question-package", async (req, res) => {
+  try {
+    const {
+      questionText, lessonContext, gradeLevel, subject,
+      difficulty, lessonDescription, existingQuestions, regenerate,
+      blueprintId, filledSlots,
+    } = req.body;
+
+    if (!questionText || !lessonContext || !regenerate) {
+      return res.status(400).json({
+        error: "questionText, lessonContext, and regenerate are required",
+      });
+    }
+
+    const result = await generateQuestionPackage({
+      questionText,
+      lessonContext,
+      gradeLevel: gradeLevel || undefined,
+      subject: subject || undefined,
+      difficulty: difficulty || undefined,
+      lessonDescription: lessonDescription || undefined,
+      existingQuestions: existingQuestions || [],
+      blueprintId: blueprintId || undefined,
+      filledSlots: filledSlots || undefined,
+      regenerate,
+    });
+
+    if (!result) {
+      return res.status(500).json({ error: "Failed to generate question package" });
+    }
+
+    res.json(result);
+  } catch (error) {
+    console.error("Error generating question package:", error);
+    res.status(500).json({ error: "Failed to generate question package" });
   }
 });
 
@@ -185,8 +233,16 @@ router.post("/", (req, res) => {
       });
     }
 
-    const filePath = saveLesson(lesson);
-    res.status(201).json({ lesson, filePath });
+    // Reconcile ALL prompts: if visible text contains a math expression,
+    // rebuild mathProblem + hints + rubric from the teacher's authored numbers.
+    // Teacher-authored values are the source of truth — they always win.
+    const reconciledPrompts = lesson.prompts.map((p: any) =>
+      reconcileMathPromptFromText(p)
+    );
+    const reconciledLesson = { ...lesson, prompts: reconciledPrompts };
+
+    const filePath = saveLesson(reconciledLesson);
+    res.status(201).json({ lesson: reconciledLesson, filePath });
   } catch (error) {
     console.error("Error saving lesson:", error);
     res.status(500).json({ error: "Failed to save lesson" });
@@ -204,7 +260,7 @@ router.get("/archived/list", (req, res) => {
       description: lesson.description,
       difficulty: lesson.difficulty,
       gradeLevel: lesson.gradeLevel,
-      promptCount: lesson.prompts.length,
+      promptCount: lesson.prompts?.length ?? 0,
       subject: lesson.subject,
       systemIndex: lesson.systemIndex,
       archivedAt: (lesson as any).archivedAt,
@@ -295,6 +351,34 @@ router.patch("/:id/subject", (req, res) => {
   } catch (error) {
     console.error("Error updating lesson subject:", error);
     res.status(500).json({ error: "Failed to update lesson subject" });
+  }
+});
+
+// PATCH /api/lessons/:id/due-date - Update assignment due date
+router.patch("/:id/due-date", (req, res) => {
+  try {
+    const { id } = req.params;
+    const { classId, dueDate } = req.body;
+
+    if (!classId || typeof classId !== "string") {
+      return res.status(400).json({ error: "classId is required" });
+    }
+
+    // dueDate can be a string (ISO date) or null to clear
+    if (dueDate !== null && dueDate !== undefined && typeof dueDate !== "string") {
+      return res.status(400).json({ error: "dueDate must be a string or null" });
+    }
+
+    const updated = studentAssignmentStore.updateDueDate(id, classId, dueDate ?? null);
+
+    if (updated === 0) {
+      return res.status(404).json({ error: "No assignments found for this lesson and class" });
+    }
+
+    res.json({ success: true, lessonId: id, classId, dueDate: dueDate ?? null, updatedCount: updated });
+  } catch (error) {
+    console.error("Error updating due date:", error);
+    res.status(500).json({ error: "Failed to update due date" });
   }
 });
 

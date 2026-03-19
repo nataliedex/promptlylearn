@@ -198,6 +198,57 @@ router.put("/:id", (req, res) => {
   }
 });
 
+// POST /api/sessions/:id/draft - Auto-save draft state (sendBeacon-compatible)
+router.post("/:id/draft", (req, res) => {
+  try {
+    const existingSession = sessionStore.load(req.params.id);
+    if (!existingSession) {
+      return res.status(404).json({ error: "Session not found" });
+    }
+
+    if (existingSession.status === "completed") {
+      return res.status(409).json({ error: "Session already completed" });
+    }
+
+    const { draftState, currentPromptIndex, mode } = req.body;
+
+    const updatedSession: Session = {
+      ...existingSession,
+      status: "paused" as const,
+      draftState: draftState || undefined,
+      currentPromptIndex: currentPromptIndex ?? existingSession.currentPromptIndex,
+      mode: mode ?? existingSession.mode,
+      pausedAt: new Date(),
+    };
+
+    sessionStore.save(updatedSession);
+    res.status(204).send();
+  } catch (error) {
+    console.error("Error saving draft:", error);
+    res.status(500).json({ error: "Failed to save draft" });
+  }
+});
+
+// DELETE /api/sessions/:id/draft - Clear draft state
+router.delete("/:id/draft", (req, res) => {
+  try {
+    const existingSession = sessionStore.load(req.params.id);
+    if (!existingSession) {
+      return res.status(404).json({ error: "Session not found" });
+    }
+
+    if (existingSession.draftState) {
+      const { draftState, ...rest } = existingSession;
+      sessionStore.save(rest as Session);
+    }
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error("Error clearing draft:", error);
+    res.status(500).json({ error: "Failed to clear draft" });
+  }
+});
+
 // DELETE /api/sessions/:id - Delete session
 router.delete("/:id", (req, res) => {
   try {

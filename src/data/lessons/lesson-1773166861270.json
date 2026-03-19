@@ -1,0 +1,187 @@
+{
+  "id": "lesson-1773166861270",
+  "title": "Understanding Addition with Regrouping TESTING LESSON",
+  "description": "Explore how to add two-digit numbers using regrouping.",
+  "difficulty": "intermediate",
+  "gradeLevel": "2",
+  "subject": "Math",
+  "prompts": [
+    {
+      "id": "q1",
+      "type": "explain",
+      "input": "Solve 14+11. Tell what you did when adding the ones.",
+      "hints": [
+        "Start with the ones place: what is 4 + 1?",
+        "Then add the tens place digits."
+      ],
+      "blueprintId": "math_regrouping_focus",
+      "filledSlots": {
+        "expression": "14 + 11"
+      },
+      "mathProblem": {
+        "skill": "two_digit_addition",
+        "a": 14,
+        "b": 11,
+        "expression": "14 + 11",
+        "correctAnswer": 25,
+        "requiresRegrouping": false,
+        "expectedStrategyTags": [
+          "add ones",
+          "add tens"
+        ]
+      },
+      "assessment": {
+        "learningObjective": "Explain how to add two-digit numbers by using regrouping.",
+        "expectedReasoningSteps": [
+          "Step 1: Identify the ones digits in 14 and 11.",
+          "Step 2: Add the ones digits together (4 + 1).",
+          "Step 3: Explain if the sum of the ones is 10 or more.",
+          "Step 4: If the sum is 10 or more, regroup by carrying over to the tens.",
+          "Step 5: Add the tens digits together, including any regrouped value."
+        ],
+        "reasoningSteps": [
+          {
+            "id": "step_1",
+            "label": "Add the ones",
+            "expectedStatements": [
+              "4 + 1 = 5"
+            ],
+            "probe": "What do you get when you add 4 and 1?",
+            "kind": "ones_sum"
+          },
+          {
+            "id": "step_2",
+            "label": "Add the tens",
+            "expectedStatements": [
+              "10 + 10 = 20"
+            ],
+            "probe": "What do you get when you add 10 and 10?",
+            "kind": "tens_sum"
+          },
+          {
+            "id": "step_3",
+            "label": "Combine the totals",
+            "expectedStatements": [
+              "20 + 5 = 25",
+              "The final answer is 25"
+            ],
+            "probe": "What do you get when you combine 20 and 5?",
+            "kind": "combine"
+          }
+        ],
+        "expectedConcepts": [
+          "The ones digits are 4 and 1.",
+          "The sum of the ones is 5.",
+          "The tens digits are 1 and 1.",
+          "The final answer is 25."
+        ],
+        "successCriteria": [
+          "States that the ones digits are 4 and 1.",
+          "Explains that 4 + 1 = 5.",
+          "States that there is no regrouping needed.",
+          "States that the final answer is 25."
+        ],
+        "misconceptions": [
+          "Says 34 because they added the tens incorrectly.",
+          "States that the answer is 15 because they forgot to add the tens.",
+          "Claims that 4 + 1 equals 6."
+        ],
+        "scoringLevels": {
+          "strong": "Explains that the ones are 4 and 1, states that 4 + 1 = 5, and gives the final answer of 25.",
+          "developing": "Gives the correct final answer of 25 but misses explaining the addition of the ones.",
+          "needsSupport": "States an incorrect answer or does not explain the addition process."
+        },
+        "referenceFacts": {
+          "key": [
+            "The ones digits are 4 and 1.",
+            "The final answer is 25."
+          ]
+        },
+        "requiredExamples": "The student must provide at least one example of adding the ones.",
+        "validVocabulary": [
+          "ones",
+          "tens",
+          "regrouping",
+          "sum",
+          "add",
+          "carry over",
+          "total",
+          "14",
+          "11",
+          "25"
+        ],
+        "evaluationFocus": [
+          "understanding",
+          "reasoning",
+          "evidence"
+        ],
+        "requiredEvidence": {
+          "minEntities": 2,
+          "entityLabel": "numbers",
+          "attributeLabel": "place values",
+          "minAttributeTypes": 2,
+          "requirePairing": true
+        },
+        "allowedProbes": [
+          "What do you get when you add 4 and 1?",
+          "What do you do if the sum of the ones is 10 or more?",
+          "What is the total when you add the tens digits?"
+        ],
+        "retryQuestions": [
+          "Can you start by telling me what the ones digits are?",
+          "What happens when you add 4 and 1?",
+          "Can you explain what you do after adding the ones?"
+        ],
+        "conceptAnchor": {
+          "anchorSentence": "This question is about adding two-digit numbers using regrouping.",
+          "coreConcepts": [
+            "adding ones",
+            "regrouping",
+            "final sum",
+            "place value"
+          ],
+          "allowedEntities": [
+            "14",
+            "11",
+            "25"
+          ],
+          "allowedAttributes": [
+            "ones digit",
+            "tens digit"
+          ],
+          "offTopicConcepts": [
+            "subtraction",
+            "multiplication",
+            "fractions",
+            "decimals",
+            "division",
+            "negative numbers",
+            "algebra"
+          ]
+        }
+      },
+      "allowedProbes": [
+        "What is 4 + 1?",
+        "What is 1 + 1 in the tens place?"
+      ],
+      "retryQuestions": [
+        "Let's start with the ones. What is 4 + 1?",
+        "Try adding 14 and 11 step by step, starting with the ones place."
+      ],
+      "conceptAnchor": {
+        "anchorSentence": "Solve 14 + 11",
+        "coreConcepts": [
+          "arithmetic",
+          "two digit addition"
+        ],
+        "allowedEntities": [
+          "14",
+          "11"
+        ],
+        "allowedAttributes": [],
+        "offTopicConcepts": []
+      }
+    }
+  ],
+  "systemIndex": "Math 2.10"
+}

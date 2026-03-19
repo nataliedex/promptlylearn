@@ -1,0 +1,125 @@
+{
+  "id": "lesson-1773076827188",
+  "title": "Adding Two-Digit Numbers Without Regrouping A",
+  "description": "Learn how to add two-digit numbers easily without regrouping.",
+  "difficulty": "intermediate",
+  "gradeLevel": "2",
+  "subject": "Math",
+  "prompts": [
+    {
+      "id": "q1",
+      "type": "explain",
+      "input": "Solve 11 + 14. Tell how you got your answer.",
+      "hints": [
+        "Look at the tens and ones separately.",
+        "Add the ones first, then the tens."
+      ],
+      "blueprintId": "math_solve_and_explain",
+      "filledSlots": {
+        "expression": "11 + 14"
+      },
+      "mathProblem": {
+        "skill": "two_digit_addition",
+        "a": 11,
+        "b": 14,
+        "expression": "11 + 14",
+        "correctAnswer": 25,
+        "requiresRegrouping": false,
+        "expectedStrategyTags": [
+          "add ones",
+          "add tens"
+        ]
+      },
+      "assessment": {
+        "learningObjective": "Explain how to add 11 and 14 by adding the ones and tens separately.",
+        "expectedReasoningSteps": [
+          "Add the ones: 1 + 4 = 5",
+          "Add the tens: 10 + 10 = 20",
+          "Combine the totals: 20 + 5 = 25"
+        ],
+        "reasoningSteps": [
+          {
+            "id": "step_1",
+            "label": "Add the ones",
+            "expectedStatements": [
+              "1 + 4 = 5"
+            ],
+            "probe": "What do you get when you add 1 and 4?",
+            "kind": "ones_sum"
+          },
+          {
+            "id": "step_2",
+            "label": "Add the tens",
+            "expectedStatements": [
+              "10 + 10 = 20"
+            ],
+            "probe": "What do you get when you add 10 and 10?",
+            "kind": "tens_sum"
+          },
+          {
+            "id": "step_3",
+            "label": "Combine the totals",
+            "expectedStatements": [
+              "20 + 5 = 25",
+              "The final answer is 25"
+            ],
+            "probe": "What do you get when you combine 20 and 5?",
+            "kind": "combine"
+          }
+        ],
+        "expectedConcepts": [
+          "11 is made of 10 and 1",
+          "14 is made of 10 and 4",
+          "1 + 4 = 5",
+          "10 + 10 = 20",
+          "20 + 5 = 25"
+        ],
+        "successCriteria": [
+          "States that 1 + 4 = 5",
+          "States that 10 + 10 = 20",
+          "States that 20 + 5 = 25",
+          "States that the final answer is 25"
+        ],
+        "misconceptions": [
+          "Says 20 because they added 10 + 10 but forgot to add 1 + 4",
+          "Says 5 because they only added the ones",
+          "Gives 25 but cannot explain how they got it"
+        ],
+        "scoringLevels": {
+          "strong": "States that 1 + 4 = 5, states that 10 + 10 = 20, states that 20 + 5 = 25, and gives the final answer 25.",
+          "developing": "Gives the correct answer or part of the explanation, but misses one or more key steps.",
+          "needsSupport": "Gives an incorrect answer, incomplete explanation, or unrelated response."
+        },
+        "referenceFacts": {
+          "11": [
+            "1 ones",
+            "1 tens"
+          ],
+          "14": [
+            "4 ones",
+            "1 tens"
+          ]
+        },
+        "requiredExamples": "Says how to add the ones and tens and gives the final answer 25.",
+        "validVocabulary": [
+          "ones",
+          "tens",
+          "add",
+          "total",
+          "sum"
+        ]
+      },
+      "allowedProbes": [
+        "What do you get when you add 1 and 4?",
+        "What do you get when you add 10 and 10?",
+        "What do you get when you combine 20 and 5?"
+      ],
+      "retryQuestions": [
+        "Can you start with the ones digits, 1 and 4?",
+        "Now what do you get when you add 10 and 10?",
+        "What is the total when you put it all together?"
+      ]
+    }
+  ],
+  "systemIndex": "Math 2.7"
+}

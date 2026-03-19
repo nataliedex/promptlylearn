@@ -78,29 +78,6 @@ export default function AssignmentPreviewPanel({ lesson, onClose }: AssignmentPr
                 {lesson.gradeLevel}
               </span>
             )}
-            <span
-              style={{
-                fontSize: "0.75rem",
-                padding: "3px 8px",
-                background:
-                  lesson.difficulty === "beginner"
-                    ? "#e8f5e9"
-                    : lesson.difficulty === "intermediate"
-                    ? "#fff3e0"
-                    : "#ffebee",
-                color:
-                  lesson.difficulty === "beginner"
-                    ? "#2e7d32"
-                    : lesson.difficulty === "intermediate"
-                    ? "#ed6c02"
-                    : "#d32f2f",
-                borderRadius: "4px",
-                fontWeight: 500,
-                textTransform: "capitalize",
-              }}
-            >
-              {lesson.difficulty}
-            </span>
           </div>
 
           {/* Description */}
@@ -323,14 +300,22 @@ function QuestionCard({ prompt, index }: { prompt: Prompt; index: number }) {
 function CorrectnessCriteriaPanel({ assessment }: { assessment?: PromptAssessment }) {
   const [showMisconceptions, setShowMisconceptions] = useState(false);
 
-  const hasCriteria = assessment && (
+  const hasStructuredCriteria = assessment && (
     assessment.learningObjective ||
+    (assessment.expectedConcepts && assessment.expectedConcepts.length > 0) ||
+    assessment.requiredExamples ||
+    (assessment.validVocabulary && assessment.validVocabulary.length > 0) ||
+    assessment.scoringLevels
+  );
+
+  // Legacy check: old-format lessons may only have successCriteria
+  const hasLegacyCriteria = assessment && !hasStructuredCriteria && (
     (assessment.successCriteria && assessment.successCriteria.length > 0) ||
     (assessment.evaluationFocus && assessment.evaluationFocus.length > 0)
   );
 
-  // Graceful fallback for legacy assignments without criteria
-  if (!hasCriteria) {
+  // Graceful fallback for assignments without any criteria
+  if (!hasStructuredCriteria && !hasLegacyCriteria) {
     return (
       <div style={{
         padding: "10px 16px",
@@ -345,7 +330,8 @@ function CorrectnessCriteriaPanel({ assessment }: { assessment?: PromptAssessmen
     );
   }
 
-  const hasMisconceptions = assessment.misconceptions && assessment.misconceptions.length > 0;
+  const hasMisconceptions = assessment!.misconceptions && assessment!.misconceptions.length > 0;
+  const sectionLabelStyle = { fontSize: "0.72rem", fontWeight: 500 as const, color: "#5a7a9e", marginBottom: "3px" };
 
   return (
     <div style={{
@@ -369,75 +355,62 @@ function CorrectnessCriteriaPanel({ assessment }: { assessment?: PromptAssessmen
         Used for scoring and coach feedback
       </div>
 
-      {/* Learning Objective */}
-      {assessment.learningObjective && (
+      {/* 1. Learning Objective */}
+      {assessment!.learningObjective && (
         <div style={{ marginBottom: "10px" }}>
-          <div style={{ fontSize: "0.72rem", fontWeight: 500, color: "#5a7a9e", marginBottom: "3px" }}>
-            Learning Objective
-          </div>
-          <p style={{
-            margin: 0,
-            fontSize: "0.85rem",
-            color: "#333",
-            lineHeight: 1.5,
-          }}>
-            {assessment.learningObjective}
+          <div style={sectionLabelStyle}>Learning Objective</div>
+          <p style={{ margin: 0, fontSize: "0.85rem", color: "#333", lineHeight: 1.5 }}>
+            {assessment!.learningObjective}
           </p>
         </div>
       )}
 
-      {/* Success Criteria */}
-      {assessment.successCriteria && assessment.successCriteria.length > 0 && (
+      {/* 2. Expected Concepts */}
+      {assessment!.expectedConcepts && assessment!.expectedConcepts.length > 0 && (
         <div style={{ marginBottom: "10px" }}>
-          <div style={{ fontSize: "0.72rem", fontWeight: 500, color: "#5a7a9e", marginBottom: "3px" }}>
-            A strong response includes
-          </div>
-          <ul style={{
-            margin: 0,
-            paddingLeft: "16px",
-            display: "flex",
-            flexDirection: "column",
-            gap: "3px",
-          }}>
-            {assessment.successCriteria.map((item, idx) => (
-              <li key={idx} style={{ fontSize: "0.82rem", color: "#444", lineHeight: 1.4 }}>
-                {item}
-              </li>
+          <div style={sectionLabelStyle}>Expected Concepts</div>
+          <ul style={{ margin: 0, paddingLeft: "16px", display: "flex", flexDirection: "column", gap: "3px" }}>
+            {assessment!.expectedConcepts.map((item, idx) => (
+              <li key={idx} style={{ fontSize: "0.82rem", color: "#444", lineHeight: 1.4 }}>{item}</li>
             ))}
           </ul>
         </div>
       )}
 
-      {/* Evaluation Focus chips */}
-      {assessment.evaluationFocus && assessment.evaluationFocus.length > 0 && (
-        <div style={{ marginBottom: hasMisconceptions ? "10px" : "0" }}>
-          <div style={{ fontSize: "0.72rem", fontWeight: 500, color: "#5a7a9e", marginBottom: "4px" }}>
-            Evaluation Focus
-          </div>
+      {/* 3. Required Examples */}
+      {assessment!.requiredExamples && (
+        <div style={{ marginBottom: "10px" }}>
+          <div style={sectionLabelStyle}>Required Examples</div>
+          <p style={{ margin: 0, fontSize: "0.82rem", color: "#444", lineHeight: 1.4 }}>
+            {assessment!.requiredExamples}
+          </p>
+        </div>
+      )}
+
+      {/* 4. Valid Vocabulary */}
+      {assessment!.validVocabulary && assessment!.validVocabulary.length > 0 && (
+        <div style={{ marginBottom: "10px" }}>
+          <div style={sectionLabelStyle}>Valid Vocabulary</div>
           <div style={{ display: "flex", flexWrap: "wrap", gap: "5px" }}>
-            {assessment.evaluationFocus.map((focus) => (
-              <span
-                key={focus}
-                style={{
-                  fontSize: "0.7rem",
-                  padding: "2px 8px",
-                  background: "#e0e7ff",
-                  color: "#3730a3",
-                  borderRadius: "4px",
-                  fontWeight: 500,
-                  textTransform: "capitalize",
-                }}
-              >
-                {focus}
+            {assessment!.validVocabulary.map((word, idx) => (
+              <span key={idx} style={{
+                fontSize: "0.75rem",
+                padding: "2px 8px",
+                background: "#e8f4f8",
+                color: "#1a5276",
+                borderRadius: "10px",
+                fontWeight: 500,
+              }}>
+                {word}
               </span>
             ))}
           </div>
         </div>
       )}
 
-      {/* Misconceptions — collapsed by default */}
+      {/* 5. Common Misconceptions */}
       {hasMisconceptions && (
-        <div>
+        <div style={{ marginBottom: assessment!.scoringLevels ? "10px" : "0" }}>
           <button
             onClick={() => setShowMisconceptions(!showMisconceptions)}
             style={{
@@ -463,24 +436,66 @@ function CorrectnessCriteriaPanel({ assessment }: { assessment?: PromptAssessmen
             }}>
               ▶
             </span>
-            Common misconceptions ({assessment.misconceptions!.length})
+            Common Misconceptions ({assessment!.misconceptions!.length})
           </button>
 
           {showMisconceptions && (
-            <ul style={{
-              margin: "6px 0 0 0",
-              paddingLeft: "16px",
-              display: "flex",
-              flexDirection: "column",
-              gap: "3px",
-            }}>
-              {assessment.misconceptions!.map((item, idx) => (
+            <ul style={{ margin: "6px 0 0 0", paddingLeft: "16px", display: "flex", flexDirection: "column", gap: "3px" }}>
+              {assessment!.misconceptions!.map((item, idx) => (
                 <li key={idx} style={{ fontSize: "0.82rem", color: "#666", lineHeight: 1.4, fontStyle: "italic" }}>
                   {item}
                 </li>
               ))}
             </ul>
           )}
+        </div>
+      )}
+
+      {/* 6. Scoring Levels */}
+      {assessment!.scoringLevels && (
+        <div>
+          <div style={sectionLabelStyle}>Scoring Levels</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: "6px", marginTop: "4px" }}>
+            {([
+              { key: "strong" as const, label: "Strong", color: "#16a34a", bg: "#f0fdf4" },
+              { key: "developing" as const, label: "Developing", color: "#d97706", bg: "#fffbeb" },
+              { key: "needsSupport" as const, label: "Needs Support", color: "#dc2626", bg: "#fef2f2" },
+            ] as const).map(({ key, label, color, bg }) => (
+              <div key={key} style={{
+                display: "flex",
+                gap: "8px",
+                alignItems: "baseline",
+                padding: "4px 8px",
+                background: bg,
+                borderRadius: "6px",
+              }}>
+                <span style={{
+                  fontSize: "0.7rem",
+                  fontWeight: 600,
+                  color,
+                  minWidth: "90px",
+                  flexShrink: 0,
+                }}>
+                  {label}
+                </span>
+                <span style={{ fontSize: "0.8rem", color: "#444", lineHeight: 1.4 }}>
+                  {assessment!.scoringLevels![key]}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Legacy fallback: show successCriteria if no structured fields present */}
+      {hasLegacyCriteria && assessment!.successCriteria && assessment!.successCriteria.length > 0 && (
+        <div style={{ marginBottom: "10px" }}>
+          <div style={sectionLabelStyle}>A strong response includes</div>
+          <ul style={{ margin: 0, paddingLeft: "16px", display: "flex", flexDirection: "column", gap: "3px" }}>
+            {assessment!.successCriteria.map((item, idx) => (
+              <li key={idx} style={{ fontSize: "0.82rem", color: "#444", lineHeight: 1.4 }}>{item}</li>
+            ))}
+          </ul>
         </div>
       )}
     </div>

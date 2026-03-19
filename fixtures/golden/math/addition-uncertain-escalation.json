@@ -1,0 +1,47 @@
+{
+  "id": "addition-uncertain-escalation",
+  "tags": ["regression", "uncertainty-escalation"],
+  "expectedVerdict": "PASS",
+  "expectedIssueCodes": [],
+  "notes": "Student says 'I don't know' twice. Coach should use STEP_PROBE_SIMPLER with varied wording. No steps satisfied, no premature wrap.",
+  "mode": "math",
+  "name": "11+14: uncertain × 2 → simpler probes",
+  "mathProblem": {
+    "skill": "two_digit_addition",
+    "a": 11,
+    "b": 14,
+    "expression": "11 + 14",
+    "correctAnswer": 25,
+    "requiresRegrouping": false,
+    "expectedStrategyTags": ["add ones", "add tens", "combine"]
+  },
+  "reasoningSteps": [
+    {
+      "id": "step_ones",
+      "label": "Add the ones",
+      "expectedStatements": ["1 + 4 = 5"],
+      "probe": "What do you get when you add 1 and 4?",
+      "kind": "ones_sum"
+    },
+    {
+      "id": "step_tens",
+      "label": "Add the tens",
+      "expectedStatements": ["10 + 10 = 20"],
+      "probe": "What do you get when you add 10 and 10?",
+      "kind": "tens_sum"
+    },
+    {
+      "id": "step_combine",
+      "label": "Combine",
+      "expectedStatements": ["20 + 5 = 25"],
+      "probe": "What do you get when you put 20 and 5 together?",
+      "kind": "combine"
+    }
+  ],
+  "transcript": [
+    { "role": "coach", "message": "What is 11 + 14?" },
+    { "role": "student", "message": "I don't know" },
+    { "role": "coach", "message": "Let's do just the ones. What is 1 + 4?" },
+    { "role": "student", "message": "um I'm not sure" }
+  ]
+}

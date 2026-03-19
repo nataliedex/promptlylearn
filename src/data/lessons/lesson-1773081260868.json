@@ -1,0 +1,183 @@
+{
+  "id": "lesson-1773081260868",
+  "title": "Understanding Two-Digit Addition Without Regrouping B",
+  "description": "In this lesson, we will practice adding two-digit numbers without regrouping. You'll solve problems and explain your thinking!",
+  "difficulty": "intermediate",
+  "gradeLevel": "2",
+  "subject": "Math",
+  "prompts": [
+    {
+      "id": "q1",
+      "type": "explain",
+      "input": "Solve 11+14. Tell how you got your answer.",
+      "hints": [
+        "Start with the ones place: what is 1 + 4?",
+        "Then add the tens place digits."
+      ],
+      "blueprintId": "math_solve_and_explain",
+      "filledSlots": {
+        "expression": "11 + 14"
+      },
+      "mathProblem": {
+        "skill": "two_digit_addition",
+        "a": 11,
+        "b": 14,
+        "expression": "11 + 14",
+        "correctAnswer": 25,
+        "requiresRegrouping": false,
+        "expectedStrategyTags": [
+          "add ones",
+          "add tens"
+        ]
+      },
+      "assessment": {
+        "learningObjective": "Explain how to add two-digit numbers by showing the steps taken to find the answer.",
+        "expectedReasoningSteps": [
+          "Step 1: Identify the tens and ones in 11 and 14.",
+          "Step 2: Add the tens together (10 + 10).",
+          "Step 3: Add the ones together (1 + 4).",
+          "Step 4: Combine the results of the tens and ones."
+        ],
+        "reasoningSteps": [
+          {
+            "id": "step_1",
+            "label": "Add the ones",
+            "expectedStatements": [
+              "1 + 4 = 5"
+            ],
+            "probe": "What do you get when you add 1 and 4?",
+            "kind": "ones_sum"
+          },
+          {
+            "id": "step_2",
+            "label": "Add the tens",
+            "expectedStatements": [
+              "10 + 10 = 20"
+            ],
+            "probe": "What do you get when you add 10 and 10?",
+            "kind": "tens_sum"
+          },
+          {
+            "id": "step_3",
+            "label": "Combine the totals",
+            "expectedStatements": [
+              "20 + 5 = 25",
+              "The final answer is 25"
+            ],
+            "probe": "What do you get when you combine 20 and 5?",
+            "kind": "combine"
+          }
+        ],
+        "expectedConcepts": [
+          "Identifies 11 as 1 ten and 1 one.",
+          "Identifies 14 as 1 ten and 4 ones.",
+          "States that 10 + 10 = 20.",
+          "States that 1 + 4 = 5."
+        ],
+        "successCriteria": [
+          "States that 11 + 14 equals 25.",
+          "Explains that 1 ten plus 1 ten equals 2 tens.",
+          "Explains that 1 one plus 4 ones equals 5 ones."
+        ],
+        "misconceptions": [
+          "Says 34 because they added the tens incorrectly.",
+          "States 15 because they only added the ones.",
+          "Claims 20 because they forgot to add the ones."
+        ],
+        "scoringLevels": {
+          "strong": "Explains that 1 ten plus 1 ten equals 2 tens, 1 one plus 4 ones equals 5 ones, and gives the final answer of 25.",
+          "developing": "Gives the correct answer of 25 but misses explaining how to add the tens.",
+          "needsSupport": "States an incorrect answer or does not explain their reasoning."
+        },
+        "referenceFacts": {
+          "key": [
+            "11 consists of 1 ten and 1 one.",
+            "14 consists of 1 ten and 4 ones.",
+            "The total of 11 + 14 is 25."
+          ]
+        },
+        "requiredExamples": "Student must provide one clear explanation of how they reached the answer.",
+        "validVocabulary": [
+          "tens",
+          "ones",
+          "add",
+          "total",
+          "sum",
+          "equals",
+          "combine",
+          "number"
+        ],
+        "evaluationFocus": [
+          "understanding",
+          "reasoning",
+          "evidence"
+        ],
+        "requiredEvidence": {
+          "minEntities": 2,
+          "entityLabel": "numbers",
+          "attributeLabel": "place values",
+          "minAttributeTypes": 2,
+          "requirePairing": true
+        },
+        "allowedProbes": [
+          "What do you get when you add the tens together?",
+          "How many ones do you have after adding 1 and 4?",
+          "Can you tell me what 11 plus 14 equals?"
+        ],
+        "retryQuestions": [
+          "Can you start by adding the tens, 10 and 10?",
+          "What do you get when you add the ones digits, 1 and 4?",
+          "Can you explain how you found the total?"
+        ],
+        "conceptAnchor": {
+          "anchorSentence": "This question is about adding two-digit numbers without regrouping.",
+          "coreConcepts": [
+            "two-digit addition",
+            "place value",
+            "tens and ones"
+          ],
+          "allowedEntities": [
+            "11",
+            "14",
+            "25"
+          ],
+          "allowedAttributes": [
+            "tens",
+            "ones"
+          ],
+          "offTopicConcepts": [
+            "regrouping",
+            "subtraction",
+            "multiplication",
+            "three-digit numbers",
+            "decimals",
+            "fractions",
+            "negative numbers"
+          ]
+        }
+      },
+      "allowedProbes": [
+        "What is 1 + 4?",
+        "What is 1 + 1 in the tens place?"
+      ],
+      "retryQuestions": [
+        "Let's start with the ones. What is 1 + 4?",
+        "Try adding 11 and 14 step by step, starting with the ones place."
+      ],
+      "conceptAnchor": {
+        "anchorSentence": "Solve 11 + 14",
+        "coreConcepts": [
+          "arithmetic",
+          "two digit addition"
+        ],
+        "allowedEntities": [
+          "11",
+          "14"
+        ],
+        "allowedAttributes": [],
+        "offTopicConcepts": []
+      }
+    }
+  ],
+  "systemIndex": "Math 2.9"
+}

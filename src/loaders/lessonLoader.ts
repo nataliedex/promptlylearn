@@ -58,9 +58,9 @@ export function getAllLessons(): Lesson[] {
   }
 
   // Sort by difficulty: beginner first, then intermediate, then advanced
-  const difficultyOrder = { beginner: 0, intermediate: 1, advanced: 2 };
+  const difficultyOrder: Record<string, number> = { beginner: 0, intermediate: 1, advanced: 2 };
   return lessons.sort(
-    (a, b) => difficultyOrder[a.difficulty] - difficultyOrder[b.difficulty]
+    (a, b) => (difficultyOrder[a.difficulty] ?? 99) - (difficultyOrder[b.difficulty] ?? 99)
   );
 }
 

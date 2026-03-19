@@ -1,3 +1,6 @@
+import { MathProblem } from "./mathProblem";
+import type { ReasoningGraph } from "./reasoningGraph";
+
 export type PromptType = "explain" | "generate" | "analyze" | "refactor";
 
 /**
@@ -26,16 +29,103 @@ export interface PromptScope {
     topicTags?: string[];
 }
 
+/** Structured scoring rubric with three proficiency tiers. */
+export interface ScoringLevels {
+    /** What a strong/mastery response demonstrates. */
+    strong: string;
+    /** What a developing/partial response looks like. */
+    developing: string;
+    /** What a needs-support response looks like. */
+    needsSupport: string;
+}
+
+/** Structured evidence requirements for deterministic validation. */
+export interface RequiredEvidence {
+    /** Minimum number of distinct entities the student must name. */
+    minEntities: number;
+    /** Human-readable label for the entity type (e.g., "planets", "animals"). */
+    entityLabel: string;
+    /** Human-readable label for the attribute type (e.g., "materials", "habitats"). */
+    attributeLabel: string;
+    /** Minimum number of distinct attribute types required (e.g., 2 means "rock" and "gas"). */
+    minAttributeTypes?: number;
+    /** Whether each named entity must have a correct paired attribute. Default: true. */
+    requirePairing?: boolean;
+}
+
+/** Semantic kind tags for reasoning steps — used by the coach to decide probe type. */
+export type ReasoningStepKind =
+    | "identify_ones"
+    | "ones_sum"
+    | "regroup"
+    | "identify_tens"
+    | "tens_sum"
+    | "combine"
+    | "identify_borrow"
+    | "borrow"
+    | "subtract_ones"
+    | "subtract_tens"
+    | "identify_groups"
+    | "skip_count"
+    | "final_answer"
+    | "generic";
+
+/**
+ * A single atomic reasoning step the student should demonstrate.
+ *
+ * This is the internal machine-facing layer. Each step is:
+ * - observable (the coach can detect yes/no)
+ * - tied to exact numeric values from the problem
+ * - paired with a probe to elicit the step if missing
+ *
+ * The teacher-facing rubric (successCriteria, expectedConcepts) is derived
+ * from these steps but presented in a more compact, readable form.
+ */
+export interface ReasoningStep {
+    /** Unique ID for this step (e.g., "step_1"). */
+    id: string;
+    /** Short teacher-readable label (e.g., "Add the ones"). */
+    label: string;
+    /** Exact statements the student should make (e.g., ["4 + 2 = 6"]). */
+    expectedStatements: string[];
+    /** Follow-up question to ask if this step is missing. */
+    probe: string;
+    /** Semantic kind tag — tells the coach what type of reasoning this is. */
+    kind: ReasoningStepKind;
+}
+
 /** Assessment & mastery metadata for a prompt. */
 export interface PromptAssessment {
     /** What the student should understand or be able to do after answering. */
     learningObjective?: string;
-    /** Observable indicators that the student has met the objective. */
-    successCriteria?: string[];
+    /** Ordered list of atomic reasoning steps the student should demonstrate. */
+    expectedReasoningSteps?: string[];
+    /**
+     * Structured reasoning steps with exact expected values and probes.
+     * Internal machine-facing layer — NOT shown to students.
+     * When present, the coach uses these to pick the next probe.
+     * Backward compatible: if absent, coach falls back to allowedProbes.
+     */
+    reasoningSteps?: ReasoningStep[];
+    /** Key ideas the student should express in their answer. */
+    expectedConcepts?: string[];
+    /** Minimum evidence (examples, facts) needed for mastery. */
+    requiredExamples?: string;
+    /** Domain vocabulary expected for this topic. */
+    validVocabulary?: string[];
     /** Common wrong ideas students may hold (for evaluator awareness). */
     misconceptions?: string[];
+    /** Structured scoring levels: Strong / Developing / Needs Support. */
+    scoringLevels?: ScoringLevels;
+    /** Observable indicators that the student has met the objective.
+     *  Auto-derived from expectedConcepts + requiredExamples during generation. */
+    successCriteria?: string[];
     /** Which evaluation dimensions to emphasize when scoring this prompt. */
     evaluationFocus?: EvaluationFocusArea[];
+    /** Structured evidence requirements for deterministic validation. Teacher-visible. */
+    requiredEvidence?: RequiredEvidence;
+    /** Factual ground truth for deterministic validation. Internal only — NOT shown in UI. */
+    referenceFacts?: Record<string, string[]>;
 }
 
 export type EvaluationFocusArea =
@@ -44,6 +134,21 @@ export type EvaluationFocusArea =
     | "evidence"
     | "clarity"
     | "creativity";
+
+/** Hidden concept anchoring data for a prompt. Internal only — NOT shown to students.
+ *  Used by the coach to stay within the question's conceptual scope. */
+export interface ConceptAnchor {
+    /** One short sentence describing exactly what the question is about. */
+    anchorSentence: string;
+    /** 2–5 short phrases representing the concepts this question may assess. */
+    coreConcepts: string[];
+    /** Specific objects/nouns the student may be asked about. */
+    allowedEntities: string[];
+    /** Specific properties/materials/categories that are relevant. */
+    allowedAttributes: string[];
+    /** Nearby but out-of-scope concepts the coach must NOT introduce. */
+    offTopicConcepts: string[];
+}
 
 export interface Prompt {
     id: string;
@@ -55,4 +160,18 @@ export interface Prompt {
     scope?: PromptScope;
     /** Optional assessment & mastery settings for evaluator guidance. */
     assessment?: PromptAssessment;
+    /** Blueprint ID used to generate this question (from the approved blueprint library). */
+    blueprintId?: string;
+    /** Slot values filled into the blueprint template. */
+    filledSlots?: Record<string, string>;
+    /** Pre-generated coaching probes (3-5). Coach must only ask from this list. */
+    allowedProbes?: string[];
+    /** Pre-generated retry questions (2-3) for factually incorrect answers. */
+    retryQuestions?: string[];
+    /** Hidden concept anchoring data. Internal only — constrains coach to question scope. */
+    conceptAnchor?: ConceptAnchor;
+    /** Deterministic math problem metadata. Internal only — NOT shown to students. */
+    mathProblem?: MathProblem;
+    /** Generalized reasoning graph for structured coaching across subjects. Internal only. */
+    reasoningGraph?: ReasoningGraph;
 }

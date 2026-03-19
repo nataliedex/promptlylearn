@@ -740,8 +740,8 @@ export default function StudentDashboard() {
         />
 
       <div className="header" style={{ position: "relative" }}>
-        {/* Ask Coach button - gated: only visible after student has submitted at least one assignment */}
-        {sessions.length > 0 && (
+        {/* Ask Coach button - gated: only visible after at least one completed lesson */}
+        {sessions.some(s => s.status === "completed") && (
           <button
             className={`btn btn-coach${coachingInvites.length > 0 ? " btn-coach--has-invite" : ""}`}
             onClick={() => setShowCoachTopicDrawer(true)}
@@ -815,17 +815,25 @@ export default function StudentDashboard() {
           }}
         >
           <h1
-            onClick={() => setShowProfileView(true)}
             style={{
-              cursor: "pointer",
-              transition: "opacity 0.15s",
               marginBottom: "6px",
             }}
-            onMouseEnter={(e) => { e.currentTarget.style.opacity = "0.8"; }}
-            onMouseLeave={(e) => { e.currentTarget.style.opacity = "1"; }}
-            title="View your profile"
           >
-            Hi, {student.preferredName || student.name}!
+            <span
+              onClick={() => setShowProfileView(true)}
+              style={{
+                cursor: "pointer",
+                transition: "opacity 0.15s",
+              }}
+              onMouseEnter={(e) => { e.currentTarget.style.opacity = "0.8"; }}
+              onMouseLeave={(e) => { e.currentTarget.style.opacity = "1"; }}
+              title="View your profile"
+              role="button"
+              tabIndex={0}
+              onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") setShowProfileView(true); }}
+            >
+              Hi, {student.preferredName || student.name}!
+            </span>
           </h1>
           <p
             style={{
@@ -847,7 +855,8 @@ export default function StudentDashboard() {
         onClose={() => setShowCoachTopicDrawer(false)}
         studentId={studentId!}
         lessons={lessons}
-        completedSessions={sessions}
+        allLessons={allLessons}
+        completedSessions={sessions.filter(s => s.status === "completed")}
         coachingInvites={coachingInvites}
         onStartInvite={handleOpenCoachInvite}
         onStartSession={handleStartCoachSession}

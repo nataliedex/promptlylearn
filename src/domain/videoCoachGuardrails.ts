@@ -7,6 +7,9 @@
  */
 
 import { PromptScope } from "./prompt";
+import { MathProblem } from "./mathProblem";
+import { MathValidationResult, MathBoundingDecision, normalizeNumberWords } from "./mathAnswerValidator";
+import { detectConceptConfusion, type AnswerScope } from "./deterministicRemediation";
 import OpenAI from "openai";
 
 export const CORRECT_THRESHOLD = 80;
@@ -32,7 +35,18 @@ export function resolvePostEvaluation(
   followUpCount: number = 0,
   criteriaStatus?: "strong" | "developing" | "needs_support",
   timeRemainingSec?: number,
+  mathMasteryOverride?: boolean,
+  mathAnswerCorrect?: boolean,
 ): { shouldContinue: boolean; probeFirst: boolean } {
+  // MATH MASTERY OVERRIDE: Deterministic math validation determined mastery
+  // (correct answer + strategy). End immediately — overrides all heuristics.
+  if (mathMasteryOverride) {
+    if (DEBUG_GUARDRAILS) {
+      console.log("[resolvePostEval] mathMasteryOverride=true — ending immediately");
+    }
+    return { shouldContinue: false, probeFirst: false };
+  }
+
   // CRITERIA-AWARE PATH: When all criteria are met, student has demonstrated
   // mastery — end cleanly. Students submit first; coaching happens after via Ask Coach.
   if (criteriaStatus === "strong" && evalResult.score >= CORRECT_THRESHOLD) {
@@ -57,6 +71,18 @@ export function resolvePostEvaluation(
     return { shouldContinue: false, probeFirst: false };
   }
 
+  // MATH ANSWER CORRECT BUT EXPLANATION MISSING:
+  // Score < 80 because explanation is incomplete, but the math answer IS
+  // deterministically correct. Do NOT treat as "incorrect at max attempts" —
+  // continue probing for explanation. The student got it right; they just
+  // need to explain HOW.
+  if (mathAnswerCorrect && evalResult.score < CORRECT_THRESHOLD) {
+    if (DEBUG_GUARDRAILS) {
+      console.log(`[resolvePostEval] mathAnswerCorrect=true but score=${evalResult.score} < ${CORRECT_THRESHOLD} — probing for explanation (not wrapping)`);
+    }
+    return { shouldContinue: true, probeFirst: true };
+  }
+
   // HARD GUARDRAIL: Incorrect on first attempt -> NEVER end
   if (attemptCount < MIN_ATTEMPTS_BEFORE_FAIL) {
     return { shouldContinue: true, probeFirst: false };
@@ -69,6 +95,297 @@ export function resolvePostEvaluation(
 
   // Incorrect, not first, not max: continue
   return { shouldContinue: true, probeFirst: false };
+}
+
+/**
+ * Check whether deterministic math validation indicates mastery.
+ * Returns true when the student answered correctly AND demonstrated
+ * enough strategy for a "strong" bounding. Pure function.
+ */
+export function checkMathMastery(
+  mathValidation: MathValidationResult,
+  mathBounding: MathBoundingDecision,
+): boolean {
+  return mathValidation.status === "correct" && mathBounding.boundedStatus === "strong";
+}
+
+/**
+ * Detect whether a math prompt requires the student to EXPLAIN their process,
+ * not just give a numeric answer. When true, a correct number alone should NOT
+ * short-circuit the evaluation — the full pipeline must run to assess explanation quality.
+ */
+export function promptRequiresMathExplanation(promptInput: string): boolean {
+  const lower = promptInput.toLowerCase();
+  return /\b(?:explain|tell\s+(?:what|how)\s+you\s+(?:did|got)|show\s+how|why|regroup|carry|describe|what\s+happens?\s+when|walk\s+(?:me\s+)?through|how\s+(?:did\s+you|you\s+got)|(?:first|next)\s+step|what\s+(?:did|do)\s+you\s+do|what\s+(?:is|was)\s+(?:the\s+)?(?:first|next)\s+step|step\s+you\s+used)\b/.test(lower);
+}
+
+/**
+ * Build a performance-aware closing message based on evaluated outcome.
+ * Replaces generic wrap language that can contradict the student's performance.
+ *
+ * Hard invariants:
+ * - "strong" close NEVER contains "Thanks for trying"
+ * - Non-"strong" close NEVER contains "met the goal" or "solved correctly"
+ */
+export function buildPerformanceAwareClose(
+  status: "strong" | "developing" | "needs_support" | "not_enough_evidence",
+  feedbackPrefix?: string,
+): string {
+  switch (status) {
+    case "strong": {
+      const prefix = feedbackPrefix || "Great work";
+      return `${prefix}! You solved the problem correctly and explained your thinking.`;
+    }
+    case "developing":
+      return "Nice start. You got part of it right, and we'll keep practicing this skill.";
+    case "needs_support":
+      return "Thanks for trying. We'll keep working on this skill next time.";
+    case "not_enough_evidence":
+      return "We didn't get enough math evidence this time, so we'll try again later.";
+  }
+}
+
+// ============================================
+// MATH STRATEGY PROBE BUILDER
+// ============================================
+
+/** Map from strategy tag to a targeted follow-up probe question. */
+const MATH_STRATEGY_PROBES: Record<string, string> = {
+  "add ones": "What did you do with the ones digits?",
+  "carry": "Did you need to regroup? What happened with the extra ones?",
+  "add tens": "What about the tens — how did you add those?",
+  "check ones": "Can you start by looking at the ones place?",
+  "borrow from tens": "The ones digit on top is smaller — what do you need to do?",
+  "subtract ones": "After borrowing, what do you get when you subtract the ones?",
+  "subtract tens": "Now look at the tens column — what happens there?",
+  "multiply": "How would you multiply these numbers?",
+  "skip count": "Can you count by that number to find the answer?",
+  "groups of": "Can you think of this as groups? How many groups and how many in each?",
+  "identify digit": "Which digit is in the {targetPlace} place?",
+  "name ones place": "What is the ones place?",
+  "name tens place": "What is the tens place?",
+  "name hundreds place": "What is the hundreds place?",
+};
+
+/**
+ * Build a strategy-anchored probe for a deterministic math problem.
+ * Finds the first undemonstrated strategy from expectedStrategyTags
+ * and returns a targeted question. Returns null when all strategies
+ * are demonstrated (mastery — no more probing needed).
+ *
+ * For regrouping problems, prioritizes carry/borrow strategies.
+ */
+export function buildMathStrategyProbe(
+  mathProblem: MathProblem,
+  demonstratedStrategies: string[],
+): string | null {
+  const demonstrated = new Set(demonstratedStrategies.map(s => s.toLowerCase()));
+  const missing = mathProblem.expectedStrategyTags.filter(
+    tag => !demonstrated.has(tag.toLowerCase())
+  );
+
+  if (missing.length === 0) return null;
+
+  // Prioritize carry/borrow strategies for regrouping problems
+  if (mathProblem.requiresRegrouping) {
+    const regroupTag = missing.find(t => t === "carry" || t === "borrow from tens");
+    if (regroupTag) {
+      return MATH_STRATEGY_PROBES[regroupTag] || `Can you explain how you handled the ${regroupTag}?`;
+    }
+  }
+
+  // Return probe for first missing strategy
+  const firstMissing = missing[0];
+  let probe = MATH_STRATEGY_PROBES[firstMissing];
+  if (probe && mathProblem.targetPlace) {
+    probe = probe.replace("{targetPlace}", mathProblem.targetPlace);
+  }
+  return probe || `Can you explain how you handled the ${firstMissing} step?`;
+}
+
+/**
+ * Build an operand-specific retry probe for a wrong math answer.
+ * Uses the actual digits from the MathProblem to scaffold step-by-step
+ * through the computation. For regrouping addition of 27+36:
+ *   - "What is 7 + 6?" (add ones)
+ *   - "7 + 6 makes 13. What do you do when the ones add up to more than 9?" (carry)
+ *   - "Now look at the tens place. What is 2 + 3 (don't forget the carried 1)?" (add tens)
+ *
+ * Returns null when all strategies are already demonstrated.
+ * Falls back to buildMathStrategyProbe for unsupported skills.
+ */
+export function buildMathRetryProbe(
+  mathProblem: MathProblem,
+  demonstratedStrategies: string[],
+  matchedMisconception?: string,
+): string | null {
+  const demonstrated = new Set(demonstratedStrategies.map(s => s.toLowerCase()));
+
+  if (mathProblem.skill === "two_digit_addition" && mathProblem.b !== undefined) {
+    const onesA = mathProblem.a % 10;
+    const onesB = mathProblem.b % 10;
+    const onesSum = onesA + onesB;
+
+    if (!demonstrated.has("add ones")) {
+      return `Let's start with the ones place. What is ${onesA} + ${onesB}?`;
+    }
+    if (mathProblem.requiresRegrouping && !demonstrated.has("carry")) {
+      return `${onesA} + ${onesB} makes ${onesSum}. What do you do when the ones add up to more than 9?`;
+    }
+    if (!demonstrated.has("add tens")) {
+      const tensA = Math.floor(mathProblem.a / 10);
+      const tensB = Math.floor(mathProblem.b / 10);
+      const carryNote = mathProblem.requiresRegrouping ? " (don't forget the carried 1)" : "";
+      return `Now look at the tens place. What is ${tensA} + ${tensB}${carryNote}?`;
+    }
+    return null;
+  }
+
+  if (mathProblem.skill === "two_digit_subtraction" && mathProblem.b !== undefined) {
+    const onesA = mathProblem.a % 10;
+    const onesB = mathProblem.b % 10;
+
+    if (!demonstrated.has("check ones")) {
+      return `Look at the ones place. Is ${onesA} big enough to subtract ${onesB}?`;
+    }
+    if (mathProblem.requiresRegrouping && !demonstrated.has("borrow from tens")) {
+      return `${onesA} is less than ${onesB}, so we need to borrow. What happens when you borrow from the tens?`;
+    }
+    if (!demonstrated.has("subtract ones")) {
+      const adjustedOnesA = mathProblem.requiresRegrouping ? onesA + 10 : onesA;
+      return `What is ${adjustedOnesA} - ${onesB}?`;
+    }
+    if (!demonstrated.has("subtract tens")) {
+      const tensA = Math.floor(mathProblem.a / 10);
+      const tensB = Math.floor(mathProblem.b / 10);
+      const adjustedTensA = mathProblem.requiresRegrouping ? tensA - 1 : tensA;
+      return `Now the tens. What is ${adjustedTensA} - ${tensB}?`;
+    }
+    return null;
+  }
+
+  // For multiplication/place_value, fall back to existing generic probes
+  return buildMathStrategyProbe(mathProblem, demonstratedStrategies);
+}
+
+// ============================================
+// OFF-TOPIC DETECTION
+// ============================================
+
+/** Math vocabulary that indicates on-topic engagement. */
+const MATH_VOCAB_PATTERN = /\b(?:add(?:ed|ing|s)?|plus|minus|subtract(?:ed|ing|s)?|tens?|ones?|carr(?:y|ied|ying)|borrow(?:ed|ing)?|times|equals?|multiply|multipli(?:ed|cation)|divid(?:e|ed|ing)|regroup(?:ed|ing)?|sum|total|answer|hundred(?:s)?|place|digit|number|leftover|left\s*over|together|first\s+step|next\s+step|start\s+with|put\s+together)\b/i;
+
+/**
+ * Check whether a student response is off-topic for the current question.
+ * For math prompts: no digits AND no math vocabulary.
+ * For non-math prompts: falls back to detectClearlyWrongAnswer.
+ */
+export function isOffTopicResponse(
+  studentResponse: string,
+  mathProblem?: MathProblem,
+): boolean {
+  const trimmed = studentResponse.trim();
+  if (!trimmed) return true;
+
+  if (mathProblem) {
+    // Concept confusion questions ("What does that have to do with this problem?")
+    // are NOT off-topic — the student is engaging with the coaching. Without this
+    // carve-out, questions lacking digits and math vocab would be flagged off-topic,
+    // triggering an early wrap instead of an instructional explanation.
+    if (detectConceptConfusion(trimmed, mathProblem) !== null) {
+      return false;
+    }
+    // Normalize number words ("five" → "5") before checking for digits
+    const normalized = normalizeNumberWords(trimmed);
+    const hasDigits = /\d/.test(normalized);
+    const hasMathVocab = MATH_VOCAB_PATTERN.test(trimmed);
+    return !hasDigits && !hasMathVocab;
+  }
+
+  return detectClearlyWrongAnswer(trimmed);
+}
+
+/**
+ * Count the number of off-topic student turns in conversation history.
+ */
+export function countOffTopicTurns(
+  conversationHistory: Array<{ role: string; message: string }>,
+  mathProblem?: MathProblem,
+): number {
+  return conversationHistory
+    .filter(h => h.role === "student")
+    .filter(h => isOffTopicResponse(h.message, mathProblem))
+    .length;
+}
+
+/**
+ * Detect whether a student made progress after initially saying "I don't know"
+ * and receiving a hint. If the last student turn in history was a "don't know"
+ * variant and the current response contains math evidence, return true to
+ * allow one more scaffolded follow-up before closing.
+ */
+export function detectHintFollowedByProgress(
+  conversationHistory: Array<{ role: string; message: string }>,
+  currentResponse: string,
+  mathProblem?: MathProblem,
+): boolean {
+  if (!mathProblem) return false;
+
+  // Find the last student turn in history
+  const studentTurns = conversationHistory.filter(h => h.role === "student");
+  if (studentTurns.length === 0) return false;
+
+  const lastStudentTurn = studentTurns[studentTurns.length - 1];
+
+  // Was the last student turn a "don't know" type?
+  const isIDontKnow = /\b(?:i\s+don'?t\s+know|not\s+sure|no\s+idea|don'?t\s+understand|i\s+don'?t\s+get\s+it)\b/i.test(lastStudentTurn.message);
+  if (!isIDontKnow) return false;
+
+  // Current response has math evidence (digits or math vocabulary)?
+  const hasProgress = !isOffTopicResponse(currentResponse, mathProblem);
+  return hasProgress;
+}
+
+/**
+ * Detect whether a student's answer contains strong procedural evidence
+ * (step-by-step with numbers and intermediate results).
+ * Used to skip unnecessary PROBE follow-ups when the student already
+ * demonstrated their strategy clearly.
+ */
+export function hasProceduralEvidence(studentAnswer: string): boolean {
+  const lower = studentAnswer.toLowerCase();
+  const hasSteps = /first|then|next|after|start|step/i.test(lower);
+  const hasNumbers = /\d/.test(lower);
+  // Strategy keywords: breaking apart, splitting, decomposing
+  const hasStrategy = /break\s*(?:up|apart|down)|split|tens\s+and\s+(?:the\s+)?ones/i.test(lower);
+  // Intermediate sums: "34 + 20" or "34 + 20 = 54"
+  const hasIntermediateSums = /\d+\s*[+\-×÷]\s*\d+/.test(lower);
+
+  // Strong evidence: steps + numbers + (strategy OR intermediate math)
+  return hasSteps && hasNumbers && (hasStrategy || hasIntermediateSums);
+}
+
+/**
+ * Build a reflection question for procedural mastery.
+ * Asks "why" instead of "what" when the student already showed the steps.
+ */
+export function buildProceduralReflection(questionText: string, studentAnswer: string): string {
+  const lower = studentAnswer.toLowerCase();
+
+  if (/break\s*(?:up|apart|down)|broke|split/i.test(lower)) {
+    // Find what number they broke apart
+    const brokenMatch = lower.match(/(?:break|split|broke)\s*(?:up|apart|down)?\s*(?:that\s+|the\s+)?(\d+)/);
+    if (brokenMatch) {
+      return `Nice work explaining your strategy! Why did breaking ${brokenMatch[1]} into parts help you solve the problem?`;
+    }
+    return "Nice work explaining your strategy! Why did breaking the number into parts help you solve it?";
+  }
+
+  if (/tens\s+and\s+(?:the\s+)?ones/i.test(lower) || /tens\s+first/i.test(lower)) {
+    return "Nice work! Why does adding the tens first make this easier?";
+  }
+
+  return "Nice work explaining your steps! Why did you choose that approach?";
 }
 
 /**
@@ -97,6 +414,76 @@ export function containsEndingLanguage(text: string): boolean {
 }
 
 /**
+ * Detect LLM wording that prematurely declares the assignment complete.
+ * Used to guard against completion language when rubric criteria aren't met.
+ */
+export function containsCompletionLanguage(text: string): boolean {
+  const completionPatterns = [
+    /completed\s+this\s+assignment/i,
+    /you'?re\s+done/i,
+    /that\s+works[.!]/i,
+    /you'?ve\s+met\s+the\s+goal/i,
+    /click\s+submit/i,
+    /great\s+work\s+on\s+this\s+assignment/i,
+    /good\s+effort.*let'?s\s+move\s+on/i,
+    /that\s+wraps\s+up/i,
+  ];
+  return completionPatterns.some((p) => p.test(text));
+}
+
+// ============================================
+// EXAMPLES/MATERIALS MASTERY GUARDRAIL
+// ============================================
+
+/** Planet names for matching in student responses. */
+const PLANET_NAMES = /\b(mercury|venus|earth|mars|jupiter|saturn|uranus|neptune)\b/gi;
+
+/** Materials that are valid for grade 2+ planet descriptions. */
+const ROCKY_MATERIALS = /\b(rock|rocks|rocky|stone|metal|iron|dirt|soil|solid)\b/i;
+const GAS_MATERIALS = /\b(gas|gases|gaseous|hydrogen|helium|atmosphere)\b/i;
+const ICE_MATERIALS = /\b(ice|icy|frozen|cold|water)\b/i;
+
+/**
+ * Deterministic check for examples/materials mastery.
+ * Returns "strong" if the student named 2+ distinct items (planets, animals, etc.)
+ * AND provided a basic material/type for each. Returns null if the question
+ * doesn't ask for examples/materials or the answer doesn't meet the bar.
+ *
+ * For grade 2, accepts simple terms like "rocks", "gas", "ice".
+ */
+export function evaluateExamplesMastery(
+  questionText: string,
+  studentTranscript: string,
+  gradeLevel?: string,
+): "strong" | null {
+  const qLower = questionText.toLowerCase();
+
+  // Only applies to questions asking for examples + materials
+  const asksForExamples = /\bexamples?\b/i.test(qLower) || /\bdifferent\b/i.test(qLower);
+  const asksForMaterials = /\bmaterials?\b/i.test(qLower) || /\bmade\s+of\b/i.test(qLower);
+  if (!asksForExamples || !asksForMaterials) return null;
+
+  const transcript = studentTranscript.toLowerCase();
+
+  // Count distinct planets named
+  const planetMatches = transcript.match(PLANET_NAMES);
+  if (!planetMatches) return null;
+  const distinctPlanets = new Set(planetMatches.map(p => p.toLowerCase()));
+  if (distinctPlanets.size < 2) return null;
+
+  // Check that the student provided material descriptions
+  const hasRocky = ROCKY_MATERIALS.test(transcript);
+  const hasGas = GAS_MATERIALS.test(transcript);
+  const hasIce = ICE_MATERIALS.test(transcript);
+
+  // Must describe at least 2 different material types (shows understanding of diversity)
+  const materialTypes = [hasRocky, hasGas, hasIce].filter(Boolean).length;
+  if (materialTypes < 2) return null;
+
+  return "strong";
+}
+
+/**
  * Detect LLM wording that incorrectly praises the student as correct.
  * Used to override coach text when score < CORRECT_THRESHOLD.
  */
@@ -115,6 +502,128 @@ export function containsCorrectLanguage(text: string): boolean {
     /\bspot\s+on\b/i,
   ];
   return correctPatterns.some((p) => p.test(text));
+}
+
+// ============================================
+// WRONG-ANSWER DETECTION & RESPONSE
+// ============================================
+
+/**
+ * Playful / nonsense nouns that are clearly invalid as science answers.
+ * Kept intentionally small — only things a child might say as a joke or guess
+ * that are obviously not real materials, planet names, or science terms.
+ */
+const SILLY_NOUNS_PATTERN = /\b(lollipops?|candy|candies|chocolate|pizza|unicorns?|rainbows?|toys?|cookies?|cakes?|spaghetti|noodles?|bubbles?|fair(?:y|ies)|dragons?|marshmallows?|glitter|sparkles?|jelly|cheese|chicken|broccoli|bananas?|ice\s*cream|poop|fart|boogers?|slime)\b/i;
+
+/**
+ * Vague praise phrases banned in wrong-answer responses.
+ * Includes both prefix and mid-sentence patterns.
+ */
+const WRONG_ANSWER_PRAISE_PATTERN = /\b(good\s+(?:start|thinking|try|effort|thought|idea)|that'?s\s+(?:interesting|a\s+good\s+(?:start|thought))|i\s+see\s+(?:your|what\s+you'?re)\s+thinking|nice\s+(?:try|idea|thought)|that\s+works|interesting\s+idea)\b/i;
+
+/**
+ * Patterns indicating the LLM already produced proper correction language.
+ * If present, we do NOT replace the response.
+ */
+const HAS_CORRECTION_PATTERN = /\bnot\s+quite\b|\bthat'?s\s+not\s+(?:right|correct)\b|\bincorrect\b|\bnot\s+(?:right|correct)\b|\bnot\s+(?:what|how)\s+planets?\b|\bnot\s+made\s+of\b/i;
+
+/**
+ * Valid domain content words — if the student's response contains ANY of these,
+ * it is not purely nonsense (may still be wrong, but has real-domain vocabulary).
+ */
+const VALID_DOMAIN_CONTENT = /\b(?:rock(?:y|s)?|gas(?:eous|es)?|ice|icy|metal|iron|stone|solid|hydrogen|helium|frozen|silicon|mercury|venus|earth|mars|jupiter|saturn|uranus|neptune|planet|orbit|sun|star|gravity|atmosphere|core|surface|dust|soil)\b/i;
+
+/**
+ * Detect whether a student response is clearly wrong / nonsense content.
+ *
+ * Returns true when:
+ *   - Response contains known silly nouns AND lacks valid domain vocabulary, OR
+ *   - Response contains silly nouns in a "made of" construction (even alongside a valid planet name)
+ *
+ * Does NOT require a knowledge base — lightweight heuristic only.
+ */
+export function detectClearlyWrongAnswer(studentResponse: string): boolean {
+  const lower = studentResponse.toLowerCase();
+
+  const hasSilly = SILLY_NOUNS_PATTERN.test(lower);
+  if (!hasSilly) return false;
+
+  const hasValidContent = VALID_DOMAIN_CONTENT.test(lower);
+
+  // Silly nouns with no valid domain content at all → clearly wrong
+  if (!hasValidContent) return true;
+
+  // Silly nouns in a "made of" construction → clearly wrong even with a valid planet name
+  // e.g. "earth is made of lollipops" — Earth is valid but the claim is wrong
+  if (/\bmade\s+of\b/i.test(lower)) return true;
+
+  return false;
+}
+
+/**
+ * Build a deterministic 3-sentence wrong-answer response:
+ *   1. Brief correction
+ *   2. Redirect to valid answer space
+ *   3. One concrete retry question
+ *
+ * Uses scope-aligned probes when available; falls back to planets-specific
+ * or generic retry questions.
+ */
+export function buildWrongAnswerResponse(
+  questionText: string,
+  studentResponse: string,
+  scope: PromptScope | null,
+): string {
+  const lower = studentResponse.toLowerCase();
+
+  // Extract the silly word for a specific correction
+  const sillyMatch = lower.match(SILLY_NOUNS_PATTERN);
+  const sillyWord = sillyMatch ? sillyMatch[0] : "that";
+
+  // Detect question type for domain-appropriate language
+  const isPlanetsQ = /\bplanet|made\s+of|material/i.test(questionText);
+
+  // Sentence 1: Brief correction (kind but honest)
+  const correction = isPlanetsQ
+    ? `Not quite\u2014planets are not made of ${sillyWord}.`
+    : `Not quite\u2014${sillyWord} isn't the right answer here.`;
+
+  // Sentence 2: Redirect to valid answer space
+  let redirect: string;
+  if (isPlanetsQ) {
+    redirect = "Try using real materials like rock, gas, or ice.";
+  } else if (scope?.allowedKeywords?.length) {
+    const kws = scope.allowedKeywords.slice(0, 3).join(", ");
+    redirect = `Think about ${kws}.`;
+  } else {
+    redirect = "Try to think about what you know about this topic.";
+  }
+
+  // Sentence 3: One concrete retry question
+  let retryQuestion: string;
+  if (scope?.scopeAlignedProbes?.length) {
+    retryQuestion = scope.scopeAlignedProbes[0];
+  } else if (isPlanetsQ) {
+    retryQuestion = "Can you name one planet and tell me what it's made of?";
+  } else {
+    retryQuestion = "What do you think the answer might be?";
+  }
+
+  return `${correction} ${redirect} ${retryQuestion}`;
+}
+
+/**
+ * Check whether a coach response contains banned praise phrases for wrong answers.
+ */
+export function containsWrongAnswerPraise(response: string): boolean {
+  return WRONG_ANSWER_PRAISE_PATTERN.test(response);
+}
+
+/**
+ * Check whether a coach response already contains proper correction language.
+ */
+export function hasExplicitCorrection(response: string): boolean {
+  return HAS_CORRECTION_PATTERN.test(response);
 }
 
 /**
@@ -297,10 +806,140 @@ export function buildRepairResponse(questionText: string, attemptCount: number):
 }
 
 // ============================================
+// STUDENT INTENT CLASSIFICATION (server-side)
+// ============================================
+
+export type StudentIntent = "content" | "meta_confusion" | "explicit_end";
+
+/** Patterns indicating meta-conversational utterances (about the session, not the topic). */
+const SERVER_META_PATTERNS: RegExp[] = [
+  /\bare\s+we\s+(going\s+to|gonna)\s+(talk|keep|continue|do)\b/i,
+  /\bwhat\s+(are\s+we|happens)\s+(doing|now|next)\b/i,
+  /\bwhat\s+do\s+(i|we)\s+do\s+now\b/i,
+  /\bhow\s+(long|much\s+time|many\s+questions)\b/i,
+  /\bis\s+(this|that|it)\s+(over|done|finished|the\s+end)\b/i,
+  /\bare\s+you\s+(a\s+)?(robot|computer|ai|real|human|person)\b/i,
+  /\bwho\s+are\s+you\b/i,
+  /\bwhat\s+are\s+you\b/i,
+  /\bcan\s+you\s+hear\s+me\b/i,
+  /\bis\s+(this|it)\s+recording\b/i,
+  /\bam\s+i\s+being\s+(recorded|filmed|watched)\b/i,
+  /\bwhat\s+(is|was)\s+my\s+score\b/i,
+  /\bhow\s+(am\s+i|did\s+i)\s+doing\b/i,
+  /\bthat'?s\s+not\s+what\s+we'?re\s+supposed\s+to\b/i,
+];
+
+/** Patterns indicating explicit intent to end the session. */
+const SERVER_END_INTENT_PATTERNS: RegExp[] = [
+  /\bi'?m\s+done\b/i,
+  /\bi\s+want\s+to\s+(stop|quit|end|finish|leave|go)\b/i,
+  /\blet'?s\s+(stop|end|finish|quit)\b/i,
+  /\bcan\s+(we|i)\s+(stop|end|finish|leave|go)\b/i,
+  /\bi\s+don'?t\s+want\s+to\s+(do|talk|answer|continue)\b/i,
+  /\bno\s+more\s+(questions|talking)\b/i,
+  /\bplease\s+stop\b/i,
+  /^(stop|done|end|quit|bye|goodbye|finished)\s*[.!?]?$/i,
+];
+
+/** Patterns indicating confusion about the task (not about the topic content). */
+const SERVER_CONFUSION_PATTERNS: RegExp[] = [
+  /\bwhat\s+(?:do\s+you\s+mean|are\s+you\s+(saying|asking|talking\s+about))\b/i,
+  /\bi\s+don'?t\s+(?:understand|get)\s+(?:the\s+)?question\b/i,
+  /\bcan\s+you\s+(?:explain|rephrase|say)\s+(?:that|it|the\s+question)\b/i,
+  /\bthat\s+doesn'?t\s+make\s+(?:sense|any\s+sense)\b/i,
+  /\bwhat\s+(?:does\s+that\s+mean|do\s+you\s+want\s+me\s+to\s+(say|do))\b/i,
+  /\bi'?m\s+confused\b/i,
+  /\bhuh\s*\?/i,
+];
+
+/** Filler words excluded when counting topic-content words. */
+const INTENT_FILLER = new Set([
+  "um","uh","hmm","like","well","so","yeah","yep","ok","okay",
+  "basically","right","just","really","very","the","a","an","is","are",
+  "was","were","it","its","i","my","me","you","your","this","that",
+  "and","or","but","to","of","in","on","for","with","do","don't",
+  "does","doesn't","did","didn't","have","has","had","not","no",
+  "dont","know","because","think","about","answer",
+]);
+
+/** Meta/session words that don't count as topic content. */
+const INTENT_META_WORDS = new Set([
+  "talk","talking","conversation","recording","score","question","questions",
+  "time","done","stop","end","finish","finished","leave","going","gonna",
+  "send","sending","robot","computer","person","teacher","parent",
+  "long","many","more","next","over","listen","hear","repeat",
+  "grade","class","subject","doing","happens","happen",
+]);
+
+/**
+ * Count content words outside a pattern match that are NOT filler/meta words.
+ * Only topic-relevant words count toward the "has a real answer" threshold.
+ */
+function countTopicWordsOutsideMatch(text: string, pattern: RegExp): number {
+  const match = pattern.exec(text.toLowerCase());
+  if (!match) return 0;
+  const before = text.slice(0, match.index);
+  const after = text.slice(match.index + match[0].length);
+  const remainder = (before + " " + after).trim();
+  return remainder
+    .toLowerCase()
+    .replace(/[^a-z\s]/g, " ")
+    .split(/\s+/)
+    .filter((w) => w.length > 0 && !INTENT_FILLER.has(w) && !INTENT_META_WORDS.has(w))
+    .length;
+}
+
+/**
+ * Classify a student's utterance intent for decision-engine purposes.
+ * Returns "content", "meta_confusion", or "explicit_end".
+ *
+ * If a meta/confusion/end phrase is present but the utterance also contains
+ * >= 4 topic-content words OUTSIDE the matched phrase, returns "content".
+ */
+export function classifyStudentIntent(response: string): StudentIntent {
+  const trimmed = response.trim();
+  if (!trimmed) return "content";
+
+  const lower = trimmed.toLowerCase();
+
+  // Explicit end — checked first because it's actionable
+  for (const pattern of SERVER_END_INTENT_PATTERNS) {
+    if (pattern.test(lower)) {
+      if (countTopicWordsOutsideMatch(trimmed, pattern) >= 4) {
+        return "content";
+      }
+      return "explicit_end";
+    }
+  }
+
+  // Meta-conversation
+  for (const pattern of SERVER_META_PATTERNS) {
+    if (pattern.test(lower)) {
+      if (countTopicWordsOutsideMatch(trimmed, pattern) >= 4) {
+        return "content";
+      }
+      return "meta_confusion";
+    }
+  }
+
+  // Confusion about the task
+  for (const pattern of SERVER_CONFUSION_PATTERNS) {
+    if (pattern.test(lower)) {
+      if (countTopicWordsOutsideMatch(trimmed, pattern) >= 4) {
+        return "content";
+      }
+      return "meta_confusion";
+    }
+  }
+
+  return "content";
+}
+
+// ============================================
 // CONCEPT TYPE CLASSIFICATION
 // ============================================
 
-export type ConceptType = "observable" | "abstract" | "opinion_repair";
+export type ConceptType = "observable" | "abstract" | "procedural" | "opinion_repair";
 
 /**
  * Classify the concept being discussed as observable, abstract, or opinion/repair.
@@ -325,6 +964,18 @@ export function classifyConceptType(questionText: string, studentAnswer: string)
   ];
   if (opinionPatterns.some((p) => p.test(combined))) {
     return "opinion_repair";
+  }
+
+  // Procedural: step-by-step math operations and algorithms.
+  // Checked before abstract — subtraction/addition are procedural, not abstract.
+  const proceduralPatterns = [
+    /\bsubtract/i, /\baddition\b/i, /\badd(?:ing)?\s+\d/i,
+    /\bsum\b/i, /\bdifference\b/i,
+    /\bhow\s+would\s+you\b/i, /\bexplain\s+(?:your|the)\s+(?:thinking|steps)/i,
+    /\bstep\s+by\s+step\b/i, /\bshow\s+(?:your|the)\s+work\b/i,
+  ];
+  if (proceduralPatterns.some((p) => p.test(combined))) {
+    return "procedural";
   }
 
   // Abstract processes and mechanisms — SPECIFIC terms only.
@@ -653,9 +1304,23 @@ export function containsStepsQuestion(text: string): boolean {
 }
 
 /**
+ * Detect procedural language in coach output that's inappropriate for non-procedural questions.
+ * Catches templates like "first step / what did you get" and "walk me through each step".
+ * Broader than containsStepsQuestion — also catches implicit procedural framing.
+ */
+export function containsProceduralLanguage(text: string): boolean {
+  return containsStepsQuestion(text) ||
+    /\bfirst\s+step\b/i.test(text) ||
+    /\bwhat\s+did\s+you\s+get\b/i.test(text) ||
+    /\bwalk\s+(?:me|us)\s+through\s+each\s+step\b/i.test(text) ||
+    /\bwhat\s+(?:number|answer)\s+did\s+you\s+(?:get|find)\b/i.test(text) ||
+    /\bshow\s+(?:me\s+)?your\s+work\b/i.test(text);
+}
+
+/**
  * Check if the original PROMPT is explicitly procedural (asks for steps itself).
  */
-function isProceduralPrompt(questionText: string): boolean {
+export function isProceduralPrompt(questionText: string): boolean {
   return /\b(?:explain\s+the\s+steps|describe\s+the\s+(?:steps|process|procedure)|what\s+are\s+the\s+steps|step[\s-]+by[\s-]+step)\b/i.test(questionText);
 }
 
@@ -740,8 +1405,24 @@ export function buildSafeProbe(
     return scope.scopeAlignedProbes[idx];
   }
 
-  // Priority 2: Use concept-type probes (no "steps" for non-procedural)
-  const conceptType = classifyConceptType(questionText, studentAnswer);
+  // Priority 2: Examples/materials questions — rubric-aligned probes
+  const qLower = questionText.toLowerCase();
+  if (/\bexamples?\b|\bdifferent\b|\bmaterials?\b|\bmade\s+of\b/i.test(qLower)) {
+    const namedPlanet = /\b(mercury|venus|earth|mars|jupiter|saturn|uranus|neptune)\b/i.test(studentAnswer.toLowerCase());
+    if (!namedPlanet) {
+      return "Which two planets will you use as examples, and what is each made of?";
+    }
+    return "For each planet you named, what is it made of?";
+  }
+
+  // Priority 3: Use concept-type probes (no "steps" for non-procedural)
+  let conceptType = classifyConceptType(questionText, studentAnswer);
+  // HARD BAN: never produce procedural probes for non-procedural prompts.
+  // classifyConceptType may return "procedural" for broad patterns like
+  // "how would you" even on science questions — override to "observable".
+  if (conceptType === "procedural" && !isProceduralPrompt(questionText)) {
+    conceptType = "observable";
+  }
   return buildConceptProbe(conceptType, questionText, studentAnswer);
 }
 
@@ -757,10 +1438,45 @@ export function buildConceptProbe(
 ): string {
   switch (conceptType) {
     case "observable": {
-      if (/describe|explain/i.test(questionText)) {
+      const answerLower = studentAnswer.toLowerCase();
+      const hasExample = /for example|like|such as|one time|instance/i.test(answerLower);
+      const hasDescription = /looks? like|see|notice|watch/i.test(answerLower);
+
+      // Ask for an example if student hasn't given one
+      if (!hasExample) {
+        return "Can you give me an example of that?";
+      }
+      // Ask for sensory detail if student hasn't described what it looks like
+      if (!hasDescription) {
         return "What would you notice if you were watching it happen?";
       }
+      // Ask about materials/tools when the question involves building or doing
+      if (/build|make|create|experiment|test|try/i.test(questionText)) {
+        return "What materials or tools would you need for that?";
+      }
       return "Can you describe what that would look like?";
+    }
+
+    case "procedural": {
+      const answerLower = studentAnswer.toLowerCase();
+      // Evidence-based probe selection based on what's missing:
+      const hasSteps = /first|then|next|after|start|step/i.test(answerLower);
+      const hasReasoning = /because|since|so that|reason|why/i.test(answerLower);
+      const hasNumbers = /\d/.test(answerLower);
+
+      // Most complete → ask to verify
+      if (hasNumbers && hasSteps) {
+        return "Can you check your answer by working it backwards?";
+      }
+      // Has numbers but no steps → ask for step-by-step
+      if (hasNumbers && !hasSteps) {
+        return "Can you walk me through each step? What did you do first, and what number did you get?";
+      }
+      // Has steps but no reasoning → ask why
+      if (hasSteps && !hasReasoning) {
+        return "Why did you choose to do it in that order?";
+      }
+      return "What was your first step, and what did you get?";
     }
 
     case "abstract": {
@@ -1327,9 +2043,9 @@ export function findUnusedProbe(
     return bestProbe;
   }
 
-  // Ultimate fallback
+  // Ultimate fallback — use "observable" since scope context is unknown
   return scope.scopeAlignedProbes[0] || buildConceptProbe(
-    classifyConceptType("", studentAnswer), "", studentAnswer
+    "observable", "", studentAnswer
   );
 }
 
@@ -1390,10 +2106,11 @@ export function enforceAllGuardrails(
     result = rewriteEchoingResponse(result, studentAnswer, questionText, scope);
   }
 
-  // 2. "Steps" ban on non-procedural prompts
-  if (containsStepsQuestion(result) && !isProceduralPrompt(questionText)) {
+  // 2. Procedural language ban on non-procedural prompts
+  //    Catches "steps", "first step", "what did you get", "walk me through each step", etc.
+  if (containsProceduralLanguage(result) && !isProceduralPrompt(questionText)) {
     if (DEBUG_GUARDRAILS) {
-      console.log(`[guardrail] banned "steps" question in ${fieldName} — rewriting`);
+      console.log(`[guardrail] banned procedural language in ${fieldName} — rewriting`);
     }
     result = buildSafeProbe(questionText, studentAnswer, scope);
   }
@@ -1475,6 +2192,779 @@ export function enforceAllGuardrails(
 }
 
 // ============================================
+// DECISION ENGINE INVARIANTS
+// ============================================
+
+/**
+ * Deterministic post-LLM guard that enforces decision-engine invariants.
+ * Runs AFTER the LLM generates feedback but BEFORE enforceQuestionContinueInvariant.
+ *
+ * Invariants:
+ * 1.  No premature completion when criteria not met
+ * 1.5 Praise-only with shouldContinue=true must get a probe
+ * 2.  Meta/confusion repair (force continue + rephrase)
+ * 3.  Explicit end labeling (only from explicit_end intent)
+ * 4.  Every probe must end with ?
+ * 5.  No procedural language for non-procedural prompts
+ * 6.  Wrong-answer guard (clearly wrong content + low score)
+ */
+// Praise-only pattern: response is just a short praise phrase with no actionable content
+const PRAISE_ONLY_PATTERN = /^(good\s+thinking|great\s+job|nice\s+work|well\s+done|awesome|excellent|good\s+answer|great\s+thinking|that'?s\s+right|that'?s\s+correct|you\s+got\s+it|perfect|wonderful|fantastic)[.!]?\s*$/i;
+
+export function isPraiseOnly(text: string): boolean {
+  return PRAISE_ONLY_PATTERN.test(text.trim());
+}
+
+/**
+ * Build a direct response to a student's meta/confusion question.
+ * Instead of generic "No worries! Here's the question again:", answers
+ * the student's actual concern based on their performance.
+ */
+export function buildMetaConfusionResponse(params: {
+  studentResponse: string;
+  score: number;
+  criteriaStatus?: string;
+  questionText: string;
+  mathProblem?: MathProblem;
+  mathValidation?: MathValidationResult;
+  answerScope?: AnswerScope;
+  scopeExpression?: string;
+}): { response: string; shouldContinue: boolean } {
+  const { studentResponse, score, criteriaStatus, questionText, mathProblem, mathValidation, answerScope, scopeExpression } = params;
+  const lower = studentResponse.toLowerCase();
+
+  // Correctness inquiry: "did I get it right?", "was I correct?", "is that right?"
+  const isCorrectnessInquiry = /\bdid\s+i\b|\bwas\s+i\b|\bam\s+i\b|\bis\s+(?:that|it|my\s+answer)\s*(?:right|correct|wrong)\b|\bdid\s+i.*(?:get|answer)/i.test(lower);
+
+  if (isCorrectnessInquiry) {
+    if (mathProblem && mathValidation) {
+      if (mathValidation.status === "correct") {
+        const shouldWrap = criteriaStatus === "strong";
+        if (shouldWrap) {
+          return {
+            response: `Yes, ${mathValidation.extractedAnswer} is correct! ${buildPerformanceAwareClose("strong")}`,
+            shouldContinue: false,
+          };
+        }
+        return {
+          response: `Yes, ${mathValidation.extractedAnswer} is correct! Can you explain how you got that answer?`,
+          shouldContinue: true,
+        };
+      }
+      // Incorrect math answer — use step-scoped expression when answering a sub-step
+      const expr = (answerScope && answerScope !== "WHOLE_PROBLEM" && scopeExpression)
+        ? scopeExpression
+        : mathProblem.expression;
+      return {
+        response: `Not quite — ${expr} isn't ${mathValidation.extractedAnswer ?? "what you said"}. Can you try again?`,
+        shouldContinue: true,
+      };
+    }
+    // Non-math: use score
+    if (score >= CORRECT_THRESHOLD) {
+      return {
+        response: "Yes, you're on the right track! Can you tell me a bit more about how you got your answer?",
+        shouldContinue: criteriaStatus !== "strong",
+      };
+    }
+    return {
+      response: `Not quite yet. Let me re-ask: ${questionText.length <= 100 ? questionText : questionText.slice(0, 100) + "...?"}`,
+      shouldContinue: true,
+    };
+  }
+
+  // Task confusion: "what am I supposed to do?", "what's the question?"
+  const isTaskConfusion = /\bwhat\s+(?:am\s+i|do\s+i|should\s+i)\b|\bwhat'?s\s+the\s+question\b|\bi\s+don'?t\s+understand/i.test(lower);
+  if (isTaskConfusion) {
+    const shortQ = questionText.length <= 100
+      ? questionText
+      : questionText.slice(0, 100) + "...?";
+    return {
+      response: `No problem! Here's the question: ${shortQ}`,
+      shouldContinue: true,
+    };
+  }
+
+  // Generic meta: brief acknowledgment + retry
+  const shortQ = questionText.length <= 100
+    ? questionText
+    : questionText.slice(0, 100) + "...?";
+  return {
+    response: `That's okay! Let's try this: ${shortQ}`,
+    shouldContinue: true,
+  };
+}
+
+export function enforceDecisionEngineInvariants(params: {
+  response: string;
+  shouldContinue: boolean;
+  criteriaMet: boolean;
+  studentIntent: StudentIntent;
+  timeRemainingSec?: number;
+  questionText: string;
+  studentResponse: string;
+  isFinalQuestion: boolean;
+  resolvedScope?: PromptScope | null;
+  missingCriteria?: string[];
+  score?: number;
+  criteriaStatus?: string;
+  mathProblem?: MathProblem;
+  mathValidation?: MathValidationResult;
+  answerScope?: AnswerScope;
+  scopeExpression?: string;
+}): { response: string; shouldContinue: boolean; wrapReason: string | null } {
+  let { response, shouldContinue } = params;
+  const { criteriaMet, studentIntent, timeRemainingSec, questionText, studentResponse, isFinalQuestion, resolvedScope, missingCriteria, score, criteriaStatus, mathProblem, mathValidation, answerScope, scopeExpression } = params;
+  let wrapReason: string | null = null;
+
+  // INVARIANT 1: No premature completion when criteria not met
+  if (!criteriaMet && containsCompletionLanguage(response)) {
+    if (DEBUG_GUARDRAILS) {
+      console.log("[decision-engine] INVARIANT_1: completion language with criteriaMet=false — stripping");
+    }
+    if (shouldContinue) {
+      response = buildProbeFromQuestion(questionText, studentResponse, resolvedScope);
+    } else {
+      // Performance-aware close: match closing language to evaluated status
+      const closeStatus = criteriaStatus === "developing" ? "developing"
+        : criteriaStatus === "needs_support" ? "needs_support"
+        : "needs_support";
+      response = buildPerformanceAwareClose(closeStatus);
+    }
+  }
+
+  // INVARIANT 1.5: Praise-only responses are invalid when shouldContinue=true.
+  // A coach turn like "Good thinking." with no question leaves the student in dead air.
+  // Replace with a targeted probe using the first missing criterion, or a deterministic fallback.
+  if (shouldContinue && isPraiseOnly(response)) {
+    if (DEBUG_GUARDRAILS) {
+      console.log(`[decision-engine] INVARIANT_1.5: praise-only response with shouldContinue=true — replacing with probe`);
+    }
+    if (missingCriteria && missingCriteria.length > 0) {
+      const firstMissing = missingCriteria[0];
+      response = `Good start! Can you tell me more about ${firstMissing.toLowerCase()}?`;
+    } else {
+      response = ensureProbeHasQuestion(response, questionText, studentResponse, resolvedScope);
+    }
+  }
+
+  // INVARIANT 2: Meta/confusion repair — answer the student's concern directly
+  if (studentIntent === "meta_confusion" && (timeRemainingSec === undefined || timeRemainingSec >= 25)) {
+    if (DEBUG_GUARDRAILS) {
+      console.log("[decision-engine] INVARIANT_2: meta/confusion detected — building direct response");
+    }
+    if (mathProblem || mathValidation) {
+      // Math-aware: use direct response based on validation results
+      const metaResult = buildMetaConfusionResponse({
+        studentResponse,
+        score: score ?? 0,
+        criteriaStatus,
+        questionText,
+        mathProblem,
+        mathValidation,
+        answerScope,
+        scopeExpression,
+      });
+      response = metaResult.response;
+      shouldContinue = metaResult.shouldContinue;
+      wrapReason = shouldContinue ? null : "server_wrap";
+    } else {
+      // Non-math: gentle re-ask with original question
+      response = `No worries! Here's the question again: ${questionText}`;
+      shouldContinue = true;
+      wrapReason = null;
+    }
+    return { response, shouldContinue, wrapReason };
+  }
+
+  // INVARIANT 6: Wrong-answer guard — clearly wrong content + low score
+  // When a student gives a clearly nonsense answer (score < 25) and the LLM
+  // still responds with vague praise, replace with a deterministic 3-sentence
+  // correction that redirects toward valid answer space.
+  if (
+    score !== undefined &&
+    score < 25 &&
+    shouldContinue &&
+    studentIntent === "content"
+  ) {
+    const isClearlyWrong = detectClearlyWrongAnswer(studentResponse);
+    const hasBannedPraise = containsWrongAnswerPraise(response);
+    const alreadyCorrected = hasExplicitCorrection(response);
+
+    if (isClearlyWrong || (hasBannedPraise && !alreadyCorrected)) {
+      if (DEBUG_GUARDRAILS) {
+        console.log(
+          `[decision-engine] INVARIANT_6: wrong-answer guard — ` +
+          `clearlyWrong=${isClearlyWrong}, bannedPraise=${hasBannedPraise}, ` +
+          `alreadyCorrected=${alreadyCorrected} — replacing response`
+        );
+      }
+      response = buildWrongAnswerResponse(
+        questionText,
+        studentResponse,
+        resolvedScope || null,
+      );
+    }
+  }
+
+  // INVARIANT 3: Explicit end labeling
+  if (!shouldContinue) {
+    if (studentIntent === "explicit_end") {
+      wrapReason = "explicit_end";
+    } else {
+      wrapReason = "server_wrap";
+    }
+  }
+
+  // INVARIANT 4: Every probe must end with a clear question.
+  // If shouldContinue=true but no question mark, append a deterministic probe.
+  if (shouldContinue && !response.includes("?")) {
+    if (DEBUG_GUARDRAILS) {
+      console.log("[decision-engine] INVARIANT_4: shouldContinue=true but no question — appending probe");
+    }
+    response = ensureProbeHasQuestion(response, questionText, studentResponse, resolvedScope);
+  }
+
+  // INVARIANT 5: No procedural language for non-procedural prompts.
+  // Belt-and-suspenders: catches procedural templates injected by any prior
+  // invariant (e.g., Invariant 1 or 4 calling buildProbeFromQuestion).
+  if (containsProceduralLanguage(response) && !isProceduralPrompt(questionText)) {
+    if (DEBUG_GUARDRAILS) {
+      console.log("[decision-engine] INVARIANT_5: procedural language in non-procedural prompt — replacing");
+    }
+    // Preserve any short ack sentence before the procedural question
+    const sentences = response.split(/(?<=[.!?])\s+/).filter(s => s.trim().length > 0);
+    const ack = sentences.find(s => !containsProceduralLanguage(s) && !s.includes("?"))?.trim();
+    const safeProbe = buildSafeProbe(questionText, studentResponse, resolvedScope);
+    response = ack && ack.length <= 80 ? `${ack} ${safeProbe}` : safeProbe;
+  }
+
+  return { response, shouldContinue, wrapReason };
+}
+
+// ============================================
+// PROBE QUESTION ENFORCEMENT
+// ============================================
+
+/**
+ * Ensure that a probe response contains a question mark.
+ * If the text has no question, replaces it with a deterministic probe
+ * that preserves any leading acknowledgment sentence.
+ *
+ * Used to guarantee every PROBE ends with a clear next-action question.
+ */
+export function ensureProbeHasQuestion(
+  text: string,
+  questionText: string,
+  studentAnswer: string,
+  scope?: PromptScope | null,
+): string {
+  if (text.includes("?")) return text;
+
+  // Extract the first non-empty sentence as an acknowledgment prefix
+  const sentences = text.split(/(?<=[.!])\s+/).filter(s => s.trim().length > 0);
+  const ack = sentences.length > 0 ? sentences[0].trim() : "";
+  const probe = buildProbeFromQuestion(questionText, studentAnswer, scope);
+
+  // Combine: keep the ack if it's short and useful, then append the probe
+  if (ack.length > 0 && ack.length <= 80) {
+    return `${ack} ${probe}`;
+  }
+  return probe;
+}
+
+// ============================================
+// SESSION SUMMARY VALIDATION (deterministic)
+// ============================================
+
+const META_UTTERANCE_PATTERN = /^(that'?s\s+not\s+what|i'?m\s+confused|what\s+do\s+you\s+mean|i\s+don'?t\s+understand|what\s+are\s+we\s+doing|huh\??|can\s+you\s+repeat|say\s+that\s+again)/i;
+
+/**
+ * Common meta prefixes that may precede actual content in a mixed utterance.
+ * Example: "I didn't say anything, I just said earth is made of rock"
+ *        → strip prefix → "earth is made of rock"
+ */
+const META_PREFIX_PATTERNS: RegExp[] = [
+  /^i\s+didn'?t\s+say\s+(?:anything|that)[,.\s—–-]*/i,
+  /^(?:i\s+just\s+said|what\s+i\s+said\s+was|what\s+i\s+meant\s+was)[,.\s—–-]*/i,
+  /^that'?s\s+not\s+what\s+(?:i\s+said|i\s+meant|we'?re\s+supposed\s+to)[,.\s—–-]*/i,
+  /^no\s*[,!.]\s*/i,
+  /^(?:i\s+mean|i\s+meant)[,.\s—–-]*/i,
+  /^i'?m\s+confused\s*[,.\s—–-]*(?:but\s+)?/i,
+  /^(?:what\s+do\s+you\s+mean|what\s+are\s+you\s+(?:saying|asking))\s*[,.\s?—–-]*(?:but\s+|anyway\s+|so\s+)?/i,
+  /^(?:i\s+don'?t\s+(?:understand|get)\s+(?:the\s+)?question)\s*[,.\s—–-]*(?:but\s+)?/i,
+  /^huh\s*[?.!,\s]*(?:but\s+|anyway\s+|well\s+|so\s+)?/i,
+  /^(?:can\s+you\s+repeat|say\s+that\s+again)\s*[,.\s?—–-]*(?:but\s+)?/i,
+];
+
+/** Domain nouns that indicate substantive content after a meta prefix. */
+const DOMAIN_CONTENT_PATTERN = /\b(?:earth|mars|jupiter|saturn|venus|mercury|uranus|neptune|planet|rock|gas|ice|metal|hydrogen|helium|frozen|stone|solid|iron|silicon|water|sun|moon|star|gravity|energy|light|heat|plant|animal|number|add|subtract|multiply|divide)\b/i;
+
+/**
+ * Strip meta-conversation prefixes from a student utterance and return
+ * the content portion if it contains substantive domain content.
+ * Returns null if the utterance is purely meta with no extractable content.
+ */
+export function stripMetaPrefix(utterance: string): string | null {
+  const trimmed = utterance.trim();
+
+  for (const pattern of META_PREFIX_PATTERNS) {
+    const match = pattern.exec(trimmed);
+    if (match) {
+      const remainder = trimmed.slice(match[0].length).trim();
+      if (remainder.length > 0 && (
+        DOMAIN_CONTENT_PATTERN.test(remainder) ||
+        remainder.split(/\s+/).filter(w => w.length > 2).length >= 4
+      )) {
+        return remainder;
+      }
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Filter student utterances into content vs meta/confusion.
+ * Meta utterances should not count as rubric evidence.
+ *
+ * For mixed utterances (meta prefix + content), extracts and keeps
+ * the content portion. Example:
+ *   "I'm confused but earth is made of rock" → keeps "earth is made of rock"
+ */
+export function filterMetaUtterances(utterances: string[]): {
+  content: string[];
+  metaCount: number;
+} {
+  const content: string[] = [];
+  let metaCount = 0;
+
+  for (const u of utterances) {
+    const trimmed = u.trim();
+    if (META_UTTERANCE_PATTERN.test(trimmed)) {
+      // Meta-matching utterance — try to extract embedded content
+      const extracted = stripMetaPrefix(trimmed);
+      if (extracted) {
+        content.push(extracted);
+      } else {
+        metaCount++;
+      }
+    } else {
+      content.push(trimmed);
+    }
+  }
+
+  return { content, metaCount };
+}
+
+const SUMMARY_PLANET_LIST = ["mercury", "venus", "earth", "mars", "jupiter", "saturn", "uranus", "neptune"];
+const SUMMARY_MATERIAL_TYPES = [
+  { label: "rocky", pattern: /\b(?:rock(?:y|s)?|stone|solid|iron|metal|silicon)\b/i },
+  { label: "gas", pattern: /\b(?:gas(?:eous|es)?|hydrogen|helium)\b/i },
+  { label: "ice", pattern: /\b(?:ice|icy|frozen|methane|ammonia)\b/i },
+];
+
+/**
+ * Extract deterministic evidence from student speech for rubric validation.
+ * Returns concrete counts of planet names and material types.
+ */
+export function extractDeterministicEvidence(utterances: string[]): {
+  namedPlanets: string[];
+  namedMaterials: string[];
+} {
+  const allText = utterances.join(" ").toLowerCase();
+  const namedPlanets = SUMMARY_PLANET_LIST.filter(p => new RegExp(`\\b${p}\\b`, "i").test(allText));
+  const namedMaterials = SUMMARY_MATERIAL_TYPES.filter(m => m.pattern.test(allText)).map(m => m.label);
+  return { namedPlanets, namedMaterials };
+}
+
+// ============================================
+// PLANET-MATERIAL CORRECTNESS TRACKING
+// ============================================
+
+/** Acceptable material types for each planet (used for correctness validation). */
+const ACCEPTABLE_PLANET_MATERIALS: Record<string, string[]> = {
+  mercury: ["rock", "metal"],
+  venus: ["rock"],
+  earth: ["rock", "metal"],
+  mars: ["rock"],
+  jupiter: ["gas"],
+  saturn: ["gas"],
+  uranus: ["ice", "gas"],
+  neptune: ["ice", "gas"],
+};
+
+/**
+ * Extract incorrect material claims from student utterances.
+ * Finds patterns like "planet is/are made of [word]" where the word is either
+ * not a known material or is the wrong material type for that planet.
+ */
+export function extractIncorrectClaims(
+  utterances: string[]
+): Array<{ planet: string; claimed: string }> {
+  const results: Array<{ planet: string; claimed: string }> = [];
+  const seenPlanets = new Set<string>();
+  const allText = utterances.join(" ");
+
+  const claimRegex = new RegExp(
+    `\\b(${SUMMARY_PLANET_LIST.join("|")})\\b[^.?!]{0,30}?\\bmade\\s+of\\s+(\\w+)`,
+    "ig"
+  );
+
+  let match;
+  while ((match = claimRegex.exec(allText)) !== null) {
+    const planet = match[1].toLowerCase();
+    const claimedWord = match[2].toLowerCase();
+    if (seenPlanets.has(planet)) continue;
+    seenPlanets.add(planet);
+
+    // Check if this is a known valid material
+    const isKnownMaterial = SUMMARY_MATERIAL_TYPES.some(m => m.pattern.test(claimedWord));
+    if (isKnownMaterial) {
+      // Known material — check if correct for this planet
+      const acceptable = ACCEPTABLE_PLANET_MATERIALS[planet];
+      const normalized = normalizeMaterial(claimedWord);
+      if (acceptable && !acceptable.includes(normalized)) {
+        results.push({ planet: capitalizePlanet(planet), claimed: claimedWord });
+      }
+    } else {
+      // Completely invalid material (e.g. "lollipops")
+      results.push({ planet: capitalizePlanet(planet), claimed: claimedWord });
+    }
+  }
+
+  return results;
+}
+
+const PLANET_CLAIM_PATTERN = /\b(?:examples?\s+of\s+(?:at\s+least\s+)?(?:two|2|three|3|multiple|several|different)\s+planets?|(?:two|2|three|3|multiple|several)\s+(?:different\s+)?planets?)\b/i;
+const MATERIAL_CLAIM_PATTERN = /\b(?:made\s+of|composed\s+of|materials?|what\s+(?:they|each|planets?)\s+(?:are|is)\s+made)\b/i;
+
+/**
+ * Validate summary bullets against deterministic evidence.
+ * Replaces bullets that make rubric claims unsupported by transcript evidence.
+ */
+export function validateRubricClaims(
+  bullets: string[],
+  evidence: { namedPlanets: string[]; namedMaterials: string[] }
+): string[] {
+  return bullets.map(bullet => {
+    // Check for planet-count claims that exceed actual evidence
+    if (PLANET_CLAIM_PATTERN.test(bullet) && evidence.namedPlanets.length < 2) {
+      if (evidence.namedPlanets.length === 1) {
+        return `The student mentioned ${evidence.namedPlanets[0]} but did not provide a second planet example.`;
+      }
+      return `The student did not name specific planets in their response.`;
+    }
+    // Check for materials claims when no materials were mentioned
+    if (MATERIAL_CLAIM_PATTERN.test(bullet) && /\b(?:describ|explain|identif)/i.test(bullet) && evidence.namedMaterials.length === 0) {
+      return `The student did not describe what the planets are made of.`;
+    }
+    return bullet;
+  });
+}
+
+/**
+ * Build a deterministic overall sentence from criteriaEvaluation data.
+ * Returns null if no criteriaEvaluation is available (let LLM output stand).
+ */
+export function buildDeterministicOverall(
+  criteriaEvaluation: { overallStatus?: string; missingCriteria?: string[] } | undefined,
+  hasSuccessCriteria: boolean
+): string | null {
+  if (!criteriaEvaluation?.overallStatus) return null;
+
+  const status = criteriaEvaluation.overallStatus;
+  const missing = criteriaEvaluation.missingCriteria || [];
+
+  if (status === "strong") {
+    return hasSuccessCriteria
+      ? "The student met the rubric criteria for this question."
+      : "The student demonstrated understanding of the topic.";
+  }
+  if (status === "partial") {
+    const missingNote = missing.length > 0 ? ` Missing: ${missing.join("; ")}.` : "";
+    return `The student partially addressed the rubric criteria.${missingNote}`;
+  }
+  if (status === "weak" || status === "off_topic") {
+    const missingNote = missing.length > 0 ? ` Not addressed: ${missing.join("; ")}.` : "";
+    return `The student's response did not meet the rubric criteria.${missingNote}`;
+  }
+  return null;
+}
+
+// ============================================
+// DETERMINISTIC SUMMARY BUILDER
+// ============================================
+
+/**
+ * Normalize a raw material word to a standard label.
+ * "rocky"/"rocks"/"stone"/"solid"/"iron"/"silicon" → "rock"
+ * "gas"/"gaseous"/"gases"/"hydrogen"/"helium" → "gas"
+ * "ice"/"icy"/"frozen"/"methane"/"ammonia" → "ice"
+ * "metal" → "metal"
+ */
+export function normalizeMaterial(raw: string): string {
+  const lower = raw.toLowerCase();
+  if (/^rock|^stone|^solid|^silicon/i.test(lower)) return "rock";
+  if (/^iron/i.test(lower)) return "metal";
+  if (/^metal/i.test(lower)) return "metal";
+  if (/^gas|^hydrogen|^helium/i.test(lower)) return "gas";
+  if (/^ic[ey]|^frozen|^methane|^ammonia/i.test(lower)) return "ice";
+  return lower;
+}
+
+/** Capitalize a planet name: "earth" → "Earth". */
+function capitalizePlanet(name: string): string {
+  return name.charAt(0).toUpperCase() + name.slice(1).toLowerCase();
+}
+
+// Proximity regex: "planet ... made of ... material" within the same clause.
+// Allows up to 40 chars between planet and "made of", and up to 20 chars
+// between "made of" and the material word.
+const PLANET_RE = "(mercury|venus|earth|mars|jupiter|saturn|uranus|neptune)";
+const MATERIAL_RE = "(rock|rocky|rocks|gas|gaseous|gases|ice|icy|metal|iron|stone|solid|hydrogen|helium|frozen)";
+/**
+ * Extract planet-material associations from student utterances.
+ *
+ * Two-pass approach:
+ *   1. Proximity-based: find explicit "planet … made of … material" patterns.
+ *   2. Segment fallback: split at "and" / "," and match planet + nearest material.
+ *
+ * Materials are normalized to standard labels (rock, gas, ice, metal).
+ * Deduplicated by planet name. Returns at most 3 pairs.
+ */
+export function extractPlanetMaterialPairs(
+  utterances: string[]
+): Array<{ planet: string; material: string }> {
+  const pairs: Array<{ planet: string; material: string }> = [];
+  const seenPlanets = new Set<string>();
+
+  const allText = utterances.join(" ");
+
+  // Pass 1: proximity-based "made of" pairs (non-greedy to match closest pair)
+  const pairRegex = new RegExp(
+    `\\b${PLANET_RE}\\b[^.?!]{0,40}?\\bmade of\\b[^.?!]{0,20}?\\b${MATERIAL_RE}\\b`,
+    "ig"
+  );
+  let match: RegExpExecArray | null;
+  while ((match = pairRegex.exec(allText)) !== null) {
+    const planet = match[1].toLowerCase();
+    const rawMat = match[2];
+    if (seenPlanets.has(planet)) continue;
+    seenPlanets.add(planet);
+    pairs.push({
+      planet: capitalizePlanet(planet),
+      material: normalizeMaterial(rawMat),
+    });
+  }
+
+  // Pass 2: segment fallback for planets not yet paired
+  for (const utt of utterances) {
+    const lower = utt.toLowerCase();
+    const segments = lower.split(/\band\b|,/).map(s => s.trim());
+
+    for (const seg of segments) {
+      for (const planet of SUMMARY_PLANET_LIST) {
+        if (seenPlanets.has(planet)) continue;
+        if (!new RegExp(`\\b${planet}\\b`, "i").test(seg)) continue;
+
+        seenPlanets.add(planet);
+        let material = "";
+        for (const mat of SUMMARY_MATERIAL_TYPES) {
+          const rawMatch = seg.match(mat.pattern);
+          if (rawMatch) {
+            material = normalizeMaterial(rawMatch[0]);
+            break;
+          }
+        }
+        pairs.push({
+          planet: capitalizePlanet(planet),
+          material,
+        });
+      }
+    }
+  }
+
+  return pairs.slice(0, 3);
+}
+
+/**
+ * Detect whether the student described different planet types.
+ * Returns true if utterances mention both a rocky-type keyword AND
+ * a gas/ice-type keyword — indicating the student understands there
+ * are distinct categories of planets.
+ */
+export function detectTypeStatement(utterances: string[]): boolean {
+  const allText = utterances.join(" ").toLowerCase();
+  const hasRocky = /\b(?:rock(?:y|s)?|stone|solid|iron|metal)\b/i.test(allText);
+  const hasGasOrIce = /\b(?:gas(?:eous|es)?|ice|icy|frozen)\b/i.test(allText);
+  return hasRocky && hasGasOrIce;
+}
+
+export interface DeterministicSummaryResult {
+  bullets: string[];
+  overall: string;
+}
+
+/**
+ * Build a fully deterministic, rubric-aware session summary.
+ * No LLM call — every claim is grounded in extracted evidence.
+ *
+ * Call this when criteriaEvaluation.overallStatus is available.
+ */
+export function buildDeterministicSummary(params: {
+  evidenceUtterances: string[];
+  substantiveCount: number;
+  metaTurnCount: number;
+  questionText: string;
+  criteriaEvaluation: { overallStatus?: string; missingCriteria?: string[] };
+  successCriteria?: string[];
+}): DeterministicSummaryResult {
+  const {
+    evidenceUtterances, substantiveCount, metaTurnCount,
+    criteriaEvaluation, questionText,
+  } = params;
+  const status = criteriaEvaluation.overallStatus;
+  const missing = criteriaEvaluation.missingCriteria || [];
+
+  const evidence = extractDeterministicEvidence(evidenceUtterances);
+  const pairs = extractPlanetMaterialPairs(evidenceUtterances);
+  const describedDifferentTypes = detectTypeStatement(evidenceUtterances);
+  const incorrectClaims = extractIncorrectClaims(evidenceUtterances);
+
+  const bullets: string[] = [];
+  let overall: string;
+
+  // Helper: format a planet-material pair as "Planet—material"
+  const fmtDash = (p: { planet: string; material: string }) =>
+    p.material ? `${p.planet}\u2014${p.material}` : p.planet;
+
+  // Check for progression: incorrect claims in early utterances, correct in later
+  const hasProgression = incorrectClaims.length > 0 && pairs.some(p => p.material);
+
+  if (status === "strong") {
+    // ---- STRONG: met the goal ----
+    const pairsWithMat = pairs.filter(p => p.material);
+    if (pairsWithMat.length >= 2) {
+      overall = "Met the goal: explained what planets are made of and gave named examples with materials.";
+    } else if (evidence.namedPlanets.length >= 2) {
+      overall = "Met the goal: named planet examples.";
+    } else {
+      overall = "Met the goal: answered the question.";
+    }
+
+    // Evidence bullet: planet examples with materials (up to 3, em-dash format)
+    if (pairsWithMat.length >= 2) {
+      bullets.push(`Examples given: ${pairsWithMat.slice(0, 3).map(fmtDash).join("; ")}.`);
+    } else if (pairs.length >= 2) {
+      // Planets named but no materials associated
+      bullets.push(`Named planet examples: ${pairs.slice(0, 3).map(p => p.planet).join(", ")}.`);
+    } else if (pairs.length === 1) {
+      bullets.push(`Named ${fmtDash(pairs[0])} as an example.`);
+    }
+
+    // Progression note: initially incorrect then corrected
+    if (hasProgression && bullets.length < 4) {
+      const wrongNote = incorrectClaims.map(c => `${c.planet} as "${c.claimed}"`).join(", ");
+      bullets.push(`Initially gave incorrect examples (${wrongNote}), then self-corrected.`);
+    }
+
+    // "Different planet types" bullet when both rocky and gas/ice detected
+    if (describedDifferentTypes && bullets.length < 4) {
+      const allText = evidenceUtterances.join(" ").toLowerCase();
+      const typeLabel = /\b(?:gas(?:eous|es)?)\b/i.test(allText) ? "gas" : "ice";
+      bullets.push(`Explained that some planets are rocky while others are ${typeLabel}/${typeLabel === "gas" ? "ice" : "gas"} giants.`);
+    }
+
+    // Student quote (first content utterance, truncated)
+    if (evidenceUtterances.length > 0 && bullets.length < 4) {
+      const quote = evidenceUtterances[0].slice(0, 100);
+      const ellipsis = evidenceUtterances[0].length > 100 ? "..." : "";
+      bullets.push(`The student said: "${quote}${ellipsis}"`);
+    }
+
+    // Turn count when there were multiple exchanges
+    if (evidenceUtterances.length > 1 && bullets.length < 4) {
+      bullets.push(
+        `Gave ${evidenceUtterances.length} content responses during the conversation.`
+      );
+    }
+  } else {
+    // ---- PARTIAL / WEAK / OFF_TOPIC ----
+    if (status === "partial") {
+      overall = missing.length > 0
+        ? `Partially met the goal. Missing: ${missing.join("; ")}.`
+        : "Partially met the goal.";
+    } else {
+      overall = missing.length > 0
+        ? `Did not meet the goal. Not addressed: ${missing.join("; ")}.`
+        : "Did not meet the goal.";
+    }
+
+    // Incorrect claims bullet (e.g. "said Earth is made of lollipops")
+    if (incorrectClaims.length > 0 && bullets.length < 4) {
+      const claimNotes = incorrectClaims.map(c => {
+        const correct = ACCEPTABLE_PLANET_MATERIALS[c.planet.toLowerCase()];
+        const correctLabel = correct ? correct[0] : "unknown";
+        return `said ${c.planet} is made of "${c.claimed}" (actually ${correctLabel})`;
+      });
+      bullets.push(`Incorrect claims: ${claimNotes.join("; ")}.`);
+    }
+
+    // Correct pairs found alongside incorrect ones → progression
+    if (hasProgression && bullets.length < 4) {
+      const correctPairs = pairs.filter(p => p.material);
+      if (correctPairs.length > 0) {
+        bullets.push(`Later corrected: ${correctPairs.map(fmtDash).join("; ")}.`);
+      }
+    }
+
+    // Grounded student quote (only if no incorrect claims already shown)
+    if (incorrectClaims.length === 0 && evidenceUtterances.length > 0 && bullets.length < 4) {
+      const quote = evidenceUtterances[0].slice(0, 100);
+      const ellipsis = evidenceUtterances[0].length > 100 ? "..." : "";
+      bullets.push(`What the student said: "${quote}${ellipsis}"`);
+    }
+
+    // Still-needed bullet from missing criteria
+    if (missing.length > 0 && bullets.length < 4) {
+      bullets.push(`Still needed: ${missing.join("; ")}.`);
+    }
+
+    // Planet evidence if any (don't over-claim)
+    if (incorrectClaims.length === 0 && pairs.length === 1 && bullets.length < 4) {
+      bullets.push(
+        `Named ${fmtDash(pairs[0])} but did not provide a second example.`
+      );
+    } else if (pairs.length === 0 && evidence.namedPlanets.length === 0 &&
+               incorrectClaims.length === 0 && /\bplanet/i.test(questionText) && bullets.length < 4) {
+      bullets.push("Did not name specific planets.");
+    }
+  }
+
+  // Meta-turn context
+  if (metaTurnCount > 0 && bullets.length < 4) {
+    bullets.push(
+      `${metaTurnCount} of the student's ${substantiveCount} responses ` +
+      `were meta-comments or expressions of confusion.`
+    );
+  }
+
+  // Ensure at least 2 bullets
+  if (bullets.length < 2) {
+    bullets.push(
+      `The student provided ${evidenceUtterances.length} content ` +
+      `response${evidenceUtterances.length !== 1 ? "s" : ""} during the conversation.`
+    );
+  }
+
+  return {
+    bullets: bullets.slice(0, 4),
+    overall,
+  };
+}
+
+// ============================================
 // SHOULDCONTINUE / QUESTION INVARIANT
 // ============================================
 
@@ -1496,7 +2986,8 @@ export function enforceQuestionContinueInvariant(
   response: string,
   shouldContinue: boolean,
   followUpQuestion: string | undefined,
-  isFinalQuestion: boolean
+  isFinalQuestion: boolean,
+  criteriaStatus?: string,
 ): { response: string; shouldContinue: boolean } {
   const hasFollowUp = !!followUpQuestion && followUpQuestion.trim().length > 0;
   let finalResponse = response;
@@ -1510,24 +3001,51 @@ export function enforceQuestionContinueInvariant(
     let cleaned = nonQuestionSentences.join(" ").trim();
 
     if (!cleaned || cleaned.length < 5) {
-      // Nothing left after stripping — use a clean close template
-      cleaned = isFinalQuestion
-        ? "Great work on this assignment!"
-        : "Good effort! Let's move on to the next question.";
+      if (criteriaStatus) {
+        // Performance-aware close: match closing language to evaluated status
+        const closeStatus = criteriaStatus === "strong" ? "strong"
+          : criteriaStatus === "developing" ? "developing"
+          : "needs_support";
+        cleaned = buildPerformanceAwareClose(closeStatus);
+      } else if (isFinalQuestion) {
+        cleaned = "Thanks for sharing your thinking on this question.";
+      } else {
+        cleaned = "Thanks for trying. Let's keep going.";
+      }
     }
 
-    console.log(
+    // PRAISE-ONLY GUARD: If stripping questions left praise-only text
+    // (e.g., "Good thinking.") but the student's answer was wrong/partial,
+    // replace with neutral performance-aware close. Praise-only wraps are
+    // misleading when the student hasn't demonstrated mastery.
+    // Only fires when criteriaStatus is explicitly set (not undefined).
+    if (isPraiseOnly(cleaned) && criteriaStatus && criteriaStatus !== "strong") {
+      const praiseCloseStatus = criteriaStatus === "developing" ? "developing" : "needs_support";
+      if (DEBUG_GUARDRAILS) console.log(`[coach-contract] PRAISE-ONLY-GUARD: "${cleaned}" replaced — criteriaStatus=${criteriaStatus}`);
+      cleaned = buildPerformanceAwareClose(praiseCloseStatus);
+    }
+
+    if (DEBUG_GUARDRAILS) console.log(
       "[coach-contract] INVARIANT_B: shouldContinue=false, stripping questions |",
       { original: finalResponse.slice(0, 80), cleaned: cleaned.slice(0, 80) }
     );
     finalResponse = cleaned;
   }
 
+  // PRAISE-ONLY GUARD (no-strip path): If shouldContinue=false and the response
+  // is praise-only even without question stripping, replace with appropriate close.
+  // Only fires when criteriaStatus is explicitly set (not undefined).
+  if (!finalContinue && isPraiseOnly(finalResponse) && criteriaStatus && criteriaStatus !== "strong") {
+    const praiseCloseStatus = criteriaStatus === "developing" ? "developing" : "needs_support";
+    if (DEBUG_GUARDRAILS) console.log(`[coach-contract] PRAISE-ONLY-GUARD (no-strip): "${finalResponse}" replaced — criteriaStatus=${criteriaStatus}`);
+    finalResponse = buildPerformanceAwareClose(praiseCloseStatus);
+  }
+
   // INVARIANT A: If questions STILL exist in the response (survived stripping)
   // OR followUpQuestion is non-empty, shouldContinue MUST be true.
   const stillHasQuestion = /\?/.test(finalResponse) || hasFollowUp;
   if (stillHasQuestion && !finalContinue) {
-    console.log(
+    if (DEBUG_GUARDRAILS) console.log(
       "[coach-contract] INVARIANT_A: question survived stripping → forcing shouldContinue=true |",
       { hasFollowUp, preview: finalResponse.slice(0, 80) }
     );

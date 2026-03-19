@@ -8,7 +8,7 @@
  * - Expand only what you need
  */
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useParams, Link, useLocation } from "react-router-dom";
 import {
   getLesson,
@@ -60,10 +60,12 @@ import EducatorAppHeader from "../components/EducatorAppHeader";
 import { useToast } from "../components/Toast";
 import {
   buildStudentDrilldown,
+  buildJourneySummary,
+  buildInsightPhrase,
+  getStepLabel,
   getUnderstandingLabel,
   getUnderstandingColor,
   getUnderstandingBgColor,
-  getCoachSupportLabel,
   getQuestionOutcomeLabel,
   calculateQuestionOutcome,
   wasHintUsed,
@@ -553,6 +555,7 @@ export default function StudentAssignmentReview() {
   const [selectedTodoType, setSelectedTodoType] = useState("");
   const [customTodoText, setCustomTodoText] = useState("");
   const [reassignChecked, setReassignChecked] = useState(false);
+  const [markReviewCompleteChecked, setMarkReviewCompleteChecked] = useState(false);
   const [badgeTypes, setBadgeTypes] = useState<BadgeTypeInfo[]>([]);
   const [isSavingActions, setIsSavingActions] = useState(false);
 
@@ -818,6 +821,7 @@ export default function StudentAssignmentReview() {
   useEffect(() => {
     resizeTextarea();
   }, [teacherNote, resizeTextarea]);
+
 
   // Handle follow-up badge click
   const handleFollowupClick = useCallback(async () => {
@@ -1241,7 +1245,8 @@ export default function StudentAssignmentReview() {
     const hasReassign = reassignChecked;
     const hasNoteChange = teacherNote !== (session?.educatorNotes || "");
 
-    if (!hasBadgeToAward && !hasTodoToCreate && !hasCoachingToCreate && !hasReassign && !hasNoteChange) {
+    const hasNote = teacherNote.trim().length > 0;
+    if (!hasBadgeToAward && !hasTodoToCreate && !hasCoachingToCreate && !hasReassign && !markReviewCompleteChecked && !hasNoteChange && !hasNote) {
       showError("Please select at least one action");
       return;
     }
@@ -1349,6 +1354,9 @@ export default function StudentAssignmentReview() {
         const sessionType = isRecommendationForSupport(activeRecommendation) ? "support" : "enrichment";
         actionDescriptions.push(`Scheduled ${sessionType} session`);
       }
+      if (markReviewCompleteChecked) {
+        actionDescriptions.push("Marked review complete");
+      }
 
       if (actionDescriptions.length > 0) {
         const dateStr = new Date().toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
@@ -1413,8 +1421,10 @@ export default function StudentAssignmentReview() {
         }
       } else if (result.todo) {
         showSuccess("Follow-up added to your to-do list.");
+      } else if (markReviewCompleteChecked) {
+        showSuccess("Review marked complete.");
       } else {
-        showSuccess("Assignment marked as reviewed.");
+        showSuccess("Review saved.");
       }
 
       // Reset action selections
@@ -1425,6 +1435,7 @@ export default function StudentAssignmentReview() {
       setSelectedTodoType("");
       setCustomTodoText("");
       setReassignChecked(false);
+      setMarkReviewCompleteChecked(false);
       setPushCoachingChecked(false);
       setCoachingTitle("");
       setCoachingNote("");
@@ -1443,9 +1454,22 @@ export default function StudentAssignmentReview() {
     const hasBadgeToAward = awardBadgeChecked && selectedBadgeType;
     const hasTodoToCreate = createTodoChecked && selectedTodoType && (selectedTodoType !== "custom" || customTodoText.trim());
     const hasCoachingToCreate = pushCoachingChecked && coachingTitle.trim();
-    const hasNoteChange = teacherNote !== (session?.educatorNotes || "");
-    return hasBadgeToAward || hasTodoToCreate || hasCoachingToCreate || reassignChecked || hasNoteChange;
+    const hasNote = teacherNote.trim().length > 0;
+    return hasBadgeToAward || hasTodoToCreate || hasCoachingToCreate || reassignChecked || markReviewCompleteChecked || hasNote;
   };
+
+  // Derive suggested next step from student signals
+  const suggestedNextStep = useMemo(() => {
+    if (!drilldown) return null;
+    const { understanding, coachSupport } = drilldown;
+    if (understanding === "strong") {
+      if (coachSupport === "high") return "Add to follow-up list";
+      return "Mark review complete";
+    }
+    if (understanding === "developing") return "Add to follow-up list";
+    if (understanding === "needs-support") return "Reassign for practice";
+    return null;
+  }, [drilldown]);
 
   // Reference for sections (for auto-scroll when coming from recommendations)
   const actionsSectionRef = useRef<HTMLDivElement>(null);
@@ -1695,74 +1719,11 @@ export default function StudentAssignmentReview() {
           marginBottom: "16px",
         }}
       >
+        {/* Row 1: title + review status */}
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "16px" }}>
-          {/* Left: Assignment & Student Info */}
-          <div style={{ flex: 1, minWidth: 0 }}>
-            {/* Assignment Title - Primary */}
-            <h1
-              style={{
-                margin: "0 0 4px 0",
-                fontSize: "1.5rem",
-                fontWeight: 600,
-                color: "#1e293b",
-                lineHeight: 1.2,
-              }}
-            >
-              {lesson.title}
-            </h1>
-            {/* Student Name - Prominent Secondary (clickable → Student Profile) */}
-            <h2
-              style={{
-                margin: "0 0 12px 0",
-                fontSize: "1.1rem",
-                fontWeight: 500,
-                color: "#475569",
-              }}
-            >
-              <Link
-                to={`/educator/student/${studentId}`}
-                state={studentProfileState}
-                style={{
-                  color: "inherit",
-                  textDecoration: "none",
-                  cursor: "pointer",
-                  transition: "text-decoration 0.15s",
-                }}
-                onMouseEnter={(e) => { e.currentTarget.style.textDecoration = "underline"; }}
-                onMouseLeave={(e) => { e.currentTarget.style.textDecoration = "none"; }}
-              >
-                {student.name}
-              </Link>
-            </h2>
-            {/* Metadata row */}
-            <div style={{ display: "flex", alignItems: "center", gap: "12px", flexWrap: "wrap" }}>
-              {lesson.subject && (
-                <span
-                  style={{
-                    padding: "4px 10px",
-                    background: "#e0f2fe",
-                    color: "#0369a1",
-                    borderRadius: "4px",
-                    fontSize: "0.8rem",
-                    fontWeight: 500,
-                  }}
-                >
-                  {lesson.subject}
-                </span>
-              )}
-              <span style={{ color: "#64748b", fontSize: "0.85rem" }}>
-                {drilldown.completedAt
-                  ? `Completed ${new Date(drilldown.completedAt).toLocaleDateString()}`
-                  : "In Progress"}
-              </span>
-              {assignment && assignment.attempts > 1 && (
-                <span style={{ color: "#0369a1", fontSize: "0.85rem", fontWeight: 500 }}>
-                  Attempt #{assignment.attempts}
-                </span>
-              )}
-            </div>
-          </div>
-
+          <h1 style={{ margin: 0, fontSize: "1.5rem", fontWeight: 600, color: "#1e293b", lineHeight: 1.2 }}>
+            {lesson.title}
+          </h1>
           {/* Right: Status & Actions */}
           <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: "10px", flexShrink: 0 }}>
             {/* Review Status Badge + Mark Reviewed */}
@@ -1882,8 +1843,195 @@ export default function StudentAssignmentReview() {
             )}
           </div>
         </div>
+
+        {/* Row 2: Student name */}
+        <h2 style={{ margin: "6px 0 0 0", fontSize: "1.1rem", fontWeight: 500, color: "#475569" }}>
+          <Link
+            to={`/educator/student/${studentId}`}
+            state={studentProfileState}
+            style={{ color: "inherit", textDecoration: "none", cursor: "pointer", transition: "text-decoration 0.15s" }}
+            onMouseEnter={(e) => { e.currentTarget.style.textDecoration = "underline"; }}
+            onMouseLeave={(e) => { e.currentTarget.style.textDecoration = "none"; }}
+          >
+            {student.name}
+          </Link>
+        </h2>
+
+        {/* Row 3: Combined performance label */}
+        <div style={{ marginTop: "12px" }}>
+          <span
+            style={{
+              padding: "5px 14px",
+              borderRadius: "14px",
+              fontSize: "0.9rem",
+              fontWeight: 600,
+              background: getUnderstandingBgColor(drilldown.understanding),
+              color: getUnderstandingColor(drilldown.understanding),
+            }}
+          >
+            {getUnderstandingLabel(drilldown.understanding)}
+            {drilldown.coachSupport !== "none" && (
+              <span style={{ fontWeight: 400 }}>
+                {drilldown.coachSupport === "minimal" && " (minimal coaching)"}
+                {drilldown.coachSupport === "moderate" && " (with coaching)"}
+                {drilldown.coachSupport === "high" && " (with significant coaching)"}
+              </span>
+            )}
+          </span>
+        </div>
+
+        {/* Row 4: Context metadata */}
+        <div style={{ marginTop: "10px", fontSize: "0.85rem", color: "#64748b" }}>
+          {assignment && assignment.attempts > 1 ? `${assignment.attempts} attempts` : "1 attempt"}
+          {drilldown.timeSpentMinutes && ` \u00b7 ${drilldown.timeSpentMinutes} min`}
+          {" \u00b7 "}
+          {drilldown.completedAt
+            ? `Completed ${new Date(drilldown.completedAt).toLocaleDateString(undefined, { month: "short", day: "numeric" })}`
+            : "In progress"}
+        </div>
+
+        {/* Row 5: AI-generated insight */}
+        {drilldown.isComplete && (
+          <div
+            style={{
+              marginTop: "12px",
+              padding: "10px 14px",
+              background: "#f8fafc",
+              borderRadius: "8px",
+              borderLeft: "3px solid #667eea",
+              fontSize: "0.9rem",
+              color: "#334155",
+              lineHeight: 1.5,
+            }}
+          >
+            <span style={{ marginRight: "6px" }}>💡</span>
+            {buildInsightPhrase(drilldown.understanding, drilldown.coachSupport, drilldown.insights, drilldown.questions, drilldown.isComplete)}
+          </div>
+        )}
+
       </div>
 
+      {/* Two-Column Layout */}
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "1fr 340px",
+          gap: "16px",
+          alignItems: "start",
+        }}
+        className="two-col-layout"
+      >
+        {/* ===== Left Column — Learning Evidence ===== */}
+        <div>
+      {/* How They Solved It - Journey Insight Card */}
+      <div
+        style={{
+          background: "#f8fafc",
+          border: "1px solid #e2e8f0",
+          borderRadius: "10px",
+          padding: "14px 18px",
+        }}
+      >
+        <div style={{ fontWeight: 600, fontSize: "0.85rem", color: "var(--text-primary)", marginBottom: "6px" }}>
+          How they solved it
+        </div>
+        <div style={{ fontSize: "0.9rem", color: "var(--text-secondary)", fontStyle: "italic" }}>
+          {buildJourneySummary(drilldown.understanding, drilldown.coachSupport, drilldown.insights, drilldown.questions, drilldown.isComplete)}
+        </div>
+        {/* Skills demonstrated — from satisfied reasoning steps */}
+        {lesson.prompts.some(p => p.assessment?.reasoningSteps?.length) ? (
+          <div style={{ marginTop: "10px" }}>
+            <div style={{ fontSize: "0.75rem", fontWeight: 500, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.03em", marginBottom: "4px" }}>
+              Skills demonstrated
+            </div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "6px" }}>
+              {(() => {
+                // Collect step kinds from all prompts' reasoning steps
+                const stepKinds = new Set<string>();
+                lesson.prompts.forEach(p => {
+                  p.assessment?.reasoningSteps?.forEach(s => {
+                    if (s.kind) stepKinds.add(s.kind);
+                  });
+                });
+                if (stepKinds.size === 0) return <span style={{ fontSize: "0.8rem", color: "var(--text-muted)" }}>No step data available</span>;
+                return [...stepKinds].map(kind => (
+                  <span
+                    key={kind}
+                    style={{
+                      padding: "2px 8px",
+                      background: "#e8f5e9",
+                      color: "#2e7d32",
+                      borderRadius: "10px",
+                      fontSize: "0.75rem",
+                      fontWeight: 500,
+                    }}
+                  >
+                    {getStepLabel(kind)}
+                  </span>
+                ));
+              })()}
+            </div>
+          </div>
+        ) : (
+          <div style={{ marginTop: "8px", fontSize: "0.8rem", color: "var(--text-muted)" }}>
+            Detailed replay unavailable for this submission.
+          </div>
+        )}
+      </div>
+
+      {/* Question Breakdown Header */}
+      <div
+        ref={questionsSectionRef}
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          marginTop: "20px",
+          marginBottom: "12px",
+        }}
+      >
+        <h2 style={{ color: "var(--text-primary)", margin: 0 }}>Question Breakdown</h2>
+        {questionsWithAttempts.length >= 2 && (
+          <button
+            onClick={allExpanded ? collapseAll : expandAll}
+            style={{
+              background: "rgba(0,0,0,0.06)",
+              border: "none",
+              color: "var(--text-primary)",
+              padding: "8px 16px",
+              borderRadius: "8px",
+              cursor: "pointer",
+              fontSize: "0.9rem",
+            }}
+          >
+            {allExpanded ? "Collapse All" : "Expand All"}
+          </button>
+        )}
+      </div>
+
+      {/* Question cards — each row expands to reveal deep evidence */}
+      {questionsWithAttempts.map((question) => (
+        <QuestionCardWithAttempts
+          key={question.questionId}
+          question={question}
+          expanded={expandedQuestions.has(question.questionId)}
+          onToggle={() => toggleQuestion(question.questionId)}
+          note={questionNotes[question.questionId] || ""}
+          onNoteChange={(value) => {
+            setQuestionNotes((prev) => ({ ...prev, [question.questionId]: value }));
+            debouncedSave();
+          }}
+          playingAttemptKey={playingQuestionId}
+          onPlayAudio={playAudio}
+          onViewVideo={handleViewVideo}
+          assessment={lesson?.prompts.find(p => p.id === question.questionId)?.assessment}
+        />
+      ))}
+
+        </div>
+
+        {/* ===== Right Column — Teacher Actions ===== */}
+        <div style={{ position: "sticky", top: "16px" }}>
       {/* Derived Insights from Coach Analytics */}
       {derivedInsights.length > 0 && (
         <div
@@ -1991,37 +2139,7 @@ export default function StudentAssignmentReview() {
         </div>
       )}
 
-      {/* Teacher Notes */}
-      <div className="card" style={{ background: "white", border: "1px solid #e2e8f0", marginBottom: "12px" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
-          <h3 style={{ margin: 0, color: "#1e293b", fontSize: "1rem" }}>Notes</h3>
-          <div style={{ fontSize: "0.8rem", color: "var(--text-muted)" }}>
-            {saving && "Saving..."}
-            {!saving && lastSaved && `Saved ${lastSaved.toLocaleTimeString()}`}
-          </div>
-        </div>
-        <textarea
-          ref={notesTextareaRef}
-          value={teacherNote}
-          onChange={(e) => {
-            setTeacherNote(e.target.value);
-            debouncedSave();
-          }}
-          placeholder={`Add notes about ${student.name}'s work...`}
-          style={{
-            width: "100%",
-            minHeight: "80px",
-            maxHeight: "300px",
-            padding: "10px 12px",
-            borderRadius: "6px",
-            border: "1px solid #e2e8f0",
-            fontSize: "0.9rem",
-            fontFamily: "inherit",
-            resize: "none",
-            boxSizing: "border-box",
-          }}
-        />
-      </div>
+      {/* Teacher Notes — rendered inside the unified Review & Next Steps card below */}
 
       {/* Recommendation Context - ONLY shown when there's an actionable recommendation */}
       {hasActionableRecommendation && activeRecommendation && (() => {
@@ -2049,7 +2167,7 @@ export default function StudentAssignmentReview() {
         );
       })()}
 
-      {/* Actions Section - Always visible when assignment exists */}
+      {/* Review & Next Steps — unified notes + actions */}
       {assignment && (
         <div
           ref={actionsSectionRef}
@@ -2061,7 +2179,41 @@ export default function StudentAssignmentReview() {
             transition: "border-color 0.3s ease, box-shadow 0.3s ease",
           }}
         >
-          <h3 style={{ margin: "0 0 12px 0", color: "#1e293b", fontSize: "1rem" }}>Actions</h3>
+          <h3 style={{ margin: "0 0 16px 0", color: "#1e293b", fontSize: "1rem" }}>Review &amp; Next Steps</h3>
+
+          {/* Notes */}
+          <div style={{ marginBottom: "16px" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" }}>
+              <h4 style={{ margin: 0, color: "#64748b", fontSize: "0.85rem", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.03em" }}>Notes</h4>
+              <div style={{ fontSize: "0.8rem", color: "var(--text-muted)" }}>
+                {saving && "Saving..."}
+                {!saving && lastSaved && `Saved ${lastSaved.toLocaleTimeString()}`}
+              </div>
+            </div>
+            <textarea
+              ref={notesTextareaRef}
+              value={teacherNote}
+              onChange={(e) => {
+                setTeacherNote(e.target.value);
+                debouncedSave();
+              }}
+              placeholder={`Add notes about ${student.name}'s work...`}
+              style={{
+                width: "100%",
+                minHeight: "80px",
+                maxHeight: "300px",
+                padding: "10px 12px",
+                borderRadius: "6px",
+                border: "1px solid #e2e8f0",
+                fontSize: "0.9rem",
+                fontFamily: "inherit",
+                resize: "none",
+                boxSizing: "border-box",
+              }}
+            />
+          </div>
+
+          <div style={{ borderTop: "1px solid #e2e8f0", marginBottom: "16px" }} />
 
           <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
 
@@ -2458,13 +2610,57 @@ export default function StudentAssignmentReview() {
               <div style={{ borderTop: "1px solid #e2e8f0" }} />
             )}
 
+            {/* Suggested next step */}
+            {suggestedNextStep && (
+              <div style={{
+                padding: "10px 14px",
+                background: "#f8fafc",
+                borderRadius: "8px",
+                borderLeft: "3px solid #667eea",
+              }}>
+                <span style={{ fontSize: "0.8rem", fontWeight: 600, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.03em" }}>
+                  Suggested next step
+                </span>
+                <p style={{ margin: "4px 0 0 0", fontSize: "0.9rem", color: "#334155" }}>
+                  {suggestedNextStep}
+                </p>
+              </div>
+            )}
+
             {/* Teacher Actions - always visible */}
             <div>
               <h4 style={{ margin: "0 0 8px 0", color: "#64748b", fontSize: "0.85rem", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.03em" }}>
-                Teacher Actions
+                Next Steps
               </h4>
 
               <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+                {/* Mark Review Complete Option */}
+                <div>
+                  <label
+                    style={{
+                      display: "flex",
+                      alignItems: "flex-start",
+                      gap: "8px",
+                      cursor: "pointer",
+                      fontSize: "0.95rem",
+                      color: "#333",
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={markReviewCompleteChecked}
+                      onChange={(e) => setMarkReviewCompleteChecked(e.target.checked)}
+                      style={{
+                        marginTop: "2px",
+                        cursor: "pointer",
+                        width: "16px",
+                        height: "16px",
+                      }}
+                    />
+                    <span>Mark review complete</span>
+                  </label>
+                </div>
+
                 {/* Add Teacher To-Do Option */}
                 <div>
                   <label
@@ -2488,7 +2684,7 @@ export default function StudentAssignmentReview() {
                         height: "16px",
                       }}
                     />
-                    <span>Add to Teacher To-Dos</span>
+                    <span>Add to follow-up list</span>
                   </label>
 
                   {/* To-do selector (shows when checked) */}
@@ -2604,7 +2800,7 @@ export default function StudentAssignmentReview() {
                         height: "16px",
                       }}
                     />
-                    <span>Reassign assignment</span>
+                    <span>Reassign for practice</span>
                   </label>
 
                   {/* Confirmation detail (shows when checked) */}
@@ -2632,8 +2828,8 @@ export default function StudentAssignmentReview() {
             </div>
           </div>
 
-          {/* Save Actions Button */}
-          <div style={{ marginTop: "20px", display: "flex", alignItems: "center", gap: "12px" }}>
+          {/* Save Review Button */}
+          <div style={{ marginTop: "20px" }}>
             <button
               onClick={handleSaveActions}
               disabled={!canSaveActions() || isSavingActions}
@@ -2651,115 +2847,14 @@ export default function StudentAssignmentReview() {
                 gap: "8px",
               }}
             >
-              {isSavingActions ? "Saving..." : "Save actions"}
+              {isSavingActions ? "Saving..." : "Save review"}
             </button>
-            {!canSaveActions() && (
-              <span style={{ fontSize: "0.85rem", color: "var(--text-secondary)" }}>
-                Select an action or modify notes to enable
-              </span>
-            )}
           </div>
         </div>
       )}
 
-      {/* Performance Summary - compact single row */}
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: "10px",
-          flexWrap: "wrap",
-          padding: "12px 16px",
-          background: "white",
-          border: "1px solid #e2e8f0",
-          borderRadius: "8px",
-          marginTop: "12px",
-        }}
-      >
-        <span
-          style={{
-            padding: "4px 12px",
-            borderRadius: "12px",
-            fontSize: "0.85rem",
-            fontWeight: 600,
-            background: getUnderstandingBgColor(drilldown.understanding),
-            color: getUnderstandingColor(drilldown.understanding),
-          }}
-        >
-          {getUnderstandingLabel(drilldown.understanding)}
-        </span>
-        <span style={{ color: "#64748b", fontSize: "0.8rem" }}>
-          {drilldown.questions.length}/{lesson.prompts.length} questions
-        </span>
-        <span style={{ color: "#64748b", fontSize: "0.8rem" }}>
-          Coach: {getCoachSupportLabel(drilldown.coachSupport)}
-        </span>
-        {drilldown.timeSpentMinutes && (
-          <span style={{ color: "#64748b", fontSize: "0.8rem" }}>
-            {drilldown.timeSpentMinutes} min
-          </span>
-        )}
-        {/* Learning Journey Insights - inline chips */}
-        {drilldown.insights.startedStrong && (
-          <span style={{ padding: "2px 8px", background: "#e8f5e9", color: "#166534", borderRadius: "10px", fontSize: "0.75rem" }}>Started strong</span>
-        )}
-        {drilldown.insights.improvedOverTime && (
-          <span style={{ padding: "2px 8px", background: "#e3f2fd", color: "#1565c0", borderRadius: "10px", fontSize: "0.75rem" }}>Improved</span>
-        )}
-        {drilldown.insights.recoveredWithSupport && (
-          <span style={{ padding: "2px 8px", background: "#e8ecf0", color: "#4a6b8a", borderRadius: "10px", fontSize: "0.75rem" }}>Recovered</span>
-        )}
-        {drilldown.insights.struggledConsistently && (
-          <span style={{ padding: "2px 8px", background: "#ffebee", color: "#c62828", borderRadius: "10px", fontSize: "0.75rem" }}>Struggling</span>
-        )}
+        </div>
       </div>
-
-      {/* Question Breakdown Header */}
-      <div
-        ref={questionsSectionRef}
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          marginTop: "20px",
-          marginBottom: "12px",
-        }}
-      >
-        <h2 style={{ color: "var(--text-primary)", margin: 0 }}>Question Breakdown</h2>
-        <button
-          onClick={allExpanded ? collapseAll : expandAll}
-          style={{
-            background: "rgba(0,0,0,0.06)",
-            border: "none",
-            color: "var(--text-primary)",
-            padding: "8px 16px",
-            borderRadius: "8px",
-            cursor: "pointer",
-            fontSize: "0.9rem",
-          }}
-        >
-          {allExpanded ? "Collapse All" : "Expand All"}
-        </button>
-      </div>
-
-      {/* Questions (collapsed by default) - grouped by question with all attempts */}
-      {questionsWithAttempts.map((question) => (
-        <QuestionCardWithAttempts
-          key={question.questionId}
-          question={question}
-          expanded={expandedQuestions.has(question.questionId)}
-          onToggle={() => toggleQuestion(question.questionId)}
-          note={questionNotes[question.questionId] || ""}
-          onNoteChange={(value) => {
-            setQuestionNotes((prev) => ({ ...prev, [question.questionId]: value }));
-            debouncedSave();
-          }}
-          playingAttemptKey={playingQuestionId}
-          onPlayAudio={playAudio}
-          onViewVideo={handleViewVideo}
-          assessment={lesson?.prompts.find(p => p.id === question.questionId)?.assessment}
-        />
-      ))}
 
       {/* Follow-up Details Drawer */}
       <Drawer
@@ -3457,9 +3552,9 @@ function VideoConversationDisplay({
 }
 
 // ============================================
-// Rubric Summary Panel
+// AI Summary Panel
 // Teacher-facing LLM-generated summary aligned to assessment criteria.
-// On-demand generation — click to generate, cached in component state.
+// Auto-generates on mount from the latest attempt's transcript.
 // ============================================
 
 function RubricSummaryPanel({
@@ -3467,17 +3562,43 @@ function RubricSummaryPanel({
   conversationTurns,
   learningObjective,
   successCriteria,
+  attemptNumber,
+  totalAttempts,
 }: {
   questionText: string;
   conversationTurns: ConversationTurn[];
   learningObjective?: string;
   successCriteria: string[];
+  attemptNumber: number;
+  totalAttempts: number;
 }) {
   const [summary, setSummary] = useState<SessionSummaryResponse | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
+  const [expanded, setExpanded] = useState(true);
 
-  const handleGenerate = async () => {
+  // Auto-generate on mount
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const result = await generateSessionSummary(
+          questionText,
+          conversationTurns,
+          learningObjective,
+          successCriteria
+        );
+        if (!cancelled) setSummary(result);
+      } catch {
+        if (!cancelled) setError(true);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [questionText, conversationTurns, learningObjective, successCriteria]);
+
+  const handleRetry = async () => {
     setLoading(true);
     setError(false);
     try {
@@ -3487,8 +3608,8 @@ function RubricSummaryPanel({
         learningObjective,
         successCriteria
       );
-      console.log("[RubricSummary] guardrailsVersion:", result.guardrailsVersion, "bullets:", result.bullets.length);
       setSummary(result);
+      setExpanded(true);
     } catch {
       setError(true);
     } finally {
@@ -3499,116 +3620,75 @@ function RubricSummaryPanel({
   return (
     <div
       style={{
-        marginTop: "16px",
-        padding: "14px 16px",
-        background: "#f0f7ff",
+        marginTop: "12px",
         borderRadius: "8px",
-        border: "1px solid #d0e0f0",
+        border: "1px solid #e2e8f0",
+        background: "white",
       }}
     >
+      {/* Header — clickable toggle */}
       <div
+        onClick={(e) => {
+          e.stopPropagation();
+          if (summary) setExpanded(!expanded);
+        }}
         style={{
           display: "flex",
           alignItems: "center",
           justifyContent: "space-between",
-          marginBottom: summary ? "10px" : "0",
+          padding: "10px 14px",
+          cursor: summary ? "pointer" : "default",
+          userSelect: "none",
         }}
       >
-        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-          <span
-            style={{
-              fontSize: "0.8rem",
-              fontWeight: 600,
-              color: "#3d5a80",
-              textTransform: "uppercase",
-              letterSpacing: "0.03em",
-            }}
-          >
-            Rubric Summary
+        <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+          <span style={{ fontSize: "0.78rem", fontWeight: 500, color: "#64748b" }}>
+            AI Summary
           </span>
-          {!summary && !loading && (
-            <span style={{ fontSize: "0.75rem", color: "#7a8ea8" }}>
-              AI-generated from transcript
+          {totalAttempts > 1 && (
+            <span style={{ fontSize: "0.72rem", color: "#94a3b8" }}>
+              Based on Attempt #{attemptNumber}
+            </span>
+          )}
+          {summary && !loading && (
+            <span style={{ fontSize: "0.72rem", color: "#94a3b8" }}>
+              {expanded ? "▾" : "▸"}
             </span>
           )}
         </div>
-
-        {!summary && !loading && (
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              handleGenerate();
-            }}
-            style={{
-              background: "#3d5a80",
-              color: "white",
-              border: "none",
-              borderRadius: "6px",
-              padding: "5px 12px",
-              fontSize: "0.78rem",
-              fontWeight: 500,
-              cursor: "pointer",
-              display: "flex",
-              alignItems: "center",
-              gap: "5px",
-            }}
-          >
-            Generate
-          </button>
-        )}
-
-        {summary && (
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              handleGenerate();
-            }}
-            style={{
-              background: "none",
-              border: "none",
-              color: "#7a8ea8",
-              fontSize: "0.72rem",
-              cursor: "pointer",
-              padding: "2px 6px",
-            }}
-            title="Regenerate summary"
-          >
-            ↻ Regenerate
-          </button>
-        )}
       </div>
 
       {/* Loading state */}
       {loading && (
-        <div style={{ display: "flex", alignItems: "center", gap: "8px", padding: "8px 0" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "8px", padding: "0 14px 10px" }}>
           <div
             style={{
               width: "14px",
               height: "14px",
-              border: "2px solid #d0e0f0",
-              borderTopColor: "#3d5a80",
+              border: "2px solid #e2e8f0",
+              borderTopColor: "#64748b",
               borderRadius: "50%",
               animation: "spin 0.8s linear infinite",
             }}
           />
-          <span style={{ fontSize: "0.82rem", color: "#7a8ea8" }}>Analyzing transcript...</span>
+          <span style={{ fontSize: "0.82rem", color: "#94a3b8" }}>Analyzing transcript...</span>
         </div>
       )}
 
       {/* Error state */}
       {error && !loading && (
-        <div style={{ padding: "6px 0" }}>
+        <div style={{ padding: "0 14px 10px" }}>
           <span style={{ fontSize: "0.82rem", color: "#d32f2f" }}>
-            Failed to generate summary.{" "}
+            Failed to generate.{" "}
             <button
               onClick={(e) => {
                 e.stopPropagation();
-                handleGenerate();
+                handleRetry();
               }}
               style={{
                 background: "none",
                 border: "none",
-                color: "#3d5a80",
+                color: "#64748b",
                 cursor: "pointer",
                 fontSize: "0.82rem",
                 textDecoration: "underline",
@@ -3622,43 +3702,42 @@ function RubricSummaryPanel({
       )}
 
       {/* Summary content */}
-      {summary && !loading && (
-        <div>
+      {summary && !loading && expanded && (
+        <div style={{ padding: "0 14px 12px", borderTop: "1px solid #f1f5f9" }}>
           <ul
             style={{
-              margin: "0 0 10px 0",
+              margin: "10px 0 0 0",
               paddingLeft: "18px",
               display: "flex",
               flexDirection: "column",
-              gap: "5px",
+              gap: "4px",
             }}
           >
             {summary.bullets.map((bullet, idx) => (
               <li
                 key={idx}
                 style={{
-                  fontSize: "0.85rem",
-                  color: "#333",
+                  fontSize: "0.82rem",
+                  color: "#475569",
                   lineHeight: 1.5,
                 }}
               >
                 {bullet}
               </li>
             ))}
+            {summary.overall && (
+              <li
+                style={{
+                  fontSize: "0.82rem",
+                  color: "#64748b",
+                  fontStyle: "italic",
+                  lineHeight: 1.5,
+                }}
+              >
+                {summary.overall}
+              </li>
+            )}
           </ul>
-          <p
-            style={{
-              margin: 0,
-              fontSize: "0.85rem",
-              color: "#3d5a80",
-              fontWeight: 500,
-              lineHeight: 1.5,
-              borderTop: "1px solid #d0e0f0",
-              paddingTop: "8px",
-            }}
-          >
-            {summary.overall}
-          </p>
         </div>
       )}
     </div>
@@ -4036,49 +4115,52 @@ function QuestionCardWithAttempts({
                         )}
                       </div>
                     )}
+
+                  {/* Teacher Note + AI Summary — inside the latest attempt card */}
+                  {isLatest && (
+                    <>
+                      <div style={{ marginTop: "12px", borderTop: "1px solid #e0e0e0", paddingTop: "12px" }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "6px" }}>
+                          <span style={{ fontSize: "0.85rem", fontWeight: 500, color: "var(--text-primary)" }}>Teacher Note (this question)</span>
+                        </div>
+                        <textarea
+                          value={note}
+                          onChange={(e) => onNoteChange(e.target.value)}
+                          onClick={(e) => e.stopPropagation()}
+                          placeholder={`Add a note about Q${question.questionNumber}...`}
+                          style={{
+                            width: "100%",
+                            minHeight: "60px",
+                            padding: "10px",
+                            borderRadius: "8px",
+                            border: "1px solid #e0e0e0",
+                            fontSize: "0.9rem",
+                            fontFamily: "inherit",
+                            resize: "vertical",
+                            boxSizing: "border-box",
+                            background: "white",
+                          }}
+                        />
+                      </div>
+
+                      {assessment?.successCriteria && assessment.successCriteria.length > 0 &&
+                        attempt.conversationTurns && attempt.conversationTurns.length > 0 && (
+                        <RubricSummaryPanel
+                          questionText={question.questionText}
+                          conversationTurns={attempt.conversationTurns}
+                          learningObjective={assessment?.learningObjective}
+                          successCriteria={assessment.successCriteria}
+                          attemptNumber={attempt.attemptNumber}
+                          totalAttempts={question.attempts.length}
+                        />
+                      )}
+                    </>
+                  )}
                   </div>
                 );
               })}
             </div>
           )}
-
-          {/* Rubric-Aligned Summary (for questions with assessment metadata + conversation) */}
-          {assessment?.successCriteria && assessment.successCriteria.length > 0 && (() => {
-            const latestWithTranscript = question.attempts.find(a => a.conversationTurns && a.conversationTurns.length > 0);
-            return latestWithTranscript ? (
-              <RubricSummaryPanel
-                questionText={question.questionText}
-                conversationTurns={latestWithTranscript.conversationTurns!}
-                learningObjective={assessment.learningObjective}
-                successCriteria={assessment.successCriteria}
-              />
-            ) : null;
-          })()}
-
-          {/* Teacher Note for this question */}
-          <div style={{ marginTop: "16px" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "6px" }}>
-              <span style={{ fontSize: "0.85rem", color: "var(--text-secondary)" }}>Your note for Q{question.questionNumber}:</span>
-            </div>
-            <textarea
-              value={note}
-              onChange={(e) => onNoteChange(e.target.value)}
-              onClick={(e) => e.stopPropagation()}
-              placeholder="Add a note about this question..."
-              style={{
-                width: "100%",
-                minHeight: "60px",
-                padding: "10px",
-                borderRadius: "8px",
-                border: "1px solid #e0e0e0",
-                fontSize: "0.9rem",
-                fontFamily: "inherit",
-                resize: "vertical",
-                boxSizing: "border-box",
-                background: "#fafafa",
-              }}
-            />
-          </div>
         </div>
       )}
     </div>

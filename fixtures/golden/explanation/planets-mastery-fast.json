@@ -1,0 +1,39 @@
+{
+  "id": "planets-mastery-fast",
+  "tags": ["regression", "mastery-path"],
+  "expectedVerdict": "PASS",
+  "expectedIssueCodes": [],
+  "notes": "Clean mastery in 2 turns: student gives one entity-attribute pair per turn, no errors or stalls.",
+  "mode": "explanation",
+  "name": "planets: fast 2-turn mastery",
+  "promptInput": "What are planets made of? Give examples.",
+  "requiredEvidence": {
+    "minEntities": 2,
+    "entityLabel": "planets",
+    "attributeLabel": "materials",
+    "minAttributeTypes": 2,
+    "requirePairing": true
+  },
+  "referenceFacts": {
+    "Mercury": ["rock", "metal"],
+    "Venus": ["rock"],
+    "Earth": ["rock", "metal"],
+    "Mars": ["rock"],
+    "Jupiter": ["gas"],
+    "Saturn": ["gas"],
+    "Uranus": ["ice", "gas"],
+    "Neptune": ["ice", "gas"]
+  },
+  "successCriteria": [
+    "States that planets are made of different materials.",
+    "Names at least two specific planets.",
+    "Describes what each named planet is made of."
+  ],
+  "hints": ["Think about what you know about Earth and other planets."],
+  "transcript": [
+    { "role": "coach", "message": "What are planets made of? Can you give examples?" },
+    { "role": "student", "message": "Earth is made of rock" },
+    { "role": "coach", "message": "Can you name another planet and its materials?" },
+    { "role": "student", "message": "Jupiter is made of gas" }
+  ]
+}

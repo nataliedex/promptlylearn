@@ -9,7 +9,8 @@
 
 import { useState, useEffect, useRef } from "react";
 // ModeToggle import kept for potential future use
-import type { CoachingInvite, StudentLessonSummary, Session } from "../services/api";
+import type { CoachingInvite, LessonSummary, StudentLessonSummary, Session } from "../services/api";
+import { resolveSubject } from "../utils/resolveSubject";
 
 type SessionMode = "voice" | "type";
 type DrawerStep = "topics" | "ready";
@@ -26,6 +27,7 @@ interface AskCoachTopicDrawerProps {
   studentId: string;
   // Data for topic selection
   lessons: StudentLessonSummary[];
+  allLessons: LessonSummary[];
   completedSessions: Session[];
   coachingInvites: CoachingInvite[];
   // Callback when starting a coaching invite (opens AskCoachDrawer)
@@ -39,6 +41,7 @@ export default function AskCoachTopicDrawer({
   onClose,
   studentId,
   lessons,
+  allLessons,
   completedSessions,
   coachingInvites,
   onStartInvite,
@@ -92,29 +95,30 @@ export default function AskCoachTopicDrawer({
     };
   }, [isOpen]);
 
-  // Get available topics from lessons and completed sessions
+  // Get available topics from completed sessions only, grouped by resolved subject.
+  // Uses the full lesson catalog (allLessons) so completed lessons that are no
+  // longer in the active assignments list still get the correct subject.
   const getAvailableTopics = (): TopicWithSubject[] => {
-    const topics: TopicWithSubject[] = [];
-    const seen = new Set<string>();
-
-    // Add current assignment titles
+    // Build lessonId → subject lookup from ALL lessons (not just active assignments)
+    const subjectByLessonId = new Map<string, string>();
+    allLessons.forEach((l) => {
+      if (l.subject) subjectByLessonId.set(l.id, l.subject);
+    });
+    // Also include active assignments (may have subject set via class)
     lessons.forEach((l) => {
-      if (!seen.has(l.title)) {
-        topics.push({
-          title: l.title,
-          subject: l.subject || "Other",
-          lessonId: l.id,
-        });
-        seen.add(l.title);
+      if (l.subject && !subjectByLessonId.has(l.id)) {
+        subjectByLessonId.set(l.id, l.subject);
       }
     });
 
-    // Add completed session titles
+    const topics: TopicWithSubject[] = [];
+    const seen = new Set<string>();
+
     completedSessions.forEach((s) => {
       if (!seen.has(s.lessonTitle)) {
         topics.push({
           title: s.lessonTitle,
-          subject: "Completed",
+          subject: resolveSubject({ lessonSubject: subjectByLessonId.get(s.lessonId) }),
           lessonId: s.lessonId,
         });
         seen.add(s.lessonTitle);
@@ -149,7 +153,7 @@ export default function AskCoachTopicDrawer({
     const subjects = new Set<string>();
     selectedTopics.forEach((topic) => {
       const subject = getSubjectForTopic(topic);
-      if (subject && subject !== "Completed" && subject !== "Other") {
+      if (subject && subject !== "Other") {
         subjects.add(subject);
       }
     });
@@ -173,8 +177,10 @@ export default function AskCoachTopicDrawer({
   };
 
   const handleStartSession = () => {
-    // Get gradeLevel from first selected lesson
-    const selectedLesson = lessons.find((l) => selectedTopics.includes(l.title));
+    // Get gradeLevel from first selected lesson (check full catalog, not just active)
+    const selectedLesson =
+      allLessons.find((l) => selectedTopics.includes(l.title)) ||
+      lessons.find((l) => selectedTopics.includes(l.title));
     const gradeLevel = selectedLesson?.gradeLevel || "";
 
     // Use callback to open AskCoachDrawer

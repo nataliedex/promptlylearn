@@ -121,6 +121,33 @@ export class SessionStore {
     return fs.readdirSync(DATA_DIR).filter(f => f.endsWith(".json"));
   }
 
+  /**
+   * Clean up expired draft states (older than 7 days).
+   * Called on server startup.
+   */
+  cleanExpiredDrafts(): number {
+    const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
+    const files = this.listSessionFiles();
+    let cleaned = 0;
+
+    for (const file of files) {
+      const session = this.loadFromFile(file);
+      if (session?.draftState?.savedAt) {
+        const age = Date.now() - new Date(session.draftState.savedAt).getTime();
+        if (age > SEVEN_DAYS_MS) {
+          const { draftState, ...rest } = session;
+          this.save(rest as Session);
+          cleaned++;
+        }
+      }
+    }
+
+    if (cleaned > 0) {
+      console.log(`[SessionStore] Cleaned ${cleaned} expired draft(s)`);
+    }
+    return cleaned;
+  }
+
   private loadFromFile(filename: string): Session | null {
     try {
       const filePath = path.join(DATA_DIR, filename);

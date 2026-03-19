@@ -47,6 +47,12 @@ export interface PromptResponse {
   helpConversation?: CoachConversation; // conversation during question
   elaborationConversation?: CoachConversation; // coach helping elaborate after answering
   moreConversation?: CoachConversation; // exploration after answering
+  // Video conversation turns (ordered coach/student utterances from live session)
+  conversationTurns?: Array<{
+    role: "coach" | "student";
+    message: string;
+    timestampSec?: number;
+  }>;
   educatorNote?: string; // educator's note about this specific response
   // Stagnation/deferral tracking (for teacher analytics)
   deferredByCoach?: boolean; // True if coach moved on due to stagnation

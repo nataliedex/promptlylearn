@@ -1,0 +1,49 @@
+{
+  "id": "two-digit-addition-smooth",
+  "tags": ["smoke", "mastery-path"],
+  "expectedVerdict": "PASS",
+  "expectedIssueCodes": [],
+  "notes": "Happy path: student completes all three reasoning steps (ones, tens, combine) without errors.",
+  "mode": "math",
+  "name": "11+14: smooth walkthrough",
+  "mathProblem": {
+    "skill": "two_digit_addition",
+    "a": 11,
+    "b": 14,
+    "expression": "11 + 14",
+    "correctAnswer": 25,
+    "requiresRegrouping": false,
+    "expectedStrategyTags": ["add ones", "add tens", "combine"]
+  },
+  "reasoningSteps": [
+    {
+      "id": "step_ones",
+      "label": "Add the ones",
+      "expectedStatements": ["1 + 4 = 5"],
+      "probe": "What do you get when you add 1 and 4?",
+      "kind": "ones_sum"
+    },
+    {
+      "id": "step_tens",
+      "label": "Add the tens",
+      "expectedStatements": ["10 + 10 = 20"],
+      "probe": "What do you get when you add 10 and 10?",
+      "kind": "tens_sum"
+    },
+    {
+      "id": "step_combine",
+      "label": "Combine",
+      "expectedStatements": ["20 + 5 = 25"],
+      "probe": "What do you get when you put 20 and 5 together?",
+      "kind": "combine"
+    }
+  ],
+  "transcript": [
+    { "role": "coach", "message": "Let's solve 11 + 14. Can you break it into tens and ones?" },
+    { "role": "student", "message": "1 + 4 = 5" },
+    { "role": "coach", "message": "Good! Now what about the tens?" },
+    { "role": "student", "message": "10 + 10 = 20" },
+    { "role": "coach", "message": "Now put them together." },
+    { "role": "student", "message": "20 + 5 = 25" }
+  ]
+}

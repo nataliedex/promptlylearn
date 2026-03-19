@@ -66,19 +66,103 @@ export function deriveUnderstandingFromQuestions(
 // ============================================
 
 /**
- * Derive coach support level from hint usage.
+ * Signals extracted from prompt responses for richer coach support classification.
+ */
+export interface CoachSupportSignals {
+  totalCoachTurns: number;
+  totalStudentTurns: number;
+  hintsUsed: number;
+  questionCount: number;
+  questionsWithCoachTurns: number;
+  maxCoachTurnsOnOneQuestion: number;
+}
+
+/**
+ * Extract coach support signals from an array of prompt responses.
+ */
+export function extractCoachSignals(responses: PromptResponse[]): CoachSupportSignals {
+  let totalCoachTurns = 0;
+  let totalStudentTurns = 0;
+  let hintsUsed = 0;
+  let questionsWithCoachTurns = 0;
+  let maxCoachTurnsOnOneQuestion = 0;
+
+  for (const r of responses) {
+    if (wasHintUsed(r)) hintsUsed++;
+
+    const turns = r.conversationTurns || [];
+    const coachTurns = turns.filter(t => t.role === "coach").length;
+    const studentTurns = turns.filter(t => t.role === "student").length;
+
+    totalCoachTurns += coachTurns;
+    totalStudentTurns += studentTurns;
+
+    if (coachTurns > 0) questionsWithCoachTurns++;
+    if (coachTurns > maxCoachTurnsOnOneQuestion) maxCoachTurnsOnOneQuestion = coachTurns;
+  }
+
+  return {
+    totalCoachTurns,
+    totalStudentTurns,
+    hintsUsed,
+    questionCount: responses.length,
+    questionsWithCoachTurns,
+    maxCoachTurnsOnOneQuestion,
+  };
+}
+
+/**
+ * Derive coach support level from multi-signal analysis of responses.
+ *
+ * Buckets:
+ * - "none": No coach interaction (0 coach turns, 0 hints)
+ * - "minimal": Light nudge (1-2 total coach turns, no hints)
+ * - "moderate": Meaningful scaffolding (3+ coach turns, or hints on < half of questions)
+ * - "high": Heavy scaffolding (hints on 50%+ of questions, or 5+ coach turns on any single question)
  */
 export function deriveCoachSupport(
+  responses: PromptResponse[]
+): CoachSupportLevel {
+  if (responses.length === 0) return "none";
+
+  const signals = extractCoachSignals(responses);
+
+  // High: hints on majority of questions OR very deep coaching on a single question
+  const hintRatio = signals.questionCount > 0 ? signals.hintsUsed / signals.questionCount : 0;
+  if (hintRatio >= 0.5 || signals.maxCoachTurnsOnOneQuestion >= 5) {
+    return "high";
+  }
+
+  // Moderate: any hints used, OR 3+ total coach turns, OR coach engaged on multiple questions
+  if (signals.hintsUsed > 0 || signals.totalCoachTurns >= 3 || signals.questionsWithCoachTurns >= 2) {
+    return "moderate";
+  }
+
+  // Minimal: some coach interaction (1-2 turns total)
+  if (signals.totalCoachTurns > 0) {
+    return "minimal";
+  }
+
+  // None: no coach interaction at all
+  return "none";
+}
+
+/**
+ * Legacy overload for deriveCoachSupport using just hint counts.
+ * Used by buildSimplifiedStudentRow when full responses aren't available.
+ */
+export function deriveCoachSupportFromHints(
   hintsUsed: number,
   questionCount: number
 ): CoachSupportLevel {
-  if (questionCount === 0) return "minimal";
+  if (questionCount === 0) return "none";
 
   const hintRatio = hintsUsed / questionCount;
 
+  if (hintRatio === 0) return "none";
   if (hintRatio < 0.2) return "minimal";
-  if (hintRatio > 0.5) return "significant";
-  return "some";
+  if (hintRatio >= 0.5) return "high";
+  return "moderate";
 }
 
 // ============================================
@@ -175,7 +259,7 @@ export function determineAttentionNeeded(
     reasons.push("struggling-throughout");
   }
 
-  if (coachSupport === "significant") {
+  if (coachSupport === "high") {
     reasons.push("significant-coach-support");
   }
 
@@ -252,12 +336,14 @@ export function getUnderstandingBgColor(level: UnderstandingLevel): string {
  */
 export function getCoachSupportLabel(level: CoachSupportLevel): string {
   switch (level) {
+    case "none":
+      return "None";
     case "minimal":
       return "Minimal";
-    case "some":
-      return "Some";
-    case "significant":
-      return "Significant";
+    case "moderate":
+      return "Moderate";
+    case "high":
+      return "High";
   }
 }
 
@@ -417,9 +503,8 @@ export function buildStudentRow(
   const score = session.evaluation?.totalScore ?? 0;
   const understanding = deriveUnderstanding(score);
 
-  // Derive coach support
-  const hintsUsed = session.submission.responses.filter((r) => wasHintUsed(r)).length;
-  const coachSupport = deriveCoachSupport(hintsUsed, questionsAnswered);
+  // Derive coach support from full response data
+  const coachSupport = deriveCoachSupport(session.submission.responses);
 
   // Determine attention needed
   const { needsReview, reasons } = determineAttentionNeeded(
@@ -428,6 +513,11 @@ export function buildStudentRow(
     isComplete,
     questions
   );
+
+  // Build journey insights for summary
+  const insights = buildLearningInsights(questions);
+  const journeySummary = buildJourneySummary(understanding, coachSupport, insights, questions, isComplete);
+  const insight = buildInsightPhrase(understanding, coachSupport, insights, questions, isComplete);
 
   return {
     studentId: session.studentId,
@@ -440,6 +530,8 @@ export function buildStudentRow(
     needsReview,
     attentionReasons: reasons,
     hasTeacherNote: !!session.educatorNotes,
+    journeySummary,
+    insight,
     sessionId: session.id,
     attempts: 1, // Default, will be overridden by buildAssignmentReview if assignment data available
     reviewState: "pending_review" as ReviewState, // Default for completed sessions, will be overridden by buildAssignmentReview
@@ -473,9 +565,8 @@ export function buildStudentDrilldown(
   const score = session.evaluation?.totalScore ?? 0;
   const understanding = deriveUnderstanding(score);
 
-  // Derive coach support
-  const hintsUsed = session.submission.responses.filter((r) => wasHintUsed(r)).length;
-  const coachSupport = deriveCoachSupport(hintsUsed, questions.length);
+  // Derive coach support from full response data
+  const coachSupport = deriveCoachSupport(session.submission.responses);
 
   // Determine attention needed
   const { needsReview, reasons } = determineAttentionNeeded(
@@ -597,10 +688,12 @@ export function buildAssignmentReview(
         questionsAnswered: 0,
         totalQuestions: lesson.prompts.length,
         understanding: "needs-support" as UnderstandingLevel,
-        coachSupport: "minimal" as CoachSupportLevel,
+        coachSupport: "none" as CoachSupportLevel,
         needsReview: false,
         attentionReasons: [],
         hasTeacherNote: false,
+        journeySummary: "Not started yet",
+        insight: "",
         attempts: details?.attempts || 1,
         // NEW: Use reviewState as source of truth
         reviewState: reviewState as ReviewState,
@@ -739,9 +832,9 @@ function buildSimplifiedStudentRow(
   const score = session.evaluation?.totalScore ?? 0;
   const understanding = deriveUnderstanding(score);
 
-  // Derive coach support
+  // Derive coach support (simplified — no conversation turn data available)
   const hintsUsed = session.submission.responses.filter((r) => wasHintUsed(r)).length;
-  const coachSupport = deriveCoachSupport(hintsUsed, questionsAnswered);
+  const coachSupport = deriveCoachSupportFromHints(hintsUsed, questionsAnswered);
 
   // Simplified attention check (without full question analysis)
   const reasons: AttentionReason[] = [];
@@ -754,7 +847,7 @@ function buildSimplifiedStudentRow(
     reasons.push("struggling-throughout");
   }
 
-  if (coachSupport === "significant") {
+  if (coachSupport === "high") {
     reasons.push("significant-coach-support");
   }
 
@@ -844,4 +937,197 @@ export function buildDashboardDataFromSummaries(
     assignments,
     totalStudents: students.length,
   };
+}
+
+// ============================================
+// Insight Phrase Generator
+// ============================================
+
+/**
+ * Build one short actionable teacher-facing observation per student.
+ *
+ * The insight answers: "What's the most useful thing I should know about
+ * this student's work?" — it should inform a teacher action (re-teach,
+ * celebrate, investigate, pair up, etc.)
+ */
+export function buildInsightPhrase(
+  understanding: UnderstandingLevel,
+  coachSupport: CoachSupportLevel,
+  insights: LearningJourneyInsights,
+  questions: QuestionSummary[],
+  isComplete: boolean,
+): string {
+  if (questions.length === 0) {
+    return isComplete ? "No data to review" : "";
+  }
+
+  const demonstrated = questions.filter(q => q.outcome === "demonstrated").length;
+  const developing = questions.filter(q => q.outcome === "developing").length;
+  const needsReview = questions.filter(q => q.outcome === "needs-review").length;
+  const withSupport = questions.filter(q => q.outcome === "with-support").length;
+  const total = questions.length;
+
+  // Strong + independent → celebrate
+  if (understanding === "strong" && (coachSupport === "none" || coachSupport === "minimal")) {
+    if (demonstrated === total) return "Ready for a challenge — mastered this independently";
+    return "Strong independent solver — consider extension work";
+  }
+
+  // Strong but needed coaching → note the growth
+  if (understanding === "strong" && (coachSupport === "moderate" || coachSupport === "high")) {
+    if (insights.recoveredWithSupport) return "Got there with support — check if understanding sticks";
+    return "Reached mastery with coaching — verify retention next time";
+  }
+
+  // Improved over time → positive growth signal
+  if (insights.improvedOverTime) {
+    return "Showing growth — started weak but improved";
+  }
+
+  // Recovered with support → note the scaffolding worked
+  if (insights.recoveredWithSupport && understanding === "developing") {
+    return "Responds well to coaching — may need similar support again";
+  }
+
+  // Struggled consistently → flag for 1:1
+  if (insights.struggledConsistently) {
+    return "Needs 1:1 attention — struggled throughout";
+  }
+
+  // High support + still developing → coach couldn't close the gap
+  if (coachSupport === "high" && understanding !== "strong") {
+    return "Heavy support wasn't enough — consider re-teaching";
+  }
+
+  // Mixed results → inconsistency
+  if (demonstrated > 0 && developing > 0 && total >= 3) {
+    return "Inconsistent — strong on some questions, not others";
+  }
+
+  // Needs-review questions present → teacher action needed
+  if (needsReview > 0) {
+    const pct = Math.round((needsReview / total) * 100);
+    return `${needsReview} of ${total} responses need manual review`;
+  }
+
+  // With-support dominated → hint dependency
+  if (withSupport > total / 2) {
+    return "Relying on hints — check if understanding is independent";
+  }
+
+  // Developing, not complete
+  if (!isComplete && questions.length > 0) {
+    return "Didn't finish — check in about what got in the way";
+  }
+
+  // Generic developing
+  if (understanding === "developing") {
+    return "Partial understanding — may benefit from guided practice";
+  }
+
+  // Needs support fallback
+  if (understanding === "needs-support") {
+    return "Below expectations — prioritize for re-teaching";
+  }
+
+  // Catch-all: should not be reached for valid UnderstandingLevel, but
+  // guarantee a non-empty string for any started submission.
+  if (understanding === "strong") return "Demonstrated understanding";
+  if (understanding === "developing") return "Still developing this skill";
+  return "Review recommended";
+}
+
+// ============================================
+// Student Journey Summary
+// ============================================
+
+/**
+ * Build a short teacher-friendly phrase describing how a student reached
+ * their result on an assignment.
+ *
+ * Uses: understanding level, coach support level, question outcomes,
+ * and learning journey insights — all data already available client-side.
+ */
+export function buildJourneySummary(
+  understanding: UnderstandingLevel,
+  coachSupport: CoachSupportLevel,
+  insights: LearningJourneyInsights,
+  questions: QuestionSummary[],
+  isComplete: boolean,
+): string {
+  if (questions.length === 0) {
+    return isComplete ? "No responses recorded" : "Not started yet";
+  }
+
+  const demonstrated = questions.filter(q => q.outcome === "demonstrated").length;
+  const needsReview = questions.filter(q => q.outcome === "needs-review").length;
+  const developing = questions.filter(q => q.outcome === "developing").length;
+  const total = questions.length;
+
+  // All demonstrated, no/minimal coach help
+  if (demonstrated === total && (coachSupport === "none" || coachSupport === "minimal")) {
+    return "Solved independently";
+  }
+
+  // All demonstrated with coaching help
+  if (demonstrated === total) {
+    return "Got it right with some coaching";
+  }
+
+  // Strong understanding
+  if (understanding === "strong") {
+    if (coachSupport === "none" || coachSupport === "minimal") {
+      return "Solved with minimal guidance";
+    }
+    if (insights.recoveredWithSupport) {
+      return "Needed help to get started, then succeeded";
+    }
+    return "Worked through it to a strong result";
+  }
+
+  // Developing understanding
+  if (understanding === "developing") {
+    if (insights.improvedOverTime) {
+      return "Multiple attempts, improving";
+    }
+    if (insights.recoveredWithSupport) {
+      return "Overcame difficulty with coaching support";
+    }
+    if (coachSupport === "high") {
+      return "Needed significant support throughout";
+    }
+    return "Making progress, not fully there yet";
+  }
+
+  // Needs support
+  if (understanding === "needs-support") {
+    if (insights.struggledConsistently) {
+      return "Struggled throughout — may need 1:1 time";
+    }
+    if (coachSupport === "high") {
+      return "Relied heavily on coaching, still developing";
+    }
+    if (needsReview > 0 && developing > 0) {
+      return "Mixed results — some concepts clicked, others didn't";
+    }
+    return "Still working on core concepts";
+  }
+
+  return "In progress";
+}
+
+/**
+ * Map a reasoning step kind (from the lesson data) to a teacher-readable label.
+ */
+export function getStepLabel(kind: string): string {
+  const LABELS: Record<string, string> = {
+    ones_sum: "Adding ones",
+    tens_sum: "Adding tens",
+    combine: "Combining results",
+    final_answer: "Final answer",
+    regroup: "Regrouping",
+    ones_difference: "Subtracting ones",
+    tens_difference: "Subtracting tens",
+  };
+  return LABELS[kind] || kind.replace(/_/g, " ");
 }

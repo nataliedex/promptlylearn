@@ -5,7 +5,7 @@
   "main": "index.js",
   "scripts": {
     "dev": "nodemon --exec ts-node src/cli/runAssignment.ts",
-    "dev:api": "nodemon --ignore data/ --ignore web/ --exec ts-node src/api/index.ts",
+    "dev:api": "nodemon --ignore data/ --ignore web/ --ignore src/data/ --ignore uploads/ --exec ts-node src/api/index.ts",
     "dev:web": "cd web && npm run dev",
     "dev:all": "concurrently \"npm run dev:api\" \"npm run dev:web\"",
     "build": "tsc",
@@ -13,7 +13,11 @@
     "start": "node dist/index.js",
     "start:api": "node dist/api/index.js",
     "test": "jest",
-    "test:coverage": "jest --coverage"
+    "test:coverage": "jest --coverage",
+    "audit:golden": "ts-node src/domain/transcriptReplay.ts --audit fixtures/golden --markdown artifacts/golden-audit.md",
+    "ci": "npm test && npm run audit:golden",
+    "dev:review": "ts-node src/tools/sessionReviewServer.ts",
+    "stress-test": "ts-node src/tools/lessonStressTest.ts"
   },
   "keywords": [],
   "author": "Natalie Blumen",
@@ -24,9 +28,11 @@
     "@types/jest": "^30.0.0",
     "@types/multer": "^2.0.0",
     "@types/node": "^25.0.3",
+    "@types/supertest": "^7.2.0",
     "@types/uuid": "^10.0.0",
     "concurrently": "^9.2.1",
     "jest": "^30.2.0",
+    "supertest": "^7.2.2",
     "ts-jest": "^29.4.6",
     "ts-node": "^10.9.2",
     "typescript": "^5.9.3"

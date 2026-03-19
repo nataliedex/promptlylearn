@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { useParams, useNavigate, useSearchParams, Link } from "react-router-dom";
 import {
   getLesson,
@@ -9,14 +9,20 @@ import {
   getVideoCoachTurn,
   markAssignmentCompleted,
   uploadVideo,
+  getStudentProfilePublic,
   type Lesson as LessonType,
   type Session,
   type PromptResponse,
   type ConversationMessage,
   type CoachFeedbackResponse,
   type VideoResponse,
+  type PacePreference,
+  type CoachHelpStyle,
 } from "../services/api";
+import { buildStudentLessonConfig, type StudentLessonConfig } from "../domain/studentLessonConfig";
 import { useVoice } from "../hooks/useVoice";
+import { useAutoSave, getLocalStorageDraft, clearDraftEverywhere } from "../hooks/useAutoSave";
+import { useToast } from "../components/Toast";
 import ModeToggle from "../components/ModeToggle";
 import VideoRecorder from "../components/VideoRecorder";
 import VideoConversationRecorder, { type ConversationTurn } from "../components/VideoConversationRecorder";
@@ -24,6 +30,7 @@ import Header from "../components/Header";
 import {
   computeVideoCoachAction,
   deriveVideoOutcome,
+  shouldApplyMasteryStop,
   type VideoEndReason,
 } from "../domain/videoCoachStateMachine";
 
@@ -76,6 +83,27 @@ export default function Lesson() {
   const [lastLLMScore, setLastLLMScore] = useState<number | undefined>(undefined);
   const [videoEndReason, setVideoEndReason] = useState<VideoEndReason | undefined>(undefined);
 
+  // Draft video state for preview resume
+  const [draftVideoMeta, setDraftVideoMeta] = useState<VideoResponse | null>(null);
+  const [resumeVideoPreview, setResumeVideoPreview] = useState(false);
+  const [resumeSessionSummary, setResumeSessionSummary] = useState<string | undefined>(undefined);
+
+  // Refs that mirror state for stale-closure safety:
+  // generateVideoCoachResponse is captured by VCR's silence-detection setTimeout,
+  // which means it can close over stale state. These refs are updated synchronously
+  // so the callback always reads fresh values.
+  const videoAttemptCountRef = useRef(0);
+  const videoFollowUpCountRef = useRef(0);
+  const videoHintOfferPendingRef = useRef(false);
+  const videoHintIndexRef = useRef(0);
+  const videoHintDeclineCountRef = useRef(0);
+
+  // Latest server-computed teacher summary (built from step accumulation — most accurate)
+  const latestServerSummaryRef = useRef<string | undefined>(undefined);
+
+  // Student lesson config (pacing + coach style)
+  const [lessonConfig, setLessonConfig] = useState<StudentLessonConfig>(buildStudentLessonConfig());
+
   // Voice mode state
   const [voiceState, setVoiceState] = useState<VoiceState>("idle");
   const [voiceStarted, setVoiceStarted] = useState(false);
@@ -102,6 +130,17 @@ export default function Lesson() {
     lastSpeakError,
   } = useVoice();
 
+  // Auto-save hook
+  const { showToast } = useToast();
+  const { updateSnapshot, saveDraft } = useAutoSave({
+    sessionId,
+    enabled: !!session && session.status !== "completed",
+  });
+
+  // Resume modal state
+  const [showResumeModal, setShowResumeModal] = useState(false);
+  const [pendingDraft, setPendingDraft] = useState<Session["draftState"] | null>(null);
+
   // Update voice state based on hook states
   useEffect(() => {
     if (isSpeaking) setVoiceState("speaking");
@@ -115,6 +154,34 @@ export default function Lesson() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [conversationHistory]);
 
+  // Keep auto-save snapshot in sync with current state
+  useEffect(() => {
+    updateSnapshot({
+      answer,
+      followUpAnswer,
+      conversationHistory,
+      feedback,
+      showHint,
+      hintIndex,
+      currentIndex,
+      mode,
+      videoAttemptCount,
+      videoFollowUpCount,
+      videoHintUsed: videoHintUsed,
+      videoHintIndex,
+      videoPhase: resumeVideoPreview ? "preview" : undefined,
+      videoRecordedDuration: draftVideoMeta?.durationSec,
+      videoSessionSummary: resumeSessionSummary,
+      videoBlobKey: draftVideoMeta?.url,
+    });
+  }, [
+    answer, followUpAnswer, conversationHistory, feedback,
+    showHint, hintIndex, currentIndex, mode,
+    videoAttemptCount, videoFollowUpCount, videoHintUsed, videoHintIndex,
+    resumeVideoPreview, draftVideoMeta, resumeSessionSummary,
+    updateSnapshot,
+  ]);
+
   // Load lesson data
   useEffect(() => {
     async function loadData() {
@@ -127,18 +194,50 @@ export default function Lesson() {
         ]);
         setLesson(lessonData);
         setSession(sessionData);
+
+        // Load student profile for pacing + coach style config (non-blocking)
+        if (studentId) {
+          getStudentProfilePublic(studentId)
+            .then((profile) => {
+              setLessonConfig(buildStudentLessonConfig(
+                profile.pacePreference as PacePreference | undefined,
+                profile.coachHelpStyle as CoachHelpStyle | undefined,
+              ));
+            })
+            .catch(() => { /* Use defaults */ });
+        }
         setCurrentIndex(sessionData.currentPromptIndex || 0);
 
-        // Detect if this is a resumed session (was paused)
-        if (sessionData.status === "paused") {
-          setIsResuming(true);
-          // Restore mode from when paused
-          if (sessionData.mode) {
-            setMode(sessionData.mode);
+        // Check for resumable draft regardless of session status
+        // (Dashboard may show Resume based on localStorage even if server is still "in_progress")
+        if (sessionData.status !== "completed") {
+          const serverDraft = sessionData.draftState;
+          const lsDraft = getLocalStorageDraft(sessionId);
+          // Pick the most recent draft
+          let draft = serverDraft;
+          if (lsDraft?.draftState) {
+            if (!draft || (lsDraft.draftState.savedAt > (draft.savedAt || ""))) {
+              draft = lsDraft.draftState;
+            }
           }
-          // Update session status back to in_progress
-          await updateSession(sessionId, { status: "in_progress" });
-          setSession((prev) => prev ? { ...prev, status: "in_progress" } : null);
+
+          if (draft) {
+            console.log(`[DraftAttempt] loadData found draft sessionId=${sessionId} status=${sessionData.status} serverDraft=${!!serverDraft} lsDraft=${!!lsDraft}`);
+            setIsResuming(true);
+            // Restore mode from session or draft
+            if (sessionData.mode) {
+              setMode(sessionData.mode);
+            } else if (lsDraft?.mode) {
+              setMode(lsDraft.mode as "voice" | "type" | "video");
+            }
+            setPendingDraft(draft);
+            setShowResumeModal(true);
+          } else if (sessionData.status === "paused") {
+            // Paused but no draft — resume normally
+            console.log(`[DraftAttempt] loadData paused but no draft, resuming sessionId=${sessionId}`);
+            await updateSession(sessionId, { status: "in_progress" });
+            setSession((prev) => prev ? { ...prev, status: "in_progress" } : null);
+          }
         }
       } catch (err) {
         console.error("Failed to load lesson:", err);
@@ -338,11 +437,15 @@ export default function Lesson() {
           responses: updatedResponses,
         },
         currentPromptIndex: currentIndex,
+        draftState: undefined, // Clear draft — answer is now persisted
       });
+
+      // Clear any localStorage draft too
+      if (sessionId) clearDraftEverywhere(sessionId);
 
       setSession((prev) =>
         prev
-          ? { ...prev, submission: { ...prev.submission, responses: updatedResponses } }
+          ? { ...prev, submission: { ...prev.submission, responses: updatedResponses }, draftState: undefined }
           : null
       );
 
@@ -522,23 +625,31 @@ export default function Lesson() {
     }
 
     try {
-      console.log("[Lesson] Uploading video conversation...", {
-        studentId,
-        assignmentId: session.submission.assignmentId,
-        promptId: currentPrompt.id,
-        durationSec,
-        kind: "coach_convo",
-      });
-      // Upload the video and get metadata (use "coach_convo" for conversation videos to get 120s limit)
-      const videoMetadata: VideoResponse = await uploadVideo(
-        videoBlob,
-        studentId,
-        session.submission.assignmentId,
-        currentPrompt.id,
-        durationSec,
-        "coach_convo"
-      );
-      console.log("[Lesson] Video uploaded successfully:", videoMetadata);
+      let videoMetadata: VideoResponse;
+
+      // Reuse draft video metadata if available (resume submit — no re-upload needed)
+      if (draftVideoMeta && videoBlob.size === 0) {
+        console.log("[Lesson] Reusing draft video metadata (no re-upload)", draftVideoMeta.url);
+        videoMetadata = draftVideoMeta;
+      } else {
+        console.log("[Lesson] Uploading video conversation...", {
+          studentId,
+          assignmentId: session.submission.assignmentId,
+          promptId: currentPrompt.id,
+          durationSec,
+          kind: "coach_convo",
+        });
+        // Upload the video and get metadata (use "coach_convo" for conversation videos to get 120s limit)
+        videoMetadata = await uploadVideo(
+          videoBlob,
+          studentId,
+          session.submission.assignmentId,
+          currentPrompt.id,
+          durationSec,
+          "coach_convo"
+        );
+      }
+      console.log("[Lesson] Video metadata ready:", videoMetadata);
 
       // Build a summary of the conversation for session storage
       const coachTurns = turns.filter(t => t.role === "coach").length;
@@ -604,17 +715,24 @@ export default function Lesson() {
           responses: updatedResponses,
         },
         currentPromptIndex: currentIndex,
+        draftState: undefined, // Clear draft — answer is now persisted
       });
+
+      // Clear any localStorage draft too
+      if (sessionId) clearDraftEverywhere(sessionId);
 
       setSession((prev) =>
         prev
-          ? { ...prev, submission: { ...prev.submission, responses: updatedResponses } }
+          ? { ...prev, submission: { ...prev.submission, responses: updatedResponses }, draftState: undefined }
           : null
       );
 
       // Reset video mode state
       setVideoModeStarted(false);
       setCoachAskedQuestion(false);
+      setDraftVideoMeta(null);
+      setResumeVideoPreview(false);
+      setResumeSessionSummary(undefined);
     } catch (err) {
       console.error("Failed to submit video conversation:", err);
       setVideoError(err instanceof Error ? err.message : "Failed to upload video. Please try again.");
@@ -665,6 +783,7 @@ export default function Lesson() {
         currentPromptIndex: currentIndex + 1,
         status: "completed",
         completedAt: new Date().toISOString(),
+        draftState: undefined, // Clear any draft on completion
         evaluation: {
           totalScore: Math.round(
             session.submission.responses.reduce((sum) => sum + (feedback?.score || 50), 0) /
@@ -677,6 +796,9 @@ export default function Lesson() {
           })),
         },
       });
+
+      // Clear any localStorage draft
+      if (sessionId) clearDraftEverywhere(sessionId);
 
       // Mark the assignment as completed (removes from student's active assignments)
       try {
@@ -713,6 +835,12 @@ export default function Lesson() {
       setVideoFollowUpCount(0);
       setLastLLMScore(undefined);
       setVideoEndReason(undefined);
+      // Reset refs too (stale-closure safety)
+      videoAttemptCountRef.current = 0;
+      videoFollowUpCountRef.current = 0;
+      videoHintOfferPendingRef.current = false;
+      videoHintIndexRef.current = 0;
+      videoHintDeclineCountRef.current = 0;
     }
   };
 
@@ -773,6 +901,171 @@ export default function Lesson() {
     }
   };
 
+  // Sync VCR conversation turns to Lesson.tsx conversationHistory for auto-save
+  const handleVideoConversationUpdate = useCallback((turns: ConversationTurn[]) => {
+    setConversationHistory(turns.map(t => ({
+      role: t.role as "student" | "coach",
+      message: t.message,
+    })));
+  }, []);
+
+  // Called when VCR finishes recording — upload blob as draft video and persist metadata
+  const handleDraftVideoReady = useCallback(async (data: {
+    videoBlob: Blob; durationSec: number; turns: ConversationTurn[]; summary: string | null;
+  }) => {
+    if (!session || !studentId || !currentPrompt) return;
+    try {
+      console.log("[Lesson] Uploading draft video...", { size: data.videoBlob.size, duration: data.durationSec });
+      const meta = await uploadVideo(
+        data.videoBlob,
+        studentId,
+        session.submission.assignmentId,
+        currentPrompt.id,
+        data.durationSec,
+        "coach_convo"
+      );
+      setDraftVideoMeta(meta);
+      console.log("[Lesson] Draft video uploaded, saving metadata to session", meta.url);
+
+      // Persist preview state to session draft so resume knows to show preview
+      await updateSession(session.id, {
+        draftState: {
+          conversationHistory: data.turns.map(t => ({ role: t.role as "student" | "coach", message: t.message })),
+          vcrPhase: "preview",
+          recordedDuration: data.durationSec,
+          videoDraft: meta,
+          sessionSummary: data.summary || undefined,
+          videoAttemptCount: videoAttemptCount || undefined,
+          videoFollowUpCount: videoFollowUpCount || undefined,
+          videoHintUsed: videoHintUsed || undefined,
+          videoHintIndex: videoHintIndex || undefined,
+          savedAt: new Date().toISOString(),
+        },
+        status: "paused",
+        currentPromptIndex: currentIndex,
+        mode: "video",
+        pausedAt: new Date().toISOString(),
+      });
+    } catch (err) {
+      console.error("[Lesson] Draft video upload failed:", err);
+      // Non-fatal — student can still submit from preview, it'll upload fresh
+    }
+  }, [session, studentId, currentPrompt, currentIndex, videoAttemptCount, videoFollowUpCount, videoHintUsed, videoHintIndex]);
+
+  // Called when student re-records — delete draft video and clear draft state
+  const handleReRecordDraft = useCallback(async () => {
+    setDraftVideoMeta(null);
+    setResumeVideoPreview(false);
+    setResumeSessionSummary(undefined);
+    if (session?.id) {
+      try {
+        await updateSession(session.id, { draftState: undefined });
+      } catch { /* non-fatal */ }
+    }
+  }, [session?.id]);
+
+  // Exit with auto-save: save draft and mark session as paused, then navigate to dashboard
+  const handleExitWithSave = async () => {
+    if (!studentId) return;
+
+    // Stop audio/recording (same cleanup as handleTakeBreak)
+    if (isSpeaking) stopSpeaking();
+    if (isRecording) cancelRecording();
+    setVoiceState("idle");
+    isProcessingRef.current = false;
+
+    // Save draft (writes draft state to server or localStorage)
+    const savedToServerDraft = await saveDraft(false);
+
+    // ALWAYS pause the server session — regardless of whether saveDraft succeeded.
+    // saveDraft's server endpoint sets status="paused", but if it failed or only
+    // wrote to localStorage, the session may still be "in_progress" on the server.
+    // The dashboard checks session.status === "paused" to show Resume.
+    if (sessionId) {
+      try {
+        await updateSession(sessionId, {
+          status: "paused",
+          currentPromptIndex: currentIndex,
+          mode: mode,
+          pausedAt: new Date().toISOString(),
+        });
+        console.log(`[DraftAttempt] paused sessionId=${sessionId} status=paused savedToServerDraft=${savedToServerDraft}`);
+      } catch {
+        console.warn(`[DraftAttempt] paused sessionId=${sessionId} updateSession failed, savedToServerDraft=${savedToServerDraft}`);
+        if (!savedToServerDraft) {
+          showToast("Your progress was saved locally. It will sync when you reconnect.", "info");
+        }
+      }
+    }
+
+    navigate(`/student/${studentId}`);
+  };
+
+  // Resume from draft: restore all state from the saved draft
+  const handleResumeFromDraft = async () => {
+    if (!pendingDraft || !sessionId) return;
+
+    console.log(`[DraftAttempt] loaded key=session:${sessionId} promptIndex=${currentIndex} mode=${mode} coachTurnCount=${pendingDraft.conversationHistory?.length || 0} vcrPhase=${pendingDraft.vcrPhase || "none"}`);
+
+    // Restore state from draft
+    if (pendingDraft.answer) setAnswer(pendingDraft.answer);
+    if (pendingDraft.followUpAnswer) setFollowUpAnswer(pendingDraft.followUpAnswer);
+    if (pendingDraft.conversationHistory) {
+      setConversationHistory(
+        pendingDraft.conversationHistory as ConversationMessage[]
+      );
+    }
+    if (pendingDraft.feedback) {
+      setFeedback(pendingDraft.feedback as CoachFeedbackResponse);
+    }
+    if (pendingDraft.showHint) {
+      setShowHint(true);
+      setHintIndex(pendingDraft.hintIndex || 0);
+    }
+    if (pendingDraft.videoAttemptCount) {
+      setVideoAttemptCount(pendingDraft.videoAttemptCount);
+      videoAttemptCountRef.current = pendingDraft.videoAttemptCount;
+    }
+    if (pendingDraft.videoFollowUpCount) {
+      setVideoFollowUpCount(pendingDraft.videoFollowUpCount);
+      videoFollowUpCountRef.current = pendingDraft.videoFollowUpCount;
+    }
+    if (pendingDraft.videoHintUsed) {
+      setVideoHintUsed(true);
+    }
+    if (pendingDraft.videoHintIndex) {
+      setVideoHintIndex(pendingDraft.videoHintIndex);
+      videoHintIndexRef.current = pendingDraft.videoHintIndex;
+    }
+
+    // Video preview resume: restore draft video metadata and mount VCR in preview
+    if (pendingDraft.vcrPhase === "preview" && pendingDraft.videoDraft) {
+      console.log(`[DraftAttempt] resuming into video preview, draftUrl=${pendingDraft.videoDraft.url}`);
+      setDraftVideoMeta(pendingDraft.videoDraft as VideoResponse);
+      setResumeVideoPreview(true);
+      setResumeSessionSummary(pendingDraft.sessionSummary);
+    }
+
+    // Clear draft and resume session (but keep draftState cleared — we've extracted what we need)
+    clearDraftEverywhere(sessionId);
+    await updateSession(sessionId, { status: "in_progress", draftState: undefined });
+    setSession((prev) => prev ? { ...prev, status: "in_progress", draftState: undefined } : null);
+    setShowResumeModal(false);
+    setPendingDraft(null);
+  };
+
+  // Start fresh: discard draft and resume at current question with clean state
+  const handleStartFresh = async () => {
+    if (!sessionId) return;
+
+    console.log(`[DraftAttempt] cleared key=session:${sessionId} (start fresh)`);
+    clearDraftEverywhere(sessionId);
+    await updateSession(sessionId, { status: "in_progress", draftState: undefined });
+    setSession((prev) => prev ? { ...prev, status: "in_progress", draftState: undefined } : null);
+    setShowResumeModal(false);
+    setPendingDraft(null);
+  };
+
   if (loading) {
     return (
       <div className="loading">
@@ -801,6 +1094,44 @@ export default function Lesson() {
     );
   }
 
+  // Resume modal: shown when returning to a paused session with draft data
+  if (showResumeModal) {
+    return (
+      <div className="container" style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: "60vh" }}>
+        <div style={{
+          background: "var(--bg-primary, white)",
+          borderRadius: "12px",
+          padding: "32px",
+          maxWidth: "420px",
+          width: "100%",
+          textAlign: "center",
+          boxShadow: "0 4px 24px rgba(0,0,0,0.12)",
+        }}>
+          <h2 style={{ marginBottom: "8px", fontSize: "1.25rem" }}>Welcome back!</h2>
+          <p style={{ color: "var(--text-secondary, #666)", marginBottom: "24px", fontSize: "0.95rem" }}>
+            You have unsaved work on question {currentIndex + 1}. Would you like to continue where you left off?
+          </p>
+          <div style={{ display: "flex", gap: "12px", justifyContent: "center" }}>
+            <button
+              className="btn btn-secondary"
+              onClick={handleStartFresh}
+              style={{ padding: "10px 20px" }}
+            >
+              Start Fresh
+            </button>
+            <button
+              className="btn btn-primary"
+              onClick={handleResumeFromDraft}
+              style={{ padding: "10px 20px" }}
+            >
+              Resume
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   const progress = ((currentIndex + 1) / lesson.prompts.length) * 100;
   const isVoiceMode = mode === "voice";
 
@@ -811,7 +1142,7 @@ export default function Lesson() {
         <Header
           mode="session"
           userType="student"
-          backLink={`/student/${studentId}`}
+          onBack={handleExitWithSave}
           backLabel="Exit"
           title={lesson.title}
           progress={{ current: currentIndex + 1, total: lesson.prompts.length }}
@@ -1064,7 +1395,7 @@ export default function Lesson() {
     transcript: Array<{ role: "coach" | "student"; message: string; timestamp: number }>,
     videoGradeLevel?: string,
     timeRemainingSec?: number
-  ): Promise<{ response: string; shouldContinue: boolean }> => {
+  ): Promise<{ response: string; shouldContinue: boolean; turnKind?: string; wrapReason?: string; criteriaStatus?: string; instructionalRecap?: string; completionRatio?: number }> => {
     if (!lessonId || !currentPrompt) {
       return { response: "Can you tell me more about your thinking?", shouldContinue: true };
     }
@@ -1074,17 +1405,44 @@ export default function Lesson() {
 
     const hints = currentPrompt.hints || [];
 
-    // Build state for the state machine
+    // Extract the last coach question from transcript for context-aware validation
+    const coachTurnsForContext = transcript.filter(t => t.role === "coach" && t.message.includes("?"));
+    const lastCoachQ = coachTurnsForContext.length > 0
+      ? coachTurnsForContext[coachTurnsForContext.length - 1].message
+      : undefined;
+
+    // Extract activeMathQuestion: the last coach sub-question that contains numbers
+    // and is a genuine math question (not a hint offer or retry prompt).
+    // This survives no-speech retries and hint offers so context-aware validation
+    // still works after procedural interruptions.
+    const PROCEDURAL_PREFIXES = /didn't catch|would you like a hint|want to give it|try again|try answering/i;
+    const mathCoachQuestions = transcript.filter(t =>
+      t.role === "coach" &&
+      t.message.includes("?") &&
+      /\d/.test(t.message) &&
+      !PROCEDURAL_PREFIXES.test(t.message)
+    );
+    const activeMathQ = mathCoachQuestions.length > 0
+      ? mathCoachQuestions[mathCoachQuestions.length - 1].message
+      : undefined;
+
+    // Build state for the state machine — read from REFS (not React state)
+    // to avoid stale closures when VCR calls this via setTimeout
     const smState = {
       latestStudentResponse,
-      attemptCount: videoAttemptCount,
-      hintOfferPending: videoHintOfferPending,
-      hintIndex: videoHintIndex,
-      hintDeclineCount: videoHintDeclineCount,
+      attemptCount: videoAttemptCountRef.current,
+      hintOfferPending: videoHintOfferPendingRef.current,
+      hintIndex: videoHintIndexRef.current,
+      hintDeclineCount: videoHintDeclineCountRef.current,
       hintsAvailable: hints,
       maxAttempts: 3,
       questionText: currentPrompt.input,
-      followUpCount: videoFollowUpCount,
+      followUpCount: videoFollowUpCountRef.current,
+      lastCoachQuestion: lastCoachQ,
+      activeMathQuestion: activeMathQ,
+      // Backend derives reasoningSteps from mathProblem at runtime (backfill).
+      // Frontend must match: if mathProblem exists, backend WILL have reasoning steps.
+      hasReasoningSteps: !!(currentPrompt.assessment?.reasoningSteps?.length) || !!currentPrompt.mathProblem,
     };
 
     if (process.env.NODE_ENV === "development") {
@@ -1103,13 +1461,19 @@ export default function Lesson() {
         " utteranceIntent=" + (action.utteranceIntent ?? "N/A") +
         " evaluationSkipped=" + (action.type !== "EVALUATE_ANSWER") +
         " shouldContinue=" + action.shouldContinue +
-        " attemptCount(" + videoAttemptCount + "->" + nextAttemptCount + ")" +
-        " hintOfferPending(" + videoHintOfferPending + "->" + action.stateUpdates.hintOfferPending + ")" +
+        " attemptCount(" + videoAttemptCountRef.current + "->" + nextAttemptCount + ")" +
+        " hintOfferPending(" + videoHintOfferPendingRef.current + "->" + action.stateUpdates.hintOfferPending + ")" +
         " coachTurnCount=N/A(Lesson.tsx)"
       );
     }
 
     // Apply state updates from the state machine
+    // Update REFS first (synchronous — survives stale closures)
+    videoAttemptCountRef.current = nextAttemptCount;
+    videoHintOfferPendingRef.current = action.stateUpdates.hintOfferPending;
+    videoHintIndexRef.current = action.stateUpdates.hintIndex;
+    videoHintDeclineCountRef.current = action.stateUpdates.hintDeclineCount;
+    // Then update React state (for UI rendering)
     setVideoAttemptCount(nextAttemptCount);
     setVideoHintOfferPending(action.stateUpdates.hintOfferPending);
     setVideoHintIndex(action.stateUpdates.hintIndex);
@@ -1127,7 +1491,11 @@ export default function Lesson() {
     // EVALUATE_ANSWER: single combined endpoint (parallel LLM calls + server guardrails)
     if (action.type === "EVALUATE_ANSWER") {
       try {
-        const conversationHistoryForApi: ConversationMessage[] = transcript.map(t => ({
+        // Exclude the current student turn from conversationHistory — it's
+        // already sent as `studentResponse`. Including it would double-count
+        // the utterance in off-topic detection, step accumulation, etc.
+        const historyWithoutCurrent = transcript.slice(0, -1);
+        const conversationHistoryForApi: ConversationMessage[] = historyWithoutCurrent.map(t => ({
           role: t.role === "coach" ? "coach" : "student",
           message: t.message,
         }));
@@ -1150,10 +1518,16 @@ export default function Lesson() {
           lastCoachQuestion: lastCoachQ,
           askedCoachQuestions: allCoachQuestions,
           timeRemainingSec,
+          coachHelpStyle: lessonConfig.coachHelpStyle,
         });
 
         // Store the real LLM score
         setLastLLMScore(result.score);
+
+        // Store the server-computed teacher summary (built from step accumulation)
+        if (result.teacherSummary?.renderedSummary) {
+          latestServerSummaryRef.current = result.teacherSummary.renderedSummary;
+        }
 
         if (process.env.NODE_ENV === "development") {
           console.log(
@@ -1168,7 +1542,29 @@ export default function Lesson() {
         }
 
         if (result.probeFirst) {
-          setVideoFollowUpCount(prev => prev + 1);
+          videoFollowUpCountRef.current += 1;
+          setVideoFollowUpCount(videoFollowUpCountRef.current);
+        }
+
+        // MASTERY STOP: If the student already demonstrated mastery, don't probe further
+        const masteryOverride = shouldApplyMasteryStop({
+          score: result.score,
+          turnKind: result.turnKind,
+          attemptCount: nextAttemptCount,
+          questionText: currentPrompt.input,
+        });
+
+        if (masteryOverride) {
+          return {
+            response: result.response,
+            shouldContinue: masteryOverride.shouldContinue,
+            turnKind: masteryOverride.turnKind,
+            wrapReason: "server_wrap",
+            criteriaStatus: result.criteriaStatus,
+            serverSummary: latestServerSummaryRef.current,
+            instructionalRecap: result.instructionalRecap,
+            completionRatio: result.completionRatio,
+          };
         }
 
         // CLIENT-SIDE SAFETY NET: If the server response contains a question
@@ -1187,6 +1583,11 @@ export default function Lesson() {
           response: result.response,
           shouldContinue: finalShouldContinue,
           turnKind: result.turnKind,
+          wrapReason: result.wrapReason,
+          criteriaStatus: result.criteriaStatus,
+          serverSummary: latestServerSummaryRef.current,
+          instructionalRecap: result.instructionalRecap,
+          completionRatio: result.completionRatio,
         };
       } catch (err) {
         console.error("[VideoSM] Failed to evaluate answer:", err);
@@ -1222,9 +1623,9 @@ export default function Lesson() {
     return (
       <div className="container">
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
-          <Link to={`/student/${studentId}`} className="back-btn" style={{ margin: 0 }}>
+          <button onClick={handleExitWithSave} className="back-btn" style={{ margin: 0, background: "none", border: "none", cursor: "pointer", font: "inherit", color: "inherit" }}>
             ← Exit Lesson
-          </Link>
+          </button>
         </div>
 
         <div className="header">
@@ -1245,8 +1646,10 @@ export default function Lesson() {
         <div className="card">
           {!feedback ? (
             <VideoConversationRecorder
-              maxDuration={120}
-              maxCoachTurns={3}
+              maxDuration={lessonConfig.timing.maxDurationSec}
+              silenceDurationMs={lessonConfig.timing.silenceDurationMs}
+              minSpeechBeforeSilenceMs={lessonConfig.timing.minSpeechBeforeSilenceMs}
+              maxCoachTurns={5}
               question={currentPrompt.input}
               gradeLevel={lesson?.gradeLevel}
               onStartRecording={() => {
@@ -1271,6 +1674,24 @@ export default function Lesson() {
               isSubmitting={videoUploading}
               isFinalQuestion={isLastQuestion}
               successCriteria={currentPrompt.assessment?.successCriteria}
+              onConversationUpdate={handleVideoConversationUpdate}
+              initialConversationTurns={
+                conversationHistory.length > 0
+                  ? conversationHistory.map((msg, i) => ({
+                      role: msg.role,
+                      message: msg.message,
+                      timestamp: i,
+                    }))
+                  : undefined
+              }
+              onDraftVideoReady={handleDraftVideoReady}
+              onReRecordDraft={handleReRecordDraft}
+              initialPhase={resumeVideoPreview ? "preview" : undefined}
+              initialRecordedDuration={resumeVideoPreview && draftVideoMeta ? draftVideoMeta.durationSec : undefined}
+              initialVideoUrl={resumeVideoPreview && draftVideoMeta ? draftVideoMeta.url : undefined}
+              initialSessionSummary={resumeSessionSummary}
+              draftVideoMetadata={draftVideoMeta || undefined}
+              serverSummary={latestServerSummaryRef.current}
               onKeepCoaching={(context) => {
                 // Video submit is fire-and-forget from VideoConversationRecorder
                 // Navigate to CoachSession with assignment context
@@ -1395,7 +1816,7 @@ export default function Lesson() {
       <Header
         mode="session"
         userType="student"
-        backLink={`/student/${studentId}`}
+        onBack={handleExitWithSave}
         backLabel="Exit"
         title={lesson.title}
         progress={{ current: currentIndex + 1, total: lesson.prompts.length }}

@@ -1,0 +1,38 @@
+name: Golden Transcript Audit
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  audit:
+    name: Tests & Golden Audit
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run test suite
+        run: npm test
+
+      - name: Create artifacts directory
+        run: mkdir -p artifacts
+
+      - name: Run golden transcript audit
+        run: npm run audit:golden
+
+      - name: Upload audit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: golden-audit-report
+          path: artifacts/golden-audit.md

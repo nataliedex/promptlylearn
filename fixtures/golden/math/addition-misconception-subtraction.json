@@ -1,0 +1,54 @@
+{
+  "id": "addition-misconception-subtraction",
+  "tags": ["regression", "misconception"],
+  "expectedVerdict": "PASS",
+  "expectedIssueCodes": [],
+  "notes": "Student applies subtraction to an addition problem ('1 - 4 = 3'). Coach should identify SUBTRACTION_ON_ADDITION misconception, redirect to ones step with exact operands, and student corrects to mastery.",
+  "mode": "math",
+  "name": "11+14: subtraction misconception → redirect → mastery",
+  "mathProblem": {
+    "skill": "two_digit_addition",
+    "a": 11,
+    "b": 14,
+    "expression": "11 + 14",
+    "correctAnswer": 25,
+    "requiresRegrouping": false,
+    "expectedStrategyTags": ["add ones", "add tens", "combine"],
+    "commonWrongAnswers": [
+      { "answer": 15, "misconception": "Added ones digits only" }
+    ]
+  },
+  "reasoningSteps": [
+    {
+      "id": "step_ones",
+      "label": "Add the ones",
+      "expectedStatements": ["1 + 4 = 5"],
+      "probe": "What do you get when you add 1 and 4?",
+      "kind": "ones_sum"
+    },
+    {
+      "id": "step_tens",
+      "label": "Add the tens",
+      "expectedStatements": ["10 + 10 = 20"],
+      "probe": "What do you get when you add 10 and 10?",
+      "kind": "tens_sum"
+    },
+    {
+      "id": "step_combine",
+      "label": "Combine",
+      "expectedStatements": ["20 + 5 = 25"],
+      "probe": "What do you get when you put 20 and 5 together?",
+      "kind": "combine"
+    }
+  ],
+  "transcript": [
+    { "role": "coach", "message": "Let's solve 11 + 14. Start with the ones." },
+    { "role": "student", "message": "1 - 4 = 3" },
+    { "role": "coach", "message": "We're adding, not subtracting. What is 1 plus 4?" },
+    { "role": "student", "message": "1 + 4 = 5" },
+    { "role": "coach", "message": "Good. What do you get when you add 10 and 10?" },
+    { "role": "student", "message": "10 + 10 = 20" },
+    { "role": "coach", "message": "Now combine them. What is 20 + 5?" },
+    { "role": "student", "message": "20 + 5 = 25" }
+  ]
+}

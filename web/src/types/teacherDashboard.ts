@@ -20,9 +20,15 @@
 export type UnderstandingLevel = "strong" | "developing" | "needs-support";
 
 /**
- * Coach support level - descriptive, not judgmental.
+ * Coach support level - describes the amount of AI scaffolding a student needed.
+ *
+ * Semantics:
+ * - "none": No coach interaction at all (independent work)
+ * - "minimal": Light nudge — a question or two from the coach, no hints
+ * - "moderate": Meaningful back-and-forth — misconception redirects, repeated probes, or hint usage
+ * - "high": Heavy scaffolding — demonstrations, multiple hints, or guided step-by-step completion
  */
-export type CoachSupportLevel = "minimal" | "some" | "significant";
+export type CoachSupportLevel = "none" | "minimal" | "moderate" | "high";
 
 /**
  * Why a student might need teacher attention.
@@ -153,6 +159,12 @@ export interface StudentAssignmentRow {
 
   // Teacher engagement
   hasTeacherNote: boolean;
+
+  // Journey summary (teacher-facing phrase: "Solved independently", etc.)
+  journeySummary: string;
+
+  // Insight (most actionable teacher-facing observation for this student)
+  insight: string;
 
   // Session reference
   sessionId?: string;

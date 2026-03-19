@@ -23,8 +23,20 @@ import uploadsRouter from "./routes/uploads";
 import coachAnalyticsRouter from "./routes/coachAnalytics";
 import devRouter from "./routes/dev";
 import { getUploadsBaseDir } from "../services/videoStorage";
+import { SessionStore } from "../stores/sessionStore";
 
 dotenv.config();
+
+// ============================================
+// Process-level error handlers — prevent silent crashes
+// ============================================
+process.on("uncaughtException", (err) => {
+  console.error("[FATAL] Uncaught exception:", err);
+});
+
+process.on("unhandledRejection", (reason) => {
+  console.error("[FATAL] Unhandled promise rejection:", reason);
+});
 
 const app = express();
 const PORT = process.env.API_PORT || 3001;
@@ -91,9 +103,25 @@ app.get("/api/config", (req, res) => {
   });
 });
 
+// Global Express error handler — catches errors that escape route try/catch blocks
+app.use((err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  console.error("[EXPRESS] Unhandled route error:", err);
+  if (!res.headersSent) {
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
 // Start server
 app.listen(PORT, () => {
   console.log(`API server running on http://localhost:${PORT}`);
+
+  // Clean up expired draft states on startup
+  try {
+    const sessionStore = new SessionStore();
+    sessionStore.cleanExpiredDrafts();
+  } catch (err) {
+    console.error("Failed to clean expired drafts:", err);
+  }
 });
 
 export default app;

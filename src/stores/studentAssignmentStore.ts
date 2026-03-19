@@ -685,6 +685,27 @@ export class StudentAssignmentStore {
 
     return { migrated, total: data.assignments.length };
   }
+
+  /**
+   * Update the due date for all assignments of a lesson in a class.
+   * Pass null/undefined to clear the due date.
+   */
+  updateDueDate(
+    lessonId: string,
+    classId: string,
+    dueDate: string | null
+  ): number {
+    const data = loadData();
+    let updated = 0;
+    for (const a of data.assignments) {
+      if (a.lessonId === lessonId && a.classId === classId) {
+        a.dueDate = dueDate || undefined;
+        updated++;
+      }
+    }
+    if (updated > 0) saveData(data);
+    return updated;
+  }
 }
 
 // ============================================

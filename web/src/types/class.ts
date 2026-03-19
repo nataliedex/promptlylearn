@@ -15,7 +15,7 @@ export interface Class {
   gradeLevel?: string;
   schoolYear?: string;
   period?: string;
-  subject?: string; // Legacy single subject
+  subject?: string;
   subjects: string[]; // Subject participation list
   subjectExclusions?: Record<string, string[]>; // subject → excluded studentIds
   studentIds: string[];
@@ -31,7 +31,7 @@ export interface ClassSummary {
   gradeLevel?: string;
   schoolYear?: string;
   period?: string;
-  subject?: string; // Legacy
+  subject?: string;
   subjects: string[];
   studentCount: number;
   createdAt: string;
